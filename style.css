@@ -1,0 +1,295 @@
+/* ===== ESTILOS BASE Y VARIABLES ===== */
+:root {
+  --bg-color: #0c0e0b;
+  --panel-bg: #15170f;
+  --panel-bg-sec: #1c1f15;
+  --line-color: #2a2e20;
+  --text-ink: #f3f4ea;
+  --text-muted: #9aa088;
+  --color-lime: #cdff4a;
+  --color-cyan: #4ad6ff;
+  --color-amber: #ffb13d;
+  --color-rose: #ff6b8a;
+  --color-guardia: #00f0ff;
+  --color-guardia-bg: rgba(0, 240, 255, 0.08);
+  --color-guardia-border: rgba(0, 240, 255, 0.35);
+  
+  --font-display: 'Bebas Neue', sans-serif;
+  --font-sans: 'Manrope', system-ui, sans-serif;
+  
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --shadow-glow-lime: 0 0 15px rgba(205, 255, 74, 0.25);
+  --shadow-glow-cyan: 0 0 15px rgba(74, 214, 255, 0.25);
+  --shadow-glow-guardia: 0 0 20px rgba(0, 240, 255, 0.4);
+}
+
+/* Base resets */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-color);
+  color: var(--text-ink);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+  padding-bottom: 92px;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  position: relative;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-color);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-color);
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* ===== ANIMACIONES Y CLASES GENERALES ===== */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes pulseGlow {
+  0% { box-shadow: 0 0 10px rgba(0, 240, 255, 0.2); }
+  50% { box-shadow: 0 0 25px rgba(0, 240, 255, 0.6); }
+  100% { box-shadow: 0 0 10px rgba(0, 240, 255, 0.2); }
+}
+
+@keyframes pulseText {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 1; color: var(--color-guardia); }
+}
+
+.pop {
+  animation: pop 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.disp {
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+  line-height: 0.9;
+}
+
+.ph::placeholder {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+/* Input y textarea */
+textarea, input, select {
+  font-family: var(--font-sans);
+  background-color: var(--panel-bg-sec);
+  border: 1px solid var(--line-color);
+  color: var(--text-ink);
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+textarea:focus, input:focus, select:focus {
+  border-color: var(--color-lime);
+  box-shadow: 0 0 8px rgba(205, 255, 74, 0.15);
+}
+
+/* Botones genéricos */
+button {
+  font-family: var(--font-sans);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  border: none;
+}
+button:active {
+  transform: scale(0.97);
+}
+
+/* ===== ENTORNO DEL MODO GUARDIA (GUARDIA MODE) ===== */
+.guardia-banner {
+  background: linear-gradient(90deg, #004b57, #062a13);
+  border-bottom: 1px solid var(--color-guardia-border);
+  padding: 8px 16px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--color-guardia);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  animation: pulseText 3s infinite ease-in-out;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.guardia-card-active {
+  background: var(--color-guardia-bg) !important;
+  border: 1px solid var(--color-guardia-border) !important;
+  animation: pulseGlow 4s infinite ease-in-out;
+}
+
+/* ===== GRÁFICO SVG ===== */
+.chart-container {
+  position: relative;
+  width: 100%;
+}
+
+/* ===== HOY TAB ===== */
+.macro-progress-bar {
+  transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ===== TAB ENTRENAMIENTO ===== */
+.muscle-heatmap-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.muscle-heatmap-cell {
+  background-color: var(--panel-bg-sec);
+  border: 1px solid var(--line-color);
+  border-radius: 8px;
+  padding: 8px;
+  text-align: center;
+  transition: all 0.3s ease;
+}
+
+.muscle-heatmap-cell .muscle-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  display: block;
+}
+
+.muscle-heatmap-cell .muscle-count {
+  font-family: var(--font-display);
+  font-size: 18px;
+  margin-top: 4px;
+  display: block;
+}
+
+/* ===== TAB REGISTRO / COMPOSICIÓN CORPORAL ===== */
+.comp-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.comp-metric-box {
+  background-color: var(--panel-bg-sec);
+  border: 1px solid var(--line-color);
+  border-radius: 12px;
+  padding: 12px 10px;
+  text-align: center;
+}
+
+.comp-metric-box .label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.comp-metric-box .val {
+  font-family: var(--font-display);
+  font-size: 26px;
+  margin-top: 4px;
+}
+
+.visceral-indicator {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.visceral-dot {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background-color: var(--line-color);
+}
+
+/* ===== TAB COACH CHAT ===== */
+.chat-window {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 275px);
+  min-height: 350px;
+}
+
+.chat-bubble-container {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.chat-bubble {
+  max-width: 85%;
+  padding: 12px 16px;
+  border-radius: 16px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  margin-bottom: 12px;
+  word-break: break-word;
+}
+
+.chat-bubble.user {
+  background-color: var(--color-lime);
+  color: #1a2400;
+  align-self: flex-end;
+  border-bottom-right-radius: 4px;
+}
+
+.chat-bubble.assistant {
+  background-color: var(--panel-bg);
+  color: var(--text-ink);
+  border: 1px solid var(--line-color);
+  align-self: flex-start;
+  border-bottom-left-radius: 4px;
+}
+
+/* ===== TAB PLAN ===== */
+.shopping-list-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--panel-bg-sec);
+  border: 1px solid var(--line-color);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.shopping-list-item input[type="checkbox"] {
+  accent-color: var(--color-lime);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}

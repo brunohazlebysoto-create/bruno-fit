@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <script>
+    window.addEventListener('error', function(e) {
+      var root = document.getElementById('root') || document.body;
+      var errDiv = document.createElement('div');
+      errDiv.style.position = 'fixed';
+      errDiv.style.top = '0';
+      errDiv.style.left = '0';
+      errDiv.style.right = '0';
+      errDiv.style.bottom = '0';
+      errDiv.style.background = '#1a0000';
+      errDiv.style.color = '#ff6b8a';
+      errDiv.style.padding = '20px';
+      errDiv.style.overflow = 'auto';
+      errDiv.style.zIndex = '999999';
+      errDiv.style.fontFamily = 'monospace';
+      errDiv.style.fontSize = '14px';
+      errDiv.style.lineHeight = '1.5';
+      errDiv.innerHTML = '<h2>🚨 ERROR CRÍTICO DE APLICACIÓN</h2>' +
+        '<p><b>Mensaje:</b> ' + e.message + '</p>' +
+        '<p><b>Archivo:</b> ' + e.filename + ' (Línea ' + e.lineno + ', Columna ' + e.colno + ')</p>' +
+        '<p><b>Stack:</b></p><pre>' + (e.error ? e.error.stack : 'No disponible') + '</pre>' +
+        '<p>Por favor, copia este error y envíaselo al asistente para corregirlo de inmediato.</p>';
+      root.appendChild(errDiv);
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+      var root = document.getElementById('root') || document.body;
+      var errDiv = document.createElement('div');
+      errDiv.style.position = 'fixed';
+      errDiv.style.top = '0';
+      errDiv.style.left = '0';
+      errDiv.style.right = '0';
+      errDiv.style.bottom = '0';
+      errDiv.style.background = '#1a0000';
+      errDiv.style.color = '#ff6b8a';
+      errDiv.style.padding = '20px';
+      errDiv.style.overflow = 'auto';
+      errDiv.style.zIndex = '999999';
+      errDiv.style.fontFamily = 'monospace';
+      errDiv.style.fontSize = '14px';
+      errDiv.style.lineHeight = '1.5';
+      errDiv.innerHTML = '<h2>🚨 PROMESA RECHAZADA (UNHANDLED REJECTION)</h2>' +
+        '<p><b>Razón:</b> ' + (e.reason ? (e.reason.message || e.reason) : 'Desconocida') + '</p>' +
+        '<p><b>Stack:</b></p><pre>' + (e.reason && e.reason.stack ? e.reason.stack : 'No disponible') + '</pre>' +
+        '<p>Por favor, copia este error y envíaselo al asistente para corregirlo de inmediato.</p>';
+      root.appendChild(errDiv);
+    });
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Centro de Mando Fitness - Panel inteligente para nutrición, entrenamiento y composición corporal personalizado para Bruno.">
+  
+  <!-- PWA Configuration -->
+  <meta name="theme-color" content="#0c0e0b">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Centro de Mando Fitness">
+  <link rel="apple-touch-icon" href="./icon-192.png">
+  <link rel="manifest" href="./manifest.json">
+
+  <title>Centro de Mando Fitness - Bruno</title>
+  
+  <!-- Google Fonts: Bebas Neue & Manrope -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Manrope:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Import Map to resolve imports cleanly and prevent multiple React instances -->
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.2.0",
+      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client?deps=react@18.2.0",
+      "lucide-react": "https://esm.sh/lucide-react@0.344.0?deps=react@18.2.0",
+      "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.39.8"
+    }
+  }
+  </script>
+
+  <!-- Babel Standalone to compile JSX in the browser on the fly -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <!-- Root entry point for React -->
+  <div id="root"></div>
+
+  <!-- Entry script loaded as an ES module transpiled by Babel -->
+  <script type="text/babel" data-type="module" src="./app.js"></script>
+
+  <!-- Service Worker registration script -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./sw.js")
+          .then((reg) => console.log("Service Worker registrado con éxito:", reg.scope))
+          .catch((err) => console.log("Error al registrar Service Worker:", err));
+      });
+    }
+  </script>
+</body>
+</html>

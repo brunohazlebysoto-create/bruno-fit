@@ -1,0 +1,22 @@
+{
+  "name": "Centro de Mando Fitness",
+  "short_name": "BrunoFit",
+  "description": "Panel inteligente de nutrición y entrenamiento para Bruno.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0c0e0b",
+  "theme_color": "#0c0e0b",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "./icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ]
+}

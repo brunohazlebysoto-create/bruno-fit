@@ -1,0 +1,12 @@
+# Secretos locales - NUNCA subir a GitHub
+secrets_local.py
+*.env
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Sistema
+.DS_Store
+Thumbs.db
