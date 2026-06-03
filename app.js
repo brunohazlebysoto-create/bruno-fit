@@ -5813,5 +5813,12 @@ function Plan({presetKey, shoppingList, setShoppingList, geminiKey, meals, setMe
 
 /* ===== RENDERIZAR LA APLICACIÓN REACT ===== */
 const container = document.getElementById("root");
-const root = createRoot(container);
-root.render(React.createElement(App));
+if (container) {
+  const root = createRoot(container);
+  root.render(React.createElement(App));
+}
+
+// Para testing (Jest / Node.js)
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { loadKey };
+}
