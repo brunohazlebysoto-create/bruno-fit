@@ -1734,11 +1734,13 @@ export default function App(){
 
       // Get latest metrics for prompt
       const getLatestMetricsText = () => {
-        const sorted = Object.entries(metricslog || {})
-          .map(([dateStr, m]) => ({ date: dateStr, ...(m || {}) }))
-          .sort((a, b) => b.date.localeCompare(a.date));
-        if (sorted.length === 0) return "Ninguna registrada.";
-        const m = sorted[0];
+        const keys = Object.keys(metricslog || {});
+        if (keys.length === 0) return "Ninguna registrada.";
+        let latestDate = keys[0];
+        for (let i = 1; i < keys.length; i++) {
+          if (keys[i] > latestDate) latestDate = keys[i];
+        }
+        const m = { date: latestDate, ...(metricslog[latestDate] || {}) };
         let text = `Último peso: ${m.weight || "?"} kg. `;
         if (m.musculo) text += `Masa muscular: ${m.musculo} kg, Grasa: ${m.grasaPct}%. `;
         if (m.brazoDer && m.brazoIzq) {
