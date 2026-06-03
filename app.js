@@ -3622,7 +3622,7 @@ function Entreno({
 
   // Removed duplicate getMetricsForDate from Entreno component
 
-  const getWorkoutSessionsByDate = () => {
+  const workoutSessions = React.useMemo(() => {
     const sessions = {};
     Object.entries(exlog || {}).forEach(([name, sets]) => {
       (sets || []).forEach(s => {
@@ -3638,9 +3638,7 @@ function Entreno({
       });
     });
     return sessions;
-  };
-
-  const workoutSessions = getWorkoutSessionsByDate();
+  }, [exlog]);
 
   const getSessionStats = () => {
     let totalVol = 0;
