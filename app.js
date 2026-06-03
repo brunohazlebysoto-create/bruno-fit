@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
 import { 
@@ -3218,21 +3218,24 @@ function Entreno({
   }, []);
 
   /* ===== MAPA DE CALOR DE VOLUMEN SEMANAL ===== */
-  const exMap = {}; 
-  Object.values(exercises || {}).flat().forEach(e => { exMap[e.name] = e.musculos || []; });
-  const weekAgo = Date.now() - 7 * 864e5; 
-  const vol = { Pectoral: 0, Espalda: 0, Cuádriceps: 0, Isquios: 0, Deltoides: 0, Bíceps: 0, Tríceps: 0, Glúteos: 0, Antebrazo: 0 };
-  
-  Object.entries(exlog || {}).forEach(([name, sets]) => { 
-    const ms = exMap[name] || MUSCLES[name] || []; 
-    (sets || []).forEach(s => { 
-      if(s && s.date && new Date(s.date).getTime() >= weekAgo && s.type !== "warmup") {
-        ms.forEach(m => { 
-          if(vol[m] !== undefined) vol[m] = vol[m] + 1; 
-        }); 
-      }
-    }); 
-  });
+  const vol = useMemo(() => {
+    const exMap = {};
+    Object.values(exercises || {}).flat().forEach(e => { exMap[e.name] = e.musculos || []; });
+    const weekAgo = Date.now() - 7 * 864e5;
+    const calculatedVol = { Pectoral: 0, Espalda: 0, Cuádriceps: 0, Isquios: 0, Deltoides: 0, Bíceps: 0, Tríceps: 0, Glúteos: 0, Antebrazo: 0 };
+
+    Object.entries(exlog || {}).forEach(([name, sets]) => {
+      const ms = exMap[name] || MUSCLES[name] || [];
+      (sets || []).forEach(s => {
+        if(s && s.date && new Date(s.date).getTime() >= weekAgo && s.type !== "warmup") {
+          ms.forEach(m => {
+            if(calculatedVol[m] !== undefined) calculatedVol[m] = calculatedVol[m] + 1;
+          });
+        }
+      });
+    });
+    return calculatedVol;
+  }, [exercises, exlog]);
 
   const getHeatColor = (sets) => {
     if (sets === 0) return { bg: C.panel2, text: C.muted };
