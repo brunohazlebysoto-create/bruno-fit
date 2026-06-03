@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
 import { 
@@ -1695,12 +1695,15 @@ export default function App(){
     brazoDer: "", brazoIzq: "", musloDer: "", musloIzq: "", pantorrillaDer: "", pantorrillaIzq: "", cintura: "", pecho: ""
   };
 
-  const totals = (log || []).reduce((a,e) => ({
-    kcal: a.kcal + (+e.kcal || 0),
-    p: a.p + (+e.proteina || 0),
-    c: a.c + (+e.carbo || 0),
-    f: a.f + (+e.grasa || 0)
-  }), { kcal:0, p:0, c:0, f:0 });
+  // ⚡ Bolt: Memoize totals calculation to prevent unnecessary reduce operations on every render
+  const totals = useMemo(() => {
+    return (log || []).reduce((a,e) => ({
+      kcal: a.kcal + (+e.kcal || 0),
+      p: a.p + (+e.proteina || 0),
+      c: a.c + (+e.carbo || 0),
+      f: a.f + (+e.grasa || 0)
+    }), { kcal:0, p:0, c:0, f:0 });
+  }, [log]);
 
   // Resumen del entrenamiento realizado hoy
   const getTodayWorkoutSummary = () => {
