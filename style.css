@@ -239,8 +239,8 @@ button:active {
 .chat-window {
   display: flex;
   flex-direction: column;
-  height: calc(100dvh - 275px);
-  min-height: 350px;
+  height: calc(100dvh - 120px);
+  min-height: 650px;
 }
 
 .chat-bubble-container {

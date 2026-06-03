@@ -1,0 +1,37 @@
+name: Google Jules AI Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Instrucciones para Jules (ej: "Agrega pruebas unitarias para app.js")'
+        required: true
+        type: string
+  issues:
+    types: [labeled]
+
+jobs:
+  jules-agent:
+    name: Ejecutar Jules Agent
+    # Solo ejecutar si se dispara manualmente o si un issue es etiquetado con 'jules'
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && github.event.label.name == 'jules')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ejecutar Google Labs Jules Action
+        uses: google-labs-code/jules-action@v1
+        with:
+          prompt: |
+            ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.prompt || format('Issue #{0}: {1}\n\n{2}', github.event.issue.number, github.event.issue.title, github.event.issue.body) }}
+          jules_api_key: ${{ secrets.JULES_API_KEY }}

@@ -84,7 +84,7 @@ const suppsKey = () => "supps-" + new Date().toISOString().slice(0,10);
 const uid = () => Math.random().toString(36).slice(2,9);
 const fdate = (iso)=> new Date(iso).toLocaleDateString("es",{day:"2-digit",month:"short"});
 
-// Clave Gemini: el usuario la introduce en Ajustes > Coach
+// Clave Gemini/OpenRouter por defecto
 const DEFAULT_GEMINI_KEY = "";
 
 const COACH_SCHEMA = {
@@ -149,7 +149,7 @@ const WORKOUT_PARSER_SCHEMA = {
   required: ["exercises"]
 };
 
-const MEALS_SYS = "Eres un nutricionista deportivo de élite. Tu tarea es recibir el plan de comidas actual de Bruno y la solicitud del usuario para modificar las opciones o la proporción de ingredientes. Debes reescribir y optimizar las opciones de comida del plan actual (manteniendo los 5 momentos del día: Desayuno, Almuerzo, Pre-entreno, Post-entreno, Cena) respetando su perfil, macros y guardias. Devuelve un formato JSON estricto que cumpla con el esquema MEALS_SCHEMA.";
+const MEALS_SYS = "Eres un nutricionista deportivo de élite. Tu tarea es recibir el plan de comidas actual de Bruno y la solicitud del usuario para modificar las opciones o la proporción de ingredientes. Debes reescribir y optimizar las opciones de comida del plan actual (manteniendo los 5 momentos del día: Desayuno, Almuerzo, Pre-entreno, Post-entreno, Cena) respetando su perfil, macros y guardias. Al estimar porciones, ingredientes y macronutrientes por porción, debes basarte estrictamente en bases de datos nutricionales oficiales (como USDA FoodData Central o tablas de composición de alimentos locales chilenas/latinoamericanas). Devuelve un formato JSON estricto que cumpla con el esquema MEALS_SCHEMA.";
 
 const MEALS_SCHEMA = {
   type: "OBJECT",
@@ -251,7 +251,14 @@ async function fetchStateFromCloud(syncCode) {
 }
 
 /* ===== INTEGRACIÓN DE LA API DE GEMINI (1.5 FLASH) ===== */
-const aiErr = (e) => "No se pudo conectar con la IA. " + (e ? `Detalle: ${e.message}` : "Verifica tu API Key o conexión.");
+const aiErr = (e) => {
+  if (!e) return "No se pudo conectar con la IA. Verifica tu API Key o conexión.";
+  const msg = e.message || "";
+  if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota") || msg.includes("limit")) {
+    return "Límite de la API superado (Error 429 / Quota Exceeded). Si usas la versión gratuita de Google AI Studio, espera unos segundos para restablecer el límite por minuto. Para evitar esto, puedes agregar múltiples API Keys separadas por comas en Ajustes (se rotarán automáticamente) o habilitar el pago por uso (Pay-as-you-go) en Google AI Studio, que cuesta centavos para uso personal.";
+  }
+  return "No se pudo conectar con la IA. Detalle: " + msg;
+};
 const getProfileStr = (isGuardia, weight = 93.9, musculo = 64.7, grasaPct = 26.2, visceral = 9) => {
   return `Bruno: hombre, 34 años, 180 cm, ${weight} kg, residente de cirugía pediátrica con guardias de 24h. Objetivo: definición (bajar grasa manteniendo músculo; ${musculo} kg de músculo, ${grasaPct}% grasa, visceral grado ${visceral}). Dieta hiperproteica.${
     isGuardia ? " [IMPORTANTE: HOY BRUNO ESTÁ EN GUARDIA DE 24H EN EL HOSPITAL. Priorizar timing de snacks rápidos, hidratación extra a 4.5L, evitar fatiga extrema en entrenamientos y priorizar movilidad]" : ""
@@ -275,71 +282,164 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
     }
   });
 
-  // Alternar las llaves de forma aleatoria/balanceada para distribuir la carga de cuota
-  const startIndex = Math.floor(Math.random() * apiKeys.length);
+  // Priorizar las llaves de Gemini nativas primero y usar las de OpenRouter como respaldo/fallback
+  const geminiKeys = apiKeys.filter(k => !k.startsWith("sk-or-"));
+  const openRouterKeys = apiKeys.filter(k => k.startsWith("sk-or-"));
+
+  const orderedKeys = [];
+  if (geminiKeys.length > 0) {
+    const startGemini = Math.floor(Math.random() * geminiKeys.length);
+    for (let count = 0; count < geminiKeys.length; count++) {
+      orderedKeys.push(geminiKeys[(startGemini + count) % geminiKeys.length]);
+    }
+  }
+  if (openRouterKeys.length > 0) {
+    const startOR = Math.floor(Math.random() * openRouterKeys.length);
+    for (let count = 0; count < openRouterKeys.length; count++) {
+      orderedKeys.push(openRouterKeys[(startOR + count) % openRouterKeys.length]);
+    }
+  }
+
   let lastError = null;
 
-  for (let count = 0; count < apiKeys.length; count++) {
-    const i = (startIndex + count) % apiKeys.length;
-    const apiKey = apiKeys[i];
+  for (let idx = 0; idx < orderedKeys.length; idx++) {
+    const apiKey = orderedKeys[idx];
     try {
-      const contents = messages.map(m => {
-        if (Array.isArray(m.content)) {
-          const parts = m.content.map(part => {
-            if (part.type === "image") {
-              return {
-                inlineData: {
-                  mimeType: part.source.media_type,
-                  data: part.source.data
-                }
-              };
-            }
-            return { text: part.text };
-          });
-          return { role: m.role === "assistant" ? "model" : "user", parts };
-        }
-        return {
-          role: m.role === "assistant" ? "model" : "user",
-          parts: [{ text: m.content }]
+      const isOpenRouter = apiKey.startsWith("sk-or-");
+      
+      if (isOpenRouter) {
+        // Carga el modelo guardado, por defecto moonshotai/kimi-k2.6:free
+        const model = await loadKey("gemini_model", "moonshotai/kimi-k2.6:free");
+        
+        const formattedMessages = [
+          { role: "system", content: systemInstruction }
+        ];
+        
+        messages.forEach(m => {
+          if (Array.isArray(m.content)) {
+            const contentParts = [];
+            m.content.forEach(part => {
+              if (part.type === "image") {
+                contentParts.push({
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${part.source.media_type};base64,${part.source.data}`
+                  }
+                });
+              } else {
+                contentParts.push({
+                  type: "text",
+                  text: part.text
+                });
+              }
+            });
+            formattedMessages.push({
+              role: m.role === "assistant" ? "assistant" : "user",
+              content: contentParts
+            });
+          } else {
+            formattedMessages.push({
+              role: m.role === "assistant" ? "assistant" : "user",
+              content: m.content
+            });
+          }
+        });
+
+        const body = {
+          model: model,
+          messages: formattedMessages,
+          temperature: 0.2
         };
-      });
 
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
-      
-      const generationConfig = {
-        temperature: 0.2
-      };
-      
-      if (responseSchema) {
-        generationConfig.responseMimeType = "application/json";
-        generationConfig.responseSchema = responseSchema;
+        if (responseSchema) {
+          body.response_format = { type: "json_object" };
+          // En OpenRouter para asegurar JSON podemos indicarlo en el system prompt
+          body.messages.push({
+            role: "system",
+            content: "IMPORTANT: You must respond with a JSON object that strictly complies with this JSON schema: " + JSON.stringify(responseSchema)
+          });
+        }
+
+        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`,
+            "HTTP-Referer": "https://brunoeduardo-bruno-fit.static.hf.space",
+            "X-Title": "Centro de Mando Fitness"
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          throw new Error(errorData.error?.message || `HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        const textOut = data.choices?.[0]?.message?.content || "";
+        return textOut.trim();
+
+      } else {
+        // Endpoint directo de Google Gemini
+        const contents = messages.map(m => {
+          if (Array.isArray(m.content)) {
+            const parts = m.content.map(part => {
+              if (part.type === "image") {
+                return {
+                  inlineData: {
+                    mimeType: part.source.media_type,
+                    data: part.source.data
+                  }
+                };
+              }
+              return { text: part.text };
+            });
+            return { role: m.role === "assistant" ? "model" : "user", parts };
+          }
+          return {
+            role: m.role === "assistant" ? "model" : "user",
+            parts: [{ text: m.content }]
+          };
+        });
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
+        
+        const generationConfig = {
+          temperature: 0.2
+        };
+        
+        if (responseSchema) {
+          generationConfig.responseMimeType = "application/json";
+          generationConfig.responseSchema = responseSchema;
+        }
+
+        const body = {
+          contents,
+          systemInstruction: {
+            parts: [{ text: systemInstruction }]
+          },
+          generationConfig
+        };
+
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          throw new Error(errorData.error?.message || `HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        const textOut = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        return textOut.trim();
       }
-
-      const body = {
-        contents,
-        systemInstruction: {
-          parts: [{ text: systemInstruction }]
-        },
-        generationConfig
-      };
-
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error?.message || `HTTP ${res.status}`);
-      }
-
-      const data = await res.json();
-      const textOut = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      return textOut.trim();
     } catch (e) {
       lastError = e;
-      console.warn(`Error con la API Key ${i + 1}/${apiKeys.length}: ${e.message}. Intentando con la siguiente...`);
+      console.warn(`Error con la API Key ${idx + 1}/${orderedKeys.length}: ${e.message}. Intentando con la siguiente...`);
     }
   }
 
@@ -393,6 +493,7 @@ export default function App(){
   const [loaded, setLoaded] = useState(false);
   const [isGuardia, setIsGuardia] = useState(false);
   const [geminiKey, setGeminiKey] = useState("");
+  const [aiModel, setAiModel] = useState("moonshotai/kimi-k2.6:free");
   const [prAlerts, setPrAlerts] = useState([]);
   const [workoutDurations, setWorkoutDurations] = useState({});
   
@@ -750,6 +851,7 @@ export default function App(){
       setSupplements((localSuppslog || {})[selectedDateStr] || { Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false });
 
       setGeminiKey(await loadKey("gemini_api_key", DEFAULT_GEMINI_KEY));
+      setAiModel(await loadKey("gemini_model", "moonshotai/kimi-k2.6:free"));
       setLoaded(true);
 
       // Si la sincronización está activa, intentamos empujar el estado local actual
@@ -1359,6 +1461,11 @@ export default function App(){
     saveKey("gemini_api_key", k);
   };
 
+  const saveAiModel = (m) => {
+    setAiModel(m);
+    saveKey("gemini_model", m);
+  };
+
   // Activa o desactiva la sincronización en la nube
   const handleToggleCloudSync = async (enabled) => {
     setCloudSync(enabled);
@@ -1718,6 +1825,99 @@ export default function App(){
     return summary.join("\n");
   };
 
+  // Resumen histórico completo para dar memoria real al Coach
+  const buildWorkoutHistorySummary = () => {
+    const now = new Date();
+    const weeksBack = 8; // últimas 8 semanas
+    const weeklyVolume = {}; // { 'Semana N': { sets: 0, tons: 0, days: Set } }
+    const prs = {}; // { ejercicio: maxKg }
+    const recentByEx = {}; // { ejercicio: [sets últimas 4 semanas] }
+
+    Object.entries(exlog || {}).forEach(([exName, sets]) => {
+      (sets || []).forEach(s => {
+        if (!s || !s.date || !s.w) return;
+        const d = new Date(s.date);
+        const weeksAgo = Math.floor((now - d) / (7 * 24 * 3600 * 1000));
+        if (weeksAgo > weeksBack) return;
+
+        // PRs
+        if (!prs[exName] || s.w > prs[exName]) prs[exName] = s.w;
+
+        // Volumen semanal
+        const weekLabel = weeksAgo === 0 ? 'Esta semana' : `Hace ${weeksAgo} sem`;
+        if (!weeklyVolume[weekLabel]) weeklyVolume[weekLabel] = { sets: 0, tons: 0, days: new Set() };
+        weeklyVolume[weekLabel].sets++;
+        weeklyVolume[weekLabel].tons += (s.w * (parseFloat(s.reps) || 1)) / 1000;
+        weeklyVolume[weekLabel].days.add(d.toISOString().slice(0, 10));
+
+        // Series recientes (4 semanas) por ejercicio
+        if (weeksAgo <= 4) {
+          if (!recentByEx[exName]) recentByEx[exName] = [];
+          recentByEx[exName].push({ date: s.date, w: s.w, reps: s.reps });
+        }
+      });
+    });
+
+    // PRs top 10 ejercicios
+    const prLines = Object.entries(prs)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([ex, w]) => `  - ${ex}: ${w} kg`);
+
+    // Progresión por ejercicio (primer set más antiguo vs más reciente últimas 4 sem)
+    const progressLines = Object.entries(recentByEx)
+      .map(([ex, sets]) => {
+        const sorted = [...sets].sort((a, b) => new Date(a.date) - new Date(b.date));
+        if (sorted.length < 2) return null;
+        const first = sorted[0], last = sorted[sorted.length - 1];
+        if (first.w === last.w) return null;
+        const diff = (last.w - first.w).toFixed(1);
+        const arrow = diff > 0 ? '↑' : '↓';
+        return `  - ${ex}: ${first.w}kg → ${last.w}kg (${arrow}${Math.abs(diff)}kg)`;
+      })
+      .filter(Boolean)
+      .slice(0, 8);
+
+    // Volumen últimas 4 semanas
+    const volLines = ['Esta semana', 'Hace 1 sem', 'Hace 2 sem', 'Hace 3 sem']
+      .map(label => {
+        const v = weeklyVolume[label];
+        if (!v) return null;
+        return `  - ${label}: ${v.sets} series, ${v.tons.toFixed(1)} ton, ${v.days.size} días entrenados`;
+      })
+      .filter(Boolean);
+
+    // Tendencia de peso (últimas 8 semanas)
+    const weightEntries = Object.entries(metricslog || {})
+      .map(([d, m]) => ({ date: d, w: m?.weight }))
+      .filter(e => e.w)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    let weightTrend = 'Sin registros de peso suficientes.';
+    if (weightEntries.length >= 2) {
+      const oldest = weightEntries[Math.max(0, weightEntries.length - 8)];
+      const latest = weightEntries[weightEntries.length - 1];
+      const diff = (latest.w - oldest.w).toFixed(1);
+      weightTrend = `${oldest.w}kg (${oldest.date}) → ${latest.w}kg (${latest.date}) = ${diff > 0 ? '+' : ''}${diff}kg`;
+    }
+
+    let result = '';
+    if (prLines.length > 0) result += `PRs actuales (máximo histórico):\n${prLines.join('\n')}\n`;
+    if (progressLines.length > 0) result += `Progresión últimas 4 semanas:\n${progressLines.join('\n')}\n`;
+    if (volLines.length > 0) result += `Volumen de entrenamiento semanal:\n${volLines.join('\n')}\n`;
+    result += `Tendencia de peso corporal: ${weightTrend}`;
+    return result || 'Sin historial de entrenamiento registrado aún.';
+  };
+
+  // Saludo proactivo diario (solo una vez al día al abrir Coach)
+  const sendDailyGreetingIfNeeded = async () => {
+    const todayKey = `dailyGreeting_${new Date().toISOString().slice(0, 10)}`;
+    if (localStorage.getItem(todayKey)) return; // ya se envió hoy
+    localStorage.setItem(todayKey, '1');
+    const activeSplit = SPLIT.find(s => s.key === activeSplitKey) || SPLIT[0];
+    await sendCoachMessage(`[Análisis automático de apertura] Dame un resumen rápido de mi estado actual: qué músculo me toca hoy según mi split (${activeSplit.name}), cómo voy con mi progresión de fuerza esta semana y si hay algo importante en mi historial que deba tener en cuenta hoy.`);
+  };
+
+
   const sendCoachMessage = async (messageText, customChat = null) => {
     const chatHistory = customChat || chat;
     if (!messageText.trim() || chatBusy) return;
@@ -1778,6 +1978,8 @@ export default function App(){
       };
       const recentNutrition = getNutritionAverages(7);
 
+      const workoutHistory = buildWorkoutHistorySummary();
+
       const sys = `Eres el coach nutricional y de fuerza de Bruno. ${getProfileStr(isGuardia, activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)}
 Plan nutricional activo: ${target.kcal} kcal (${target.label}), P:${target.p}g / C:${target.c}g / G:${target.f}g.
 Métricas antropométricas y corporales: ${metricsSummary}
@@ -1788,8 +1990,12 @@ Hoy lleva consumido: ${Math.round(totals.kcal)} kcal, P:${Math.round(totals.p)}g
 Entrenamiento realizado por Bruno hoy:
 ${todayWorkout}
 
-Español, directo, técnico y motivador.
-REGLA DE CALCULADORA INVERSA: Si Bruno te pregunta qué cenar o comer para cerrar el día o cómo completar sus macros restantes (ej. 'me quedan 600 calorías y 50g de proteína...'), calcula con precisión matemática una combinación rápida de alimentos (ej. claras, huevo entero, gramos exactos de pechuga de pollo, scoop de whey) para cuadrar sus números de forma exacta.\nREGLA CRÍTICA DE PORCIONES E INGREDIENTES: Cuando recomiendes porciones, alimentos o comidas en el chat, debes ajustar estrictamente las porciones (detallando gramos exactos) al plan nutricional seleccionado por Bruno (${target.label}) y a las necesidades energéticas del split del día (${activeSplit.fuel}). No recomiendes las mismas porciones por defecto. Si está en "Volumen" o día de "Carbo alto", propón porciones abundantes de carbohidratos. Si está en "Definición" o día de "Carbo medio", sé sumamente estricto y reduce las porciones de carbohidratos, sugiriendo fuentes de proteína magra más saciantes.
+--- HISTORIAL Y MEMORIA COMPLETA ---
+${workoutHistory}
+--- FIN HISTORIAL ---
+
+Español, directo, técnico y motivador. Usa el historial para dar recomendaciones personalizadas y basadas en datos reales (PRs, progresión, volumen). Si detectás estancamiento o regresión en algún ejercicio, mencionalo proactivamente.
+REGLA DE CALCULADORA INVERSA: Si Bruno te pregunta qué cenar o comer para cerrar el día o cómo completar sus macros restantes (ej. 'me quedan 600 calorías y 50g de proteína...'), calcula con precisión matemática una combinación rápida de alimentos (ej. claras, huevo entero, gramos exactos de pechuga de pollo, scoop de whey) para cuadrar sus números de forma exacta.\nREGLA CRÍTICA DE PORCIONES E INGREDIENTES: Cuando recomiendes porciones, alimentos o comidas en el chat, debes ajustar estrictamente las porciones (detallando gramos exactos) al plan nutricional seleccionado por Bruno (${target.label}) y a las necesidades energéticas del split del día (${activeSplit.fuel}). No recomiendes las mismas porciones por defecto. Si está en "Volumen" o día de "Carbo alto", propón porciones abundantes de carbohidratos. Si está en "Definición" o día de "Carbo medio", sé sumamente estricto y reduce las porciones de carbohidratos, sugiriendo fuentes de proteína magra más saciantes.\nREGLA DE DATOS NUTRICIONALES DE REFERENCIA: Para calcular calorías y macronutrientes de los alimentos registrados (ADD_FOOD) o recomendados en el chat, debes basar tus cálculos estrictamente en bases de datos nutricionales oficiales y verificadas (como USDA FoodData Central o tablas locales de Latinoamérica/Chile). No inventes ni alucines valores; asegúrate de que todas las estimaciones por porción/gramaje sean científicamente coherentes con estas fuentes oficiales.
 
 Debes responder SIEMPRE en formato JSON cumpliendo con el esquema COACH_SCHEMA. Si Bruno te pide agregar o registrar comida (ADD_FOOD), peso (ADD_WEIGHT) o series de ejercicios (ADD_SET), incluye las acciones correspondientes en el arreglo 'actions'. Si es solo una conversación o duda normal, el arreglo 'actions' debe ser vacío.
 Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Aperturas, Curl inclinado, Curl martillo, Curl prono barra, Sentadilla, Prensa 45°, Sentadilla búlgara, Sentadilla ciclista Smith, Extensión cuádriceps, Press Arnold, Vuelos laterales, Vuelos posteriores polea, Dominadas / Jalón, Remo barra, Remo máquina, Pullover polea, Face pull, Press cerrado, Extensión polea, Extensión sobre cabeza, Peso muerto, Leg curl sentado, Puente glúteos, Estocada atrás Smith.`;
@@ -1799,6 +2005,13 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
       
       if (parsed.actions && parsed.actions.length > 0) {
         handleCoachActions(parsed.actions);
+        // Si registró ejercicios, análisis automático de la sesión
+        const hasNewSets = parsed.actions.some(a => a.type === 'ADD_SET');
+        if (hasNewSets) {
+          setTimeout(() => {
+            sendCoachMessage('[Análisis automático de sesión] Analicé las series que acabo de registrar. Dame una evaluación breve: ¿superé mis registros anteriores? ¿el volumen fue adecuado? ¿qué debo priorizar la próxima sesión de este músculo?');
+          }, 1500);
+        }
       }
       
       const finalChat = [...nextChat, { role: "assistant", content: parsed.chatResponse || "..." }];
@@ -1925,27 +2138,6 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
             <div className="disp" style={{fontSize:34, marginTop:2}}>CENTRO DE MANDO</div>
           </div>
         </div>
-        <div style={{display:"flex", gap:8, marginTop:14}}>
-          {Object.keys(PRESETS).map(k => (
-            <button 
-              key={k} 
-              onClick={() => changePreset(k)} 
-              style={{
-                flex:1, 
-                padding:"8px 4px", 
-                borderRadius:10, 
-                fontSize:12, 
-                fontWeight:700, 
-                cursor:"pointer", 
-                border:`1px solid ${presetKey === k ? C.lime : C.line}`, 
-                background: presetKey === k ? "rgba(205,255,74,.14)" : C.panel, 
-                color: presetKey === k ? C.lime : C.muted
-              }}
-            >
-              {PRESETS[k].label}
-            </button>
-          ))}
-        </div>
       </div>
 
       <div style={{maxWidth:520, margin:"0 auto", padding:"0 16px"}}>
@@ -1961,7 +2153,11 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
             isGuardia={isGuardia}
             geminiKey={geminiKey}
             supplements={supplements}
-            setSupplements={(s) => { setSupplements(s); saveState({ supplements: s }); }}
+            handleUpdateSupplements={(newSupps, newInv) => {
+              setSupplements(newSupps);
+              if (newInv) setSuppsInventory(newInv);
+              saveState({ supplements: newSupps, suppsInventory: newInv || suppsInventory });
+            }}
             activeSplitKey={activeSplitKey}
             suppsInventory={suppsInventory}
             setSuppsInventory={(si) => saveState({ suppsInventory: si })}
@@ -1978,6 +2174,8 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
             isGuardia={isGuardia}
             geminiKey={geminiKey}
             saveGeminiKey={saveGeminiKey}
+            aiModel={aiModel}
+            saveAiModel={saveAiModel}
             cloudSync={cloudSync}
             syncCode={syncCode}
             syncStatus={syncStatus}
@@ -1989,6 +2187,7 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
             handleCoachActions={handleCoachActions}
             sendCoachMessage={sendCoachMessage}
             chatBusy={chatBusy}
+            sendDailyGreetingIfNeeded={sendDailyGreetingIfNeeded}
             supabaseUrl={supabaseUrl}
             supabaseAnonKey={supabaseAnonKey}
             supabaseUser={supabaseUser}
@@ -1999,6 +2198,8 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
             handleSbRegister={handleSbRegister}
             handleSbLogout={handleSbLogout}
             syncLocalToSupabase={syncLocalToSupabase}
+            changePreset={changePreset}
+            presetKey={presetKey}
           />
         )}
         {view === "entreno" && (
@@ -2059,7 +2260,7 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
       {prAlerts.length > 0 && (
         <div style={{
           position: "fixed",
-          bottom: 24,
+          top: 75,
           left: "50%",
           transform: "translateX(-50%)",
           width: "calc(100% - 32px)",
@@ -2081,9 +2282,9 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
             </span>
             <button 
               onClick={() => setPrAlerts([])} 
-              style={{background:"none", border:"none", color:C.muted, cursor:"pointer", padding:4}}
+              style={{background:"none", border:"none", color:C.muted, cursor:"pointer", padding:12, margin:-8, display:"flex", alignItems:"center", justifyContent:"center"}}
             >
-              <X size={16}/>
+              <X size={20}/>
             </button>
           </div>
           <div style={{display:"flex", flexDirection:"column", gap:6}}>
@@ -2177,41 +2378,42 @@ function Bar({icon:Ic, label, val, max, unit, color}){
 }
 
 function Hoy({
-  target, totals, log, setLog, loaded, water, setWater, isGuardia, geminiKey, supplements, setSupplements,
+  target, totals, log, setLog, loaded, water, setWater, isGuardia, geminiKey, supplements, handleUpdateSupplements,
   activeSplitKey, suppsInventory, setSuppsInventory, selectedDateStr, setSelectedDateStr
 }){
   const [text, setText] = useState(""); 
   const [busy, setBusy] = useState(false); 
   const [err, setErr] = useState("");
   const [newSuppInput, setNewSuppInput] = useState("");
+  const [editFoodObj, setEditFoodObj] = useState(null);
 
   const toggleSupplement = (name) => {
     const checked = !supplements[name];
     const next = { ...supplements, [name]: checked };
-    setSupplements(next);
     
     // Descontar del inventario de stock si corresponde
-    if (suppsInventory && suppsInventory[name]) {
-      const inv = { ...suppsInventory };
-      inv[name] = {
-        ...inv[name],
-        servingsLeft: Math.max(0, inv[name].servingsLeft + (checked ? -1 : 1))
+    let nextInv = null;
+    if (checked && suppsInventory && suppsInventory[name]) {
+      nextInv = { ...suppsInventory };
+      nextInv[name] = {
+        ...nextInv[name],
+        servingsLeft: Math.max(0, nextInv[name].servingsLeft - 1)
       };
-      setSuppsInventory(inv);
     }
+    handleUpdateSupplements(next, nextInv);
   };
   
   const addCustomSupplement = () => {
     if (!newSuppInput.trim() || supplements[newSuppInput.trim()] !== undefined) return;
     const next = { ...supplements, [newSuppInput.trim()]: false };
-    setSupplements(next);
+    handleUpdateSupplements(next, null);
     setNewSuppInput("");
   };
 
   const deleteSupplement = (name) => {
     const next = { ...supplements };
     delete next[name];
-    setSupplements(next);
+    handleUpdateSupplements(next, null);
   };
   const fileRef = useRef();
   
@@ -2279,8 +2481,9 @@ function Hoy({
 
   const FOOD_SYS = "Eres un nutricionista experto. Estima los macros de la comida detallada por el usuario (puede ser texto o imagen).\n" +
                     "REGLAS CRÍTICAS DE ESTIMACIÓN:\n" +
-                    "1. Si el usuario no especifica pesos o cantidades exactas (ej. 'un tuto de pollo y arroz', 'un plato de tallarines', 'un plátano', 'un café con leche'), DEBES asumir porciones genéricas estándar y realistas (por ejemplo: un muslo/tuto de pollo mediano = 100g de carne, un plato de arroz = 150g cocido, un plato de pasta = 180g cocido, un plátano mediano = 100g, etc.) para realizar los cálculos. NUNCA dejes campos vacíos ni falles por falta de información.\n" +
-                    "2. Interpreta regionalismos chilenos y latinoamericanos comunes (ej. 'tuto de pollo' = muslo/pierna de pollo; 'palta' = aguacate; 'porotos' = frijoles; 'zapallo' = calabaza; 'camote' = boniato; 'lomo liso' = corte de carne de res magra; etc.).\n" +
+                    "1. DEBES basar tus estimaciones de calorías y macronutrientes estrictamente en datos de bases de datos nutricionales oficiales y verificadas (como USDA FoodData Central o tablas de composición de alimentos regionales de Latinoamérica/Chile). No inventes ni alucines valores; asegúrate de que sean coherentes con estas referencias científicas.\n" +
+                    "2. Si el usuario no especifica pesos o cantidades exactas (ej. 'un tuto de pollo y arroz', 'un plato de tallarines', 'un plátano', 'un café con leche'), DEBES asumir porciones genéricas estándar y realistas según las bases de datos nutricionales (por ejemplo: un muslo/tuto de pollo mediano = 100g de carne limpia cocida, un plato de arroz = 150g cocido, un plato de pasta = 180g cocido, un plátano mediano = 100g, etc.) para realizar los cálculos. NUNCA dejes campos vacíos ni falles por falta de información.\n" +
+                    "3. Interpreta regionalismos chilenos y latinoamericanos comunes (ej. 'tuto de pollo' = muslo/pierna de pollo; 'palta' = aguacate; 'porotos' = frijoles; 'zapallo' = calabaza; 'camote' = boniato; 'lomo liso' = corte de carne de res magra; etc.).\n" +
                     "Responde ÚNICAMENTE con el formato JSON y nada más. Ejemplo de esquema requerido:\n" +
                     "{\n" +
                     "  \"resumen\": \"Pollo con arroz y palta\",\n" +
@@ -2684,31 +2887,111 @@ function Hoy({
         <div style={{color:C.muted, fontSize:13, padding:"18px 0", textAlign:"center"}}>Aún no registras nada hoy.</div>
       )}
       
-      {log.map(e => (
-        <div key={e.id} className="pop" style={{
-          background:C.panel, 
-          border:`1px solid ${C.line}`, 
-          borderRadius:13, 
-          padding:"11px 14px", 
-          marginBottom:9, 
-          display:"flex", 
-          gap:10, 
-          alignItems:"flex-start"
-        }}>
-          <div style={{flex:1}}>
-            <div style={{fontSize:13.5, fontWeight:600, marginBottom:4}}>{e.resumen}</div>
-            <div style={{fontSize:11.5, color:C.muted, display:"flex", gap:10, flexWrap:"wrap", fontVariantNumeric:"tabular-nums"}}>
-              <span style={{color:C.lime}}>{Math.round(e.kcal)} kcal</span>
-              <span style={{color:C.cyan}}>P {Math.round(e.proteina)}g</span>
-              <span>C {Math.round(e.carbo)}g</span>
-              <span style={{color:C.amber}}>G {Math.round(e.grasa)}g</span>
+      {log.map(e => {
+        let pressTimer;
+        return (
+          <div key={e.id} className="pop" 
+            onPointerDown={() => {
+              pressTimer = setTimeout(() => {
+                setEditFoodObj({ e, isEditing: false });
+              }, 800);
+            }}
+            onPointerUp={() => clearTimeout(pressTimer)}
+            onPointerLeave={() => clearTimeout(pressTimer)}
+            onPointerCancel={() => clearTimeout(pressTimer)}
+            style={{
+              background:C.panel, 
+              border:`1px solid ${C.line}`, 
+              borderRadius:13, 
+              padding:"11px 14px", 
+              marginBottom:9, 
+              display:"flex", 
+              gap:10, 
+              alignItems:"flex-start",
+              cursor:"pointer",
+              userSelect:"none"
+            }}
+          >
+            <div style={{flex:1}}>
+              <div style={{fontSize:13.5, fontWeight:600, marginBottom:4}}>{e.resumen}</div>
+              <div style={{fontSize:11.5, color:C.muted, display:"flex", gap:10, flexWrap:"wrap", fontVariantNumeric:"tabular-nums"}}>
+                <span style={{color:C.lime}}>{Math.round(e.kcal)} kcal</span>
+                <span style={{color:C.cyan}}>P {Math.round(e.proteina)}g</span>
+                <span>C {Math.round(e.carbo)}g</span>
+                <span style={{color:C.amber}}>G {Math.round(e.grasa)}g</span>
+              </div>
             </div>
           </div>
-          <button onClick={() => del(e.id)} style={{background:"none", border:"none", cursor:"pointer", color:C.muted}}>
-            <Trash2 size={16}/>
-          </button>
+        );
+      })}
+
+      {editFoodObj && (
+        <div style={{
+          position:"fixed", top:0, left:0, right:0, bottom:0,
+          background:"rgba(0,0,0,0.6)", backdropFilter:"blur(4px)",
+          display:"grid", placeItems:"center", zIndex:9999, padding:20
+        }} onClick={() => setEditFoodObj(null)}>
+          <div style={{
+            background: C.panel, border:`1px solid ${C.line}`, borderRadius:16,
+            padding:20, width:"100%", maxWidth:320, display:"flex", flexDirection:"column", gap:12
+          }} onClick={e => e.stopPropagation()}>
+            {!editFoodObj.isEditing ? (
+              <>
+                <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Opciones de Comida</div>
+                <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>{editFoodObj.e.resumen}</div>
+                <button onClick={() => setEditFoodObj({...editFoodObj, isEditing: true})} style={{background:C.lime, color:"#1a2400", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
+                  ✏️ Editar Comida
+                </button>
+                <button onClick={() => { del(editFoodObj.e.id); setEditFoodObj(null); }} style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}>
+                  🗑️ Borrar Comida
+                </button>
+              </>
+            ) : (
+              <>
+                <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center", marginBottom:8}}>Editar Macros</div>
+                <input type="text" id="ef-resumen" defaultValue={editFoodObj.e.resumen} placeholder="Descripción" style={{width:"100%", padding:"8px", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink, fontSize:12}} />
+                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
+                  <div>
+                    <label style={{fontSize:10, color:C.muted, fontWeight:700}}>Kcal</label>
+                    <input type="number" id="ef-kcal" defaultValue={Math.round(editFoodObj.e.kcal)} style={{width:"100%", padding:"8px", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink}} />
+                  </div>
+                  <div>
+                    <label style={{fontSize:10, color:C.cyan, fontWeight:700}}>Proteína (g)</label>
+                    <input type="number" id="ef-p" defaultValue={Math.round(editFoodObj.e.proteina)} style={{width:"100%", padding:"8px", background:C.panel2, border:`1px solid ${C.cyan}`, borderRadius:8, color:C.ink}} />
+                  </div>
+                  <div>
+                    <label style={{fontSize:10, color:C.muted, fontWeight:700}}>Carbo (g)</label>
+                    <input type="number" id="ef-c" defaultValue={Math.round(editFoodObj.e.carbo)} style={{width:"100%", padding:"8px", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink}} />
+                  </div>
+                  <div>
+                    <label style={{fontSize:10, color:C.amber, fontWeight:700}}>Grasa (g)</label>
+                    <input type="number" id="ef-f" defaultValue={Math.round(editFoodObj.e.grasa)} style={{width:"100%", padding:"8px", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink}} />
+                  </div>
+                </div>
+                <button onClick={() => {
+                  const newResumen = document.getElementById("ef-resumen").value;
+                  const newKcal = parseFloat(document.getElementById("ef-kcal").value);
+                  const newP = parseFloat(document.getElementById("ef-p").value);
+                  const newC = parseFloat(document.getElementById("ef-c").value);
+                  const newF = parseFloat(document.getElementById("ef-f").value);
+                  if(newResumen && !isNaN(newKcal)) {
+                    const nextLog = log.map(item => item.id === editFoodObj.e.id ? {
+                      ...item, resumen: newResumen, kcal: newKcal||0, proteina: newP||0, carbo: newC||0, grasa: newF||0
+                    } : item);
+                    setLog(nextLog);
+                  }
+                  setEditFoodObj(null);
+                }} style={{background:C.lime, color:"#1a2400", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
+                  Guardar
+                </button>
+              </>
+            )}
+            <button onClick={() => setEditFoodObj(null)} style={{background:"transparent", color:C.muted, fontWeight:700, padding:10, border:"none", cursor:"pointer"}}>
+              Cancelar
+            </button>
+          </div>
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -2717,13 +3000,45 @@ function Hoy({
 function Coach({
   chat, setChat, target, totals, isGuardia, geminiKey, saveGeminiKey,
   cloudSync, syncCode, syncStatus, handleToggleCloudSync, handleCreateSyncCode, handleLinkDevice, handleForcePull, handleForcePush,
-  handleCoachActions, sendCoachMessage, chatBusy,
+  handleCoachActions, sendCoachMessage, chatBusy, sendDailyGreetingIfNeeded,
   supabaseUrl, supabaseAnonKey, supabaseUser, sbSyncing, sbError,
-  saveSbConfig, handleSbLogin, handleSbRegister, handleSbLogout, syncLocalToSupabase
+  saveSbConfig, handleSbLogin, handleSbRegister, handleSbLogout, syncLocalToSupabase,
+  changePreset, presetKey, aiModel, saveAiModel
 }){
+  // Simple markdown renderer for Coach responses
+  const renderMarkdown = (text) => {
+    if (!text) return null;
+    const blocks = text.split('\n\n');
+    return blocks.map((block, idx) => {
+      // List parsing
+      if (block.trim().startsWith('- ') || block.trim().match(/^\d+\.\s/)) {
+        const lines = block.split('\n');
+        return (
+          <ul key={idx} style={{ paddingLeft: '20px', margin: '8px 0' }}>
+            {lines.map((line, lidx) => {
+              const content = line.replace(/^(- |\d+\.\s)/, '');
+              const bolded = content.split(/(\*\*.*?\*\*)/g).map((part, i) => {
+                if (part.startsWith('**') && part.endsWith('**')) return <strong key={i}>{part.slice(2, -2)}</strong>;
+                return part;
+              });
+              return <li key={lidx}>{bolded}</li>;
+            })}
+          </ul>
+        );
+      }
+      
+      // Paragraph with bold parsing
+      const bolded = block.split(/(\*\*.*?\*\*)/g).map((part, i) => {
+        if (part.startsWith('**') && part.endsWith('**')) return <strong key={i}>{part.slice(2, -2)}</strong>;
+        return part;
+      });
+      return <p key={idx} style={{ margin: '8px 0' }}>{bolded}</p>;
+    });
+  };
+
   const [text, setText] = useState(""); 
   const [showKeyField, setShowKeyField] = useState(false);
-  const [keyInput, setKeyInput] = useState("");
+  const [newKeyInput, setNewKeyInput] = useState("");
   const [linkInput, setLinkInput] = useState("");
   const [linkSuccess, setLinkSuccess] = useState(null);
   const [copied, setCopied] = useState(false);
@@ -2731,6 +3046,17 @@ function Coach({
   const [emailInput, setEmailInput] = useState("");
   const [showEmailInput, setShowEmailInput] = useState(false);
   const [emailErr, setEmailErr] = useState("");
+  
+  const predefinedModels = ["google/gemini-2.5-flash", "google/gemini-2.5-pro", "deepseek/deepseek-chat", "moonshotai/kimi-k2.6:free"];
+  const [customModelMode, setCustomModelMode] = useState(!predefinedModels.includes(aiModel));
+
+  useEffect(() => {
+    if (!predefinedModels.includes(aiModel)) {
+      setCustomModelMode(true);
+    } else {
+      setCustomModelMode(false);
+    }
+  }, [aiModel]);
   
   // Supabase UI States
   const [sbUrlInput, setSbUrlInput] = useState(supabaseUrl || "");
@@ -2749,9 +3075,12 @@ function Coach({
     endRef.current && endRef.current.scrollIntoView({behavior:"smooth"}); 
   }, [chat, chatBusy]);
 
+  // Saludo proactivo al montar el componente (una vez al día)
   useEffect(() => {
-    setKeyInput(geminiKey);
-  }, [geminiKey]);
+    if (sendDailyGreetingIfNeeded && chat.length === 0) {
+      sendDailyGreetingIfNeeded();
+    }
+  }, []);
 
   const send = () => { 
     if(!text.trim() || chatBusy) return; 
@@ -2759,9 +3088,21 @@ function Coach({
     setText(""); 
   };
 
-  const handleSaveKey = () => {
-    saveGeminiKey(keyInput.trim());
-    setShowKeyField(false);
+  const keysList = geminiKey ? geminiKey.split(/[,;\s]+/).map(k => k.trim()).filter(k => k.length > 0) : [];
+
+  const handleAddKey = () => {
+    if (!newKeyInput.trim()) return;
+    const added = newKeyInput.trim();
+    if (!keysList.includes(added)) {
+      const updatedList = [...keysList, added];
+      saveGeminiKey(updatedList.join(","));
+    }
+    setNewKeyInput("");
+  };
+
+  const handleRemoveKey = (indexToRemove) => {
+    const updatedList = keysList.filter((_, idx) => idx !== indexToRemove);
+    saveGeminiKey(updatedList.join(","));
   };
 
   const handleCopyCode = () => {
@@ -2809,29 +3150,114 @@ function Coach({
       {showSettings && (
         <div className="pop" style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12, display:"flex", flexDirection:"column", gap:8}}>
           
+          {/* Selector de Objetivo (PRESETS) */}
+          <div style={{display:"flex", flexDirection:"column", gap:6, paddingBottom:8, borderBottom:`1px solid ${C.line}`}}>
+            <span style={{fontSize:12, fontWeight:700, display:"flex", alignItems:"center", gap:6}}>
+              <Target size={14} color={C.rose}/> Objetivo Principal
+            </span>
+            <div style={{display:"flex", gap:6, marginTop:4}}>
+              {Object.keys(PRESETS).map(k => (
+                <button 
+                  key={k} 
+                  onClick={() => changePreset(k)} 
+                  style={{
+                    flex:1, 
+                    padding:"6px 2px", 
+                    borderRadius:8, 
+                    fontSize:10.5, 
+                    fontWeight:700, 
+                    cursor:"pointer", 
+                    border:`1px solid ${presetKey === k ? C.rose : C.line}`, 
+                    background: presetKey === k ? "rgba(255,107,152,.15)" : C.panel2, 
+                    color: presetKey === k ? C.rose : C.muted
+                  }}
+                >
+                  {PRESETS[k].label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Toggle API Key */}
           <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer", borderBottom:`1px solid ${C.line}`, paddingBottom:6}} onClick={() => setShowKeyField(!showKeyField)}>
             <span style={{fontSize:12, fontWeight:700, display:"flex", alignItems:"center", gap:6}}>
-              <Sparkles size={14} color={C.lime}/> Ajustes de Gemini API
+              <Sparkles size={14} color={C.lime}/> Ajustes de API / OpenRouter
             </span>
             <span style={{fontSize:10, color:C.muted}}>{showKeyField ? "Ocultar" : "Configurar"}</span>
           </div>
           {showKeyField && (
-            <div style={{marginTop:4, display:"flex", flexDirection:"column", gap:6}}>
+            <div style={{marginTop:4, display:"flex", flexDirection:"column", gap:8}}>
               <div style={{display:"flex", gap:8}}>
                 <input 
-                  value={keyInput} 
-                  onChange={e => setKeyInput(e.target.value)} 
+                  value={newKeyInput} 
+                  onChange={e => setNewKeyInput(e.target.value)} 
                   type="password" 
-                  placeholder="API_KEY_1, API_KEY_2..." 
+                  placeholder="Pegar nueva API Key (Gemini o OpenRouter)..." 
                   style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px 10px", fontSize:12, color:C.ink}}
                 />
-                <button onClick={handleSaveKey} style={{padding:"8px 12px", background:C.lime, color:"#1a2400", fontWeight:700, borderRadius:8, fontSize:12, cursor:"pointer"}}>
-                  Guardar
+                <button onClick={handleAddKey} style={{padding:"8px 12px", background:C.lime, color:"#1a2400", fontWeight:700, borderRadius:8, fontSize:12, cursor:"pointer"}}>
+                  Añadir
                 </button>
               </div>
+
+              {keysList.length > 0 ? (
+                <div style={{display:"flex", flexDirection:"column", gap:6, background:C.panel2, padding:8, borderRadius:10, border:`1px solid ${C.line}`}}>
+                  <div style={{fontSize:10, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".05em"}}>Claves activas ({keysList.length}):</div>
+                  {keysList.map((k, idx) => (
+                    <div key={idx} style={{display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:11.5, background:C.panel, padding:"6px 10px", borderRadius:8, border:`1px solid ${C.line}`}}>
+                      <span style={{fontFamily:"monospace", color:C.ink}}>
+                        {k.length > 10 ? `${k.slice(0, 6)}...${k.slice(-4)}` : "Clave corta"}
+                      </span>
+                      <button 
+                        onClick={() => handleRemoveKey(idx)} 
+                        style={{background:"none", border:"none", color:C.rose, cursor:"pointer", fontSize:11, fontWeight:700, padding:4}}
+                      >
+                        Eliminar
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{fontSize:11, color:C.muted, textAlign:"center", padding:"8px 0", border:`1px dashed ${C.line}`, borderRadius:10}}>
+                  No tienes llaves configuradas. Usa el campo de arriba para añadir una.
+                </div>
+              )}
+
+              {/* Selector de modelo para OpenRouter si hay claves que comiencen con sk-or- */}
+              {keysList.some(k => k.startsWith("sk-or-")) && (
+                <div style={{marginTop:4, display:"flex", flexDirection:"column", gap:6, background:C.panel2, padding:10, borderRadius:10, border:`1px solid ${C.line}`}}>
+                  <div style={{fontSize:10, fontWeight:800, color:C.lime, textTransform:"uppercase", letterSpacing:".05em"}}>Modelo de OpenRouter:</div>
+                  <select 
+                    value={customModelMode ? "custom" : aiModel} 
+                    onChange={e => {
+                      if (e.target.value === "custom") {
+                        setCustomModelMode(true);
+                      } else {
+                        setCustomModelMode(false);
+                        saveAiModel(e.target.value);
+                      }
+                    }} 
+                    style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 10px", fontSize:12, color:C.ink, width:"100%"}}
+                  >
+                    <option value="google/gemini-2.5-flash">Gemini 2.5 Flash</option>
+                    <option value="google/gemini-2.5-pro">Gemini 2.5 Pro</option>
+                    <option value="deepseek/deepseek-chat">DeepSeek Chat (V3)</option>
+                    <option value="moonshotai/kimi-k2.6:free">Kimi K2.6 (Gratis)</option>
+                    <option value="custom">Otro (Ingresar ID abajo)</option>
+                  </select>
+                  {customModelMode && (
+                    <input 
+                      value={aiModel === "custom" ? "" : aiModel} 
+                      onChange={e => saveAiModel(e.target.value)} 
+                      placeholder="Ej: meta-llama/llama-3.1-70b-instruct" 
+                      style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 10px", fontSize:12, color:C.ink}}
+                    />
+                  )}
+                </div>
+              )}
+
               <div style={{fontSize:11, color:C.muted, lineHeight:1.3}}>
-                Puedes ingresar múltiples API Keys separadas por comas. El sistema las probará en orden si alguna supera su cuota o da error.
+                La aplicación irá alternando entre tus claves guardadas para evitar límites de cuota (error 429). Las claves de OpenRouter deben iniciar con <code>sk-or-</code>.
               </div>
             </div>
           )}
@@ -3084,9 +3510,9 @@ function Coach({
           <div style={{ marginTop: "auto" }} />
         )}
         
-        {chat.map((m, i) => (
+        {chat.slice(-4).map((m, i) => (
           <div key={i} className={`chat-bubble ${m.role === "user" ? "user" : "assistant"}`}>
-            {m.content}
+            {m.role === "user" ? m.content : renderMarkdown(m.content)}
           </div>
         ))}
         
@@ -3096,6 +3522,29 @@ function Coach({
           </div>
         )}
         <div ref={endRef}/>
+      </div>
+      <div style={{display:"flex", gap:6, paddingBottom:4, flexWrap:"wrap"}}>
+        <button 
+          onClick={() => sendCoachMessage('Haceme un análisis completo de mi semana de entrenamiento: PRs actuales, progresión de fuerza, volumen total, si estoy progresando en cada ejercicio y qué debo mejorar la semana que viene.')}
+          disabled={chatBusy}
+          style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.cyan}`, background:"transparent", color:C.cyan, cursor:"pointer", opacity: chatBusy ? 0.5 : 1}}
+        >
+          📊 Analizar mi semana
+        </button>
+        <button 
+          onClick={() => sendCoachMessage('¿Qué músculo me conviene entrenar hoy según mi split y mi historial reciente? ¿Estoy descansando suficiente?')}
+          disabled={chatBusy}
+          style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.lime}`, background:"transparent", color:C.lime, cursor:"pointer", opacity: chatBusy ? 0.5 : 1}}
+        >
+          💪 ¿Qué entreno hoy?
+        </button>
+        <button 
+          onClick={() => sendCoachMessage('Basándote en mi progresión histórica y PRs actuales, ¿cuánto debería cargar esta semana en cada ejercicio para seguir progresando sin lesionarme?')}
+          disabled={chatBusy}
+          style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.rose}`, background:"transparent", color:C.rose, cursor:"pointer", opacity: chatBusy ? 0.5 : 1}}
+        >
+          🎯 Cargas recomendadas
+        </button>
       </div>
       <div style={{display:"flex", gap:8, paddingTop:6}}>
         <input 
@@ -3126,7 +3575,10 @@ function Entreno({
   const [w, setW] = useState(""); 
   const [reps, setReps] = useState("");
   const [setsCount, setSetsCount] = useState("1");
-  const [setType, setSetType] = useState("work"); // 'work' or 'warmup'
+  const [setType, setSetType] = useState("work"); // 'work' or 'warmup' or 'dropset'
+  const [editSetObj, setEditSetObj] = useState(null);
+  const [editExObj, setEditExObj] = useState(null);
+  const [exTab, setExTab] = useState("texto"); // 'texto' or 'nuevo'
   
   // States for text importer
   const [importText, setImportText] = useState("");
@@ -3347,6 +3799,52 @@ function Entreno({
     const updatedExlog = { ...exlog };
     delete updatedExlog[n];
     setExlog(updatedExlog);
+  };
+
+  const handleUpdateExercise = (oldName, newName, newTecnico, newMusculosList) => {
+    const updatedExercises = { ...exercises };
+    Object.keys(updatedExercises).forEach(k => {
+      updatedExercises[k] = (updatedExercises[k] || []).map(e => {
+        if (e.name === oldName) {
+          return { ...e, name: newName, tecnico: newTecnico, musculos: newMusculosList };
+        }
+        return e;
+      });
+    });
+    setExercises(updatedExercises);
+
+    if (oldName !== newName) {
+      const updatedExlog = { ...exlog };
+      if (updatedExlog[oldName]) {
+        updatedExlog[newName] = updatedExlog[oldName];
+        delete updatedExlog[oldName];
+      }
+      setExlog(updatedExlog);
+    }
+    if (oldName === open) {
+      setOpen(newName);
+    }
+  };
+
+  const delExFromSession = (exName, dateStr) => {
+    const updatedExlog = { ...exlog };
+    if (updatedExlog[exName]) {
+      updatedExlog[exName] = updatedExlog[exName].filter(s => getLocalDateFromISO(s.date) !== dateStr);
+      if (updatedExlog[exName].length === 0) {
+        delete updatedExlog[exName];
+      }
+    }
+    setExlog(updatedExlog);
+  };
+
+  const formatDay = (dStr) => {
+    try {
+      const parts = dStr.split("-");
+      const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+      return d.toLocaleDateString("es", { day: 'numeric', month: 'short' });
+    } catch(e) {
+      return dStr;
+    }
   };
 
   const addExercise = async() => { 
@@ -3703,36 +4201,193 @@ function Entreno({
 
               {selectedDayWorkouts ? (
                 <div style={{display:"flex", flexDirection:"column", gap:8}}>
-                  {Object.entries(selectedDayWorkouts).map(([exName, sets]) => (
-                    <div key={exName} style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"8px 12px"}}>
-                      <div style={{fontSize:12.5, fontWeight:700, color:C.ink, marginBottom:4}}>{exName}</div>
-                      <div style={{display:"flex", flexDirection:"column", gap:4}}>
-                        {sets.map((s, idx) => (
-                          <div key={idx} style={{display:"flex", alignItems:"center", gap:6}}>
-                            <span style={{
-                              flex:1,
-                              fontSize:11, 
-                              background:C.bg, 
-                              border:`1px solid ${s.type === "warmup" ? C.line : C.cyan}`, 
-                              borderRadius:6, 
-                              padding:"3px 8px", 
-                              color: s.type === "warmup" ? C.muted : C.cyan,
-                              textDecoration: s.type === "warmup" ? "line-through" : "none"
-                            }}>
-                              {s.w} kg × {s.reps} {s.type === "warmup" ? "(C)" : ""}
-                            </span>
-                            <button 
-                              onClick={() => delSetFromDay(exName, s)}
-                              title="Eliminar esta serie"
-                              style={{background:"none", border:"none", cursor:"pointer", color:C.rose, padding:"2px 4px", flexShrink:0}}
-                            >
-                              <Trash2 size={13}/>
-                            </button>
+                  {Object.entries(selectedDayWorkouts).map(([exName, sets]) => {
+                    const globalEx = Object.values(exercises).flat().find(item => item.name === exName) || { name: exName };
+                    const isOpen = open === "session-" + exName;
+                    const l = last(exName);
+                    const cd = chartData(exName);
+                    return (
+                      <div key={exName} style={{background:C.panel2, border:`1px solid ${isOpen ? C.lime : C.line}`, borderRadius:13, marginBottom:4, overflow:"hidden", position:"relative"}}>
+                        <div style={{display:"flex", alignItems:"center"}}>
+                          <button 
+                            onClick={() => { setOpen(isOpen ? null : "session-" + exName); setW(""); setReps(""); }} 
+                            style={{flex:1, background:"none", border:"none", cursor:"pointer", padding:"12px 14.5px 12px 14px", display:"flex", alignItems:"center", gap:10, color:C.ink, textAlign:"left"}}
+                          >
+                            <div style={{flex:1, paddingRight:32}}>
+                              <div style={{fontSize:13.5, fontWeight:600}}>{exName}</div>
+                              {globalEx.tecnico && <div style={{fontSize:11, color:C.muted, fontStyle:"italic"}}>{globalEx.tecnico}</div>}
+                              {l ? (
+                                <div style={{fontSize:11.5, color:C.cyan, marginTop:2}}>última: {l.w} kg × {l.reps} · {fdate(l.date)}</div>
+                              ) : (
+                                <div style={{fontSize:11.5, color:C.muted, marginTop:2}}>{(globalEx.musculos || []).join(" · ")}</div>
+                              )}
+                            </div>
+                            <span style={{color:C.muted, fontSize:14, marginRight:26}}>{isOpen ? "▴" : "▾"}</span>
+                          </button>
+                          
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditExObj({ ex: globalEx, isEditing: false, isSession: true, sessionDate: selectedDateStr });
+                            }}
+                            style={{
+                              position:"absolute",
+                              right:12,
+                              top:12,
+                              background:"rgba(205,255,74,0.06)",
+                              border:`1px solid rgba(205,255,74,0.2)`,
+                              borderRadius:8,
+                              width:28,
+                              height:28,
+                              cursor:"pointer",
+                              color:C.lime,
+                              display:"grid",
+                              placeItems:"center",
+                              zIndex:10
+                            }}
+                          >
+                            <NotebookPen size={12} />
+                          </button>
+                        </div>
+
+                        {!isOpen && (
+                          <div style={{padding:"0 14px 12px 14px", display:"flex", flexWrap:"wrap", gap:6}}>
+                            {sets.map((s, idx) => (
+                              <span 
+                                key={idx} 
+                                style={{
+                                  fontSize:11, 
+                                  background:C.bg, 
+                                  border:`1px solid ${s.type === "warmup" ? C.line : s.type === "dropset" ? C.rose : C.cyan}`, 
+                                  borderRadius:6, 
+                                  padding:"4px 8px", 
+                                  color: s.type === "warmup" ? C.muted : s.type === "dropset" ? C.rose : C.cyan,
+                                  textDecoration: s.type === "warmup" ? "line-through" : "none"
+                                }}>
+                                {s.w} kg × {s.reps} {s.type === "warmup" ? "(C)" : s.type === "dropset" ? "(Drop)" : ""}
+                              </span>
+                            ))}
                           </div>
-                        ))}
+                        )}
+
+                        {isOpen && (
+                          <div className="pop" style={{padding:"0 14px 14px"}}>
+                            {(globalEx.musculos || []).length > 0 && (
+                              <div style={{display:"flex", gap:6, flexWrap:"wrap", marginBottom:10}}>
+                                {globalEx.musculos.map(m => (<span key={m} style={tag}>{m}</span>))}
+                              </div>
+                            )}
+
+                            {/* Tipo de set */}
+                            <div style={{display:"flex", gap:6, marginBottom:8}}>
+                              <button 
+                                onClick={() => setSetType("work")} 
+                                style={{
+                                  flex:1, padding:"6px", borderRadius:8, fontSize:10, fontWeight:700, cursor:"pointer", 
+                                  border:`1px solid ${setType === "work" ? C.lime : C.line}`, 
+                                  background: setType === "work" ? "rgba(205,255,74,.12)" : "transparent", 
+                                  color: setType === "work" ? C.lime : C.muted
+                                }}
+                              >
+                                Serie Efectiva
+                              </button>
+                              <button 
+                                onClick={() => setSetType("warmup")} 
+                                style={{
+                                  flex:1, padding:"6px", borderRadius:8, fontSize:10, fontWeight:700, cursor:"pointer", 
+                                  border:`1px solid ${setType === "warmup" ? C.amber : C.line}`, 
+                                  background: setType === "warmup" ? "rgba(255,177,61,.12)" : "transparent", 
+                                  color: setType === "warmup" ? C.amber : C.muted
+                                }}
+                              >
+                                Calentamiento
+                              </button>
+                              <button 
+                                onClick={() => setSetType("dropset")} 
+                                style={{
+                                  flex:1, padding:"6px", borderRadius:8, fontSize:10, fontWeight:700, cursor:"pointer", 
+                                  border:`1px solid ${setType === "dropset" ? C.rose : C.line}`, 
+                                  background: setType === "dropset" ? "rgba(255,107,152,.15)" : "transparent", 
+                                  color: setType === "dropset" ? C.rose : C.muted
+                                }}
+                              >
+                                Drop Set
+                              </button>
+                            </div>
+
+                            {/* Agregar series */}
+                            <div style={{display:"flex", gap:8, marginBottom:8}}>
+                              <input 
+                                value={w} 
+                                onChange={e => setW(e.target.value)} 
+                                type="number" 
+                                inputMode="decimal" 
+                                className="ph" 
+                                placeholder="kg" 
+                                style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"9px 11px", color:C.ink, fontSize:14, outline:"none"}}
+                              />
+                              <input 
+                                value={reps} 
+                                onChange={e => setReps(e.target.value)} 
+                                className="ph" 
+                                placeholder="Reps" 
+                                style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"9px 11px", color:C.ink, fontSize:14, outline:"none"}}
+                              />
+                              <input 
+                                value={setsCount} 
+                                onChange={e => setSetsCount(e.target.value)} 
+                                type="number"
+                                inputMode="numeric"
+                                className="ph" 
+                                placeholder="Series" 
+                                style={{width:70, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"9px 11px", color:C.ink, fontSize:14, outline:"none", textAlign:"center"}}
+                              />
+                              <button onClick={() => addSet(exName)} style={{width:44, borderRadius:9, border:"none", background:C.lime, color:"#1a2400", cursor:"pointer", fontSize:20, fontWeight:700}}>＋</button>
+                            </div>
+
+                            <Chart entries={cd}/>
+
+                            {sets.length === 0 && (
+                              <div style={{fontSize:12, color:C.muted, padding:"4px 0"}}>Sin registros en esta sesión.</div>
+                            )}
+
+                            {sets.map((s, i) => (
+                              <div key={i} style={{display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${C.line}`, opacity: s.type === "warmup" ? 0.6 : 1}}>
+                                <span style={{fontSize:12.5, color:C.muted, minWidth:54}}>{formatDay(s.date)}</span>
+                                <span style={{fontSize:13.5, fontWeight:600}}>{s.w} kg</span>
+                                <span style={{fontSize:13, color:C.muted}}>× {s.reps}</span>
+                                {s.type === "warmup" && (
+                                  <span style={{fontSize:10, color:C.amber, background:"rgba(255,177,61,.12)", padding:"2px 6px", borderRadius:4, fontWeight:700}}>
+                                    Calentamiento
+                                  </span>
+                                )}
+                                {s.type === "dropset" && (
+                                  <span style={{fontSize:10, color:C.rose, background:"rgba(255,107,152,.12)", padding:"2px 6px", borderRadius:4, fontWeight:700}}>
+                                    Drop Set
+                                  </span>
+                                )}
+                                <button onClick={() => delSetFromDay(exName, s)} style={{marginLeft:"auto", background:"none", border:"none", cursor:"pointer", color:C.muted}}>
+                                  <Trash2 size={14}/>
+                                </button>
+                              </div>
+                            ))}
+
+                            <div style={{display:"flex", gap:8, marginTop:10}}>
+                              <button 
+                                onClick={() => analyzeProg(globalEx)} 
+                                disabled={progBusy === exName} 
+                                style={{flex:4, padding:"9px", borderRadius:9, border:`1px solid ${C.line}`, background:C.panel2, color:C.lime, cursor:"pointer", fontWeight:700, fontSize:12.5, display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
+                              >
+                                {progBusy === exName ? <><Loader2 size={13} style={{animation:"spin 1s linear infinite"}}/>Analizando…</> : <><Sparkles size={13}/>Recomendación de carga</>}
+                              </button>
+                              <button onClick={() => delExFromSession(exName, selectedDateStr)} style={{flex:1, padding:"9px 12px", borderRadius:9, border:`1px solid ${C.line}`, background:"none", color:C.muted, cursor:"pointer", fontSize:12.5}}>Quitar</button>
+                            </div>
+                            {prog[exName] && <AIPanel title="Consejo de Progresión" busy={false} text={prog[exName]} color={C.cyan} onClose={() => setProg(p => ({...p, [exName]: ""}))}/>}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <div style={{textAlign:"center", color:C.muted, fontSize:12, padding:"16px 0", background:C.panel2, border:`1px dashed ${C.line}`, borderRadius:10}}>
@@ -3779,161 +4434,8 @@ function Entreno({
         )}
       </div>
 
-      {/* Importador Masivo por Texto */}
-      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:14, marginBottom:12}}>
-        <div style={{fontSize:13, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", gap:8}}>
-          <Sparkles size={16} color={C.lime}/> Cargar entrenamiento por texto
-        </div>
-        
-        {!verificationList ? (
-          <>
-            <textarea 
-              value={importText} 
-              onChange={e => setImportText(e.target.value)} 
-              className="ph" 
-              rows={3} 
-              placeholder="Ej: hoy hice sentadilla 4x100kg x 10 reps, prensa 3x180kg x 12 reps..." 
-              style={{width:"100%", resize:"none", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none"}}
-            />
-            <button 
-              onClick={handleParseText} 
-              disabled={importBusy || !importText.trim()} 
-              style={{
-                width:"100%",
-                marginTop:8, 
-                padding:"11px", 
-                borderRadius:10, 
-                border:"none", 
-                cursor:"pointer", 
-                background: importBusy ? C.panel2 : C.lime, 
-                color: importBusy ? C.muted : "#1a2400", 
-                fontWeight:800, 
-                fontSize:14, 
-                display:"flex", 
-                alignItems:"center", 
-                justifyContent:"center", 
-                gap:8
-              }}
-            >
-              {importBusy ? <><Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/>Procesando con IA…</> : "Analizar y cargar"}
-            </button>
-            {importErr && <div style={{color:C.rose, fontSize:12, marginTop:8}}>{importErr}</div>}
-          </>
-        ) : (
-          <div className="pop" style={{display:"flex", flexDirection:"column", gap:12}}>
-            <div style={{fontSize:12, color:C.muted}}>
-              Verifica los ejercicios y series detectados. Ajusta los nombres o valores para evitar duplicados.
-            </div>
-            
-            {verificationList.map((item, idx) => (
-              <div key={idx} style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:10}}>
-                <div style={{display:"flex", flexDirection:"column", gap:6, marginBottom:8}}>
-                  <div style={{fontSize:12, color:C.muted}}>
-                    IA detectó: <b style={{color:C.ink}}>{item.originalName}</b>
-                  </div>
-                  <div style={{display:"flex", alignItems:"center", gap:6}}>
-                    <span style={{fontSize:11.5, color:C.muted, whiteSpace:"nowrap"}}>Guardar como:</span>
-                    <select 
-                      value={item.targetName}
-                      onChange={e => {
-                        const next = [...verificationList];
-                        next[idx].targetName = e.target.value;
-                        setVerificationList(next);
-                      }}
-                      style={{flex:1, background:C.bg, border:`1px solid ${C.line}`, borderRadius:6, padding:"4px 8px", fontSize:12.5, color:C.ink}}
-                    >
-                      {allExistingExercises.map(exName => (
-                        <option key={exName} value={exName}>{exName}</option>
-                      ))}
-                      <option value="__NEW__">{`[Crear nuevo: "${item.originalName}"]`}</option>
-                    </select>
-                  </div>
-                </div>
-                
-                <div style={{display:"flex", flexDirection:"column", gap:4}}>
-                  {item.sets.map((set, sIdx) => (
-                    <div key={sIdx} style={{display:"flex", alignItems:"center", gap:6}}>
-                      <span style={{fontSize:11, color:C.muted, width:45}}>Serie {sIdx + 1}:</span>
-                      <input 
-                        value={set.w}
-                        onChange={e => {
-                          const next = [...verificationList];
-                          next[idx].sets[sIdx].w = e.target.value;
-                          setVerificationList(next);
-                        }}
-                        type="number"
-                        placeholder="kg"
-                        style={{width:55, background:C.bg, border:`1px solid ${C.line}`, borderRadius:6, padding:"4px 6px", fontSize:12, color:C.ink, textAlign:"center"}}
-                      />
-                      <span style={{fontSize:11, color:C.muted}}>kg</span>
-                      <input 
-                        value={set.reps}
-                        onChange={e => {
-                          const next = [...verificationList];
-                          next[idx].sets[sIdx].reps = e.target.value;
-                          setVerificationList(next);
-                        }}
-                        placeholder="Reps"
-                        style={{width:55, background:C.bg, border:`1px solid ${C.line}`, borderRadius:6, padding:"4px 6px", fontSize:12, color:C.ink, textAlign:"center"}}
-                      />
-                      <span style={{fontSize:11, color:C.muted}}>reps</span>
-                      
-                      <select 
-                        value={set.type || "work"}
-                        onChange={e => {
-                          const next = [...verificationList];
-                          next[idx].sets[sIdx].type = e.target.value;
-                          setVerificationList(next);
-                        }}
-                        style={{background:C.bg, border:`1px solid ${C.line}`, borderRadius:6, padding:"4px", fontSize:11, color:C.ink}}
-                      >
-                        <option value="work">Trabajo</option>
-                        <option value="warmup">Calentamiento</option>
-                      </select>
-
-                      <button 
-                        onClick={() => {
-                          const next = [...verificationList];
-                          next[idx].sets.splice(sIdx, 1);
-                          setVerificationList(next);
-                        }}
-                        style={{marginLeft:"auto", background:"none", border:"none", cursor:"pointer", color:C.muted}}
-                      >
-                        <Trash2 size={13}/>
-                      </button>
-                    </div>
-                  ))}
-                  <button 
-                    onClick={() => {
-                      const next = [...verificationList];
-                      const lastSet = next[idx].sets[next[idx].sets.length - 1] || { w: "60", reps: "10", type: "work" };
-                      next[idx].sets.push({ w: lastSet.w, reps: lastSet.reps, type: lastSet.type });
-                      setVerificationList(next);
-                    }}
-                    style={{alignSelf:"flex-start", background:"none", border:"none", color:C.lime, fontSize:11.5, fontWeight:700, cursor:"pointer", padding:"4px 0", marginTop:2}}
-                  >
-                    ＋ Añadir serie
-                  </button>
-                </div>
-              </div>
-            ))}
-            
-            <div style={{display:"flex", gap:8, marginTop:4}}>
-              <button 
-                onClick={handleConfirmAndImport}
-                style={{flex:1, padding:"10px", borderRadius:8, border:"none", background:C.lime, color:"#1a2400", fontWeight:800, fontSize:13, cursor:"pointer"}}
-              >
-                Confirmar e Importar
-              </button>
-              <button 
-                onClick={() => setVerificationList(null)}
-                style={{padding:"10px 14px", borderRadius:8, border:`1px solid ${C.line}`, background:"none", color:C.muted, fontWeight:700, fontSize:13, cursor:"pointer"}}
-              >
-                Cancelar
-              </button>
-            </div>
-          </div>
-        )}
+      <div style={{fontSize:12, fontWeight:800, color:C.muted, textTransform:"uppercase", marginBottom:8, marginTop:4}}>
+        Ejercicios Atajo (Pulsa para abrir y registrar series)
       </div>
 
       {/* Listado de ejercicios del día */}
@@ -3942,22 +4444,48 @@ function Entreno({
         const l = last(ex.name); 
         const cd = chartData(ex.name);
         return (
-          <div key={ex.name} style={{background:C.panel, border:`1px solid ${isOpen ? C.lime : C.line}`, borderRadius:13, marginBottom:9, overflow:"hidden"}}>
-            <button 
-              onClick={() => { setOpen(isOpen ? null : ex.name); setW(""); setReps(""); }} 
-              style={{width:"100%", background:"none", border:"none", cursor:"pointer", padding:"12px 14px", display:"flex", alignItems:"center", gap:10, color:C.ink, textAlign:"left"}}
-            >
-              <div style={{flex:1}}>
-                <div style={{fontSize:13.5, fontWeight:600}}>{ex.name}</div>
-                {ex.tecnico && <div style={{fontSize:11, color:C.muted, fontStyle:"italic"}}>{ex.tecnico}</div>}
-                {l ? (
-                  <div style={{fontSize:11.5, color:C.cyan, marginTop:2}}>última: {l.w} kg × {l.reps} · {fdate(l.date)}</div>
-                ) : (
-                  <div style={{fontSize:11.5, color:C.muted, marginTop:2}}>{(ex.musculos || []).join(" · ")}</div>
-                )}
-              </div>
-              <span style={{color:C.muted, fontSize:14}}>{isOpen ? "▴" : "▾"}</span>
-            </button>
+          <div key={ex.name} style={{background:C.panel, border:`1px solid ${isOpen ? C.lime : C.line}`, borderRadius:13, marginBottom:9, overflow:"hidden", position:"relative"}}>
+            <div style={{display:"flex", alignItems:"center"}}>
+              <button 
+                onClick={() => { setOpen(isOpen ? null : ex.name); setW(""); setReps(""); }} 
+                style={{flex:1, background:"none", border:"none", cursor:"pointer", padding:"12px 14.5px 12px 14px", display:"flex", alignItems:"center", gap:10, color:C.ink, textAlign:"left"}}
+              >
+                <div style={{flex:1, paddingRight:32}}>
+                  <div style={{fontSize:13.5, fontWeight:600}}>{ex.name}</div>
+                  {ex.tecnico && <div style={{fontSize:11, color:C.muted, fontStyle:"italic"}}>{ex.tecnico}</div>}
+                  {l ? (
+                    <div style={{fontSize:11.5, color:C.cyan, marginTop:2}}>última: {l.w} kg × {l.reps} · {fdate(l.date)}</div>
+                  ) : (
+                    <div style={{fontSize:11.5, color:C.muted, marginTop:2}}>{(ex.musculos || []).join(" · ")}</div>
+                  )}
+                </div>
+                <span style={{color:C.muted, fontSize:14, marginRight:26}}>{isOpen ? "▴" : "▾"}</span>
+              </button>
+              
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditExObj({ ex, isEditing: false });
+                }}
+                style={{
+                  position:"absolute",
+                  right:12,
+                  top:12,
+                  background:"rgba(205,255,74,0.06)",
+                  border:`1px solid rgba(205,255,74,0.2)`,
+                  borderRadius:8,
+                  width:28,
+                  height:28,
+                  cursor:"pointer",
+                  color:C.lime,
+                  display:"grid",
+                  placeItems:"center",
+                  zIndex:10
+                }}
+              >
+                <NotebookPen size={12} />
+              </button>
+            </div>
             
             {isOpen && (
               <div className="pop" style={{padding:"0 14px 14px"}}>
@@ -3975,7 +4503,7 @@ function Entreno({
                       flex:1, 
                       padding:"6px", 
                       borderRadius:8, 
-                      fontSize:11, 
+                      fontSize:10, 
                       fontWeight:700, 
                       cursor:"pointer", 
                       border:`1px solid ${setType === "work" ? C.lime : C.line}`, 
@@ -3991,7 +4519,7 @@ function Entreno({
                       flex:1, 
                       padding:"6px", 
                       borderRadius:8, 
-                      fontSize:11, 
+                      fontSize:10, 
                       fontWeight:700, 
                       cursor:"pointer", 
                       border:`1px solid ${setType === "warmup" ? C.amber : C.line}`, 
@@ -4000,6 +4528,22 @@ function Entreno({
                     }}
                   >
                     Calentamiento
+                  </button>
+                  <button 
+                    onClick={() => setSetType("dropset")} 
+                    style={{
+                      flex:1, 
+                      padding:"6px", 
+                      borderRadius:8, 
+                      fontSize:10, 
+                      fontWeight:700, 
+                      cursor:"pointer", 
+                      border:`1px solid ${setType === "dropset" ? C.rose : C.line}`, 
+                      background: setType === "dropset" ? "rgba(255,107,152,.15)" : "transparent", 
+                      color: setType === "dropset" ? C.rose : C.muted
+                    }}
+                  >
+                    Drop Set
                   </button>
                 </div>
 
@@ -4072,44 +4616,214 @@ function Entreno({
         );
       })}
 
-      {/* Agregar ejercicio nuevo */}
-      {!adding ? (
-        <button onClick={() => { setAdding(true); setAddErr(""); setAddText(""); }} style={{width:"100%", padding:"11px", borderRadius:12, border:`1px dashed ${C.line}`, background:"none", color:C.muted, cursor:"pointer", fontWeight:700, fontSize:13, marginTop:4}}>
-          ＋ Añadir ejercicio nuevo
-        </button>
-      ) : (
-        <div className="pop" style={{background:C.panel, border:`1px solid ${C.lime}`, borderRadius:14, padding:14, marginTop:4}}>
-          <div style={{display:"flex", gap:7, marginBottom:10}}>
-            <button onClick={() => setAddMode("nombre")} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "nombre" ? C.lime : C.line}`, background: addMode === "nombre" ? "rgba(205,255,74,.12)" : "transparent", color: addMode === "nombre" ? C.lime : C.muted}}>
-              Sé el nombre
-            </button>
-            <button onClick={() => setAddMode("describir")} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "describir" ? C.lime : C.line}`, background: addMode === "describir" ? "rgba(205,255,74,.12)" : "transparent", color: addMode === "describir" ? C.lime : C.muted}}>
-              Describirlo
-            </button>
-          </div>
-          <textarea 
-            value={addText} 
-            onChange={e => setAddText(e.target.value)} 
-            rows={addMode === "describir" ? 3 : 1} 
-            className="ph" 
-            placeholder={addMode === "nombre" ? "Ej: Hip thrust con barra" : "Ej: En máquina sentado, empujo los agarres hacia afuera separando los muslos..."} 
-            style={{width:"100%", resize:"none", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none"}}
-          />
-          <div style={{display:"flex", gap:8, marginTop:8}}>
-            <button 
-              onClick={addExercise} 
-              disabled={addBusy} 
-              style={{flex:1, padding:"10px", borderRadius:10, border:"none", background: addBusy ? C.panel2 : C.lime, color: addBusy ? C.muted : "#1a2400", cursor:"pointer", fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
-            >
-              {addBusy ? <><Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/>Procesando…</> : (addMode === "nombre" ? "Añadir ejercicio" : "Identificar y añadir")}
-            </button>
-            <button onClick={() => setAdding(false)} style={{padding:"10px 14px", borderRadius:10, border:`1px solid ${C.line}`, background:"none", color:C.muted, cursor:"pointer", fontSize:13.5}}>
-              Cancelar
-            </button>
-          </div>
-          {addErr && <div style={{color:C.rose, fontSize:12, marginTop:8}}>{addErr}</div>}
+      {/* Sección Unificada de Carga/Adición */}
+      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:14, marginBottom:12, marginTop:10}}>
+        <div style={{display:"flex", borderBottom:`1px solid ${C.line}`, marginBottom:12}}>
+          <button 
+            onClick={() => setExTab("texto")}
+            style={{
+              flex:1, padding:"8px 0", background:"none", border:"none", 
+              borderBottom: exTab === "texto" ? `2px solid ${C.lime}` : "none",
+              color: exTab === "texto" ? C.lime : C.muted, fontWeight:700, fontSize:12.5, cursor:"pointer"
+            }}
+          >
+            Cargar por Texto (IA)
+          </button>
+          <button 
+            onClick={() => setExTab("nuevo")}
+            style={{
+              flex:1, padding:"8px 0", background:"none", border:"none", 
+              borderBottom: exTab === "nuevo" ? `2px solid ${C.lime}` : "none",
+              color: exTab === "nuevo" ? C.lime : C.muted, fontWeight:700, fontSize:12.5, cursor:"pointer"
+            }}
+          >
+            Añadir Ejercicio Manual
+          </button>
         </div>
-      )}
+
+        {exTab === "texto" ? (
+          <div>
+            {!verificationList ? (
+              <>
+                <textarea 
+                  value={importText} 
+                  onChange={e => setImportText(e.target.value)} 
+                  className="ph" 
+                  rows={3} 
+                  placeholder="Ej: hoy hice sentadilla 4x100kg x 10 reps, prensa 3x180kg x 12 reps..." 
+                  style={{width:"100%", resize:"none", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none"}}
+                />
+                <button 
+                  onClick={handleParseText} 
+                  disabled={importBusy || !importText.trim()} 
+                  style={{
+                    width:"100%",
+                    marginTop:8, 
+                    padding:"11px", 
+                    borderRadius:10, 
+                    border:"none", 
+                    cursor:"pointer", 
+                    background: importBusy ? C.panel2 : C.lime, 
+                    color: importBusy ? C.muted : "#1a2400", 
+                    fontWeight:800, 
+                    fontSize:14, 
+                    display:"flex", 
+                    alignItems:"center", 
+                    justifyContent:"center", 
+                    gap:8
+                  }}
+                >
+                  {importBusy ? <><Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/>Procesando con IA…</> : "Analizar y cargar"}
+                </button>
+                {importErr && <div style={{color:C.rose, fontSize:12, marginTop:8}}>{importErr}</div>}
+              </>
+            ) : (
+              <div className="pop" style={{display:"flex", flexDirection:"column", gap:12}}>
+                <div style={{fontSize:12, color:C.muted}}>
+                  Verifica los ejercicios y series detectados. Ajusta los nombres o valores para evitar duplicados.
+                </div>
+                
+                {verificationList.map((item, idx) => (
+                  <div key={idx} style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:10}}>
+                    <div style={{display:"flex", flexDirection:"column", gap:6, marginBottom:8}}>
+                      <div style={{fontSize:12, color:C.muted}}>
+                        IA detectó: <b style={{color:C.ink}}>{item.originalName}</b>
+                      </div>
+                      <div style={{display:"flex", alignItems:"center", gap:6}}>
+                        <span style={{fontSize:11.5, color:C.muted, whiteSpace:"nowrap"}}>Guardar como:</span>
+                        <select 
+                          value={item.targetName}
+                          onChange={e => {
+                            const next = [...verificationList];
+                            next[idx].targetName = e.target.value;
+                            setVerificationList(next);
+                          }}
+                          style={{flex:1, background:C.bg, border:`1px solid ${C.line}`, borderRadius:6, padding:"4px 8px", fontSize:12.5, color:C.ink}}
+                        >
+                          {allExistingExercises.map(exName => (
+                            <option key={exName} value={exName}>{exName}</option>
+                          ))}
+                          <option value="__NEW__">{`[Crear nuevo: "${item.originalName}"]`}</option>
+                        </select>
+                      </div>
+                    </div>
+                    
+                    <div style={{display:"flex", flexDirection:"column", gap:4}}>
+                      {item.sets.map((set, sIdx) => (
+                        <div key={sIdx} style={{display:"flex", alignItems:"center", gap:6}}>
+                          <span style={{fontSize:11, color:C.muted, width:45}}>Serie {sIdx + 1}:</span>
+                          <input 
+                            value={set.w}
+                            onChange={e => {
+                              const next = [...verificationList];
+                              next[idx].sets[sIdx].w = e.target.value;
+                              setVerificationList(next);
+                            }}
+                            type="number"
+                            placeholder="kg"
+                            style={{width:55, background:C.bg, border:`1px solid ${C.line}`, borderRadius:6, padding:"4px 6px", fontSize:12, color:C.ink, textAlign:"center"}}
+                          />
+                          <span style={{fontSize:11, color:C.muted}}>kg</span>
+                          <input 
+                            value={set.reps}
+                            onChange={e => {
+                              const next = [...verificationList];
+                              next[idx].sets[sIdx].reps = e.target.value;
+                              setVerificationList(next);
+                            }}
+                            placeholder="Reps"
+                            style={{width:55, background:C.bg, border:`1px solid ${C.line}`, borderRadius:6, padding:"4px 6px", fontSize:12, color:C.ink, textAlign:"center"}}
+                          />
+                          <span style={{fontSize:11, color:C.muted}}>reps</span>
+                          
+                          <select 
+                            value={set.type || "work"}
+                            onChange={e => {
+                              const next = [...verificationList];
+                              next[idx].sets[sIdx].type = e.target.value;
+                              setVerificationList(next);
+                            }}
+                            style={{background:C.bg, border:`1px solid ${C.line}`, borderRadius:6, padding:"4px", fontSize:11, color:C.ink}}
+                          >
+                            <option value="work">Trabajo</option>
+                            <option value="warmup">Calentamiento</option>
+                          </select>
+
+                          <button 
+                            onClick={() => {
+                              const next = [...verificationList];
+                              next[idx].sets.splice(sIdx, 1);
+                              setVerificationList(next);
+                            }}
+                            style={{marginLeft:"auto", background:"none", border:"none", cursor:"pointer", color:C.muted}}
+                          >
+                            <Trash2 size={13}/>
+                          </button>
+                        </div>
+                      ))}
+                      <button 
+                        onClick={() => {
+                          const next = [...verificationList];
+                          const lastSet = next[idx].sets[next[idx].sets.length - 1] || { w: "60", reps: "10", type: "work" };
+                          next[idx].sets.push({ w: lastSet.w, reps: lastSet.reps, type: lastSet.type });
+                          setVerificationList(next);
+                        }}
+                        style={{alignSelf:"flex-start", background:"none", border:"none", color:C.lime, fontSize:11.5, fontWeight:700, cursor:"pointer", padding:"4px 0", marginTop:2}}
+                      >
+                        ＋ Añadir serie
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                
+                <div style={{display:"flex", gap:8, marginTop:4}}>
+                  <button 
+                    onClick={handleConfirmAndImport}
+                    style={{flex:1, padding:"10px", borderRadius:8, border:"none", background:C.lime, color:"#1a2400", fontWeight:800, fontSize:13, cursor:"pointer"}}
+                  >
+                    Confirmar e Importar
+                  </button>
+                  <button 
+                    onClick={() => setVerificationList(null)}
+                    style={{padding:"10px 14px", borderRadius:8, border:`1px solid ${C.line}`, background:"none", color:C.muted, fontWeight:700, fontSize:13, cursor:"pointer"}}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div>
+            <div style={{display:"flex", gap:7, marginBottom:10}}>
+              <button onClick={() => setAddMode("nombre")} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "nombre" ? C.lime : C.line}`, background: addMode === "nombre" ? "rgba(205,255,74,.12)" : "transparent", color: addMode === "nombre" ? C.lime : C.muted}}>
+                Sé el nombre
+              </button>
+              <button onClick={() => setAddMode("describir")} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "describir" ? C.lime : C.line}`, background: addMode === "describir" ? "rgba(205,255,74,.12)" : "transparent", color: addMode === "describir" ? C.lime : C.muted}}>
+                Describirlo
+              </button>
+            </div>
+            <textarea 
+              value={addText} 
+              onChange={e => setAddText(e.target.value)} 
+              rows={addMode === "describir" ? 3 : 1} 
+              className="ph" 
+              placeholder={addMode === "nombre" ? "Ej: Hip thrust con barra" : "Ej: En máquina sentado, empujo los agarres hacia afuera separando los muslos..."} 
+              style={{width:"100%", resize:"none", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none"}}
+            />
+            <div style={{display:"flex", gap:8, marginTop:8}}>
+              <button 
+                onClick={addExercise} 
+                disabled={addBusy} 
+                style={{flex:1, padding:"10px", borderRadius:10, border:"none", background: addBusy ? C.panel2 : C.lime, color: addBusy ? C.muted : "#1a2400", cursor:"pointer", fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:6}}
+              >
+                {addBusy ? <><Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/>Procesando…</> : (addMode === "nombre" ? "Añadir ejercicio" : "Identificar y añadir")}
+              </button>
+            </div>
+            {addErr && <div style={{color:C.rose, fontSize:12, marginTop:8}}>{addErr}</div>}
+          </div>
+        )}
+      </div>
 
       {/* Botón de Análisis del Entrenamiento */}
       <button 
@@ -4153,6 +4867,144 @@ function Entreno({
         {wkBusy ? <><Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>Planificando…</> : <><CalendarDays size={16}/>Distribución semanal de guardias</>}
       </button>
       <AIPanel title="Organización Semanal" busy={wkBusy} text={wk} color={C.cyan} onClose={() => { setWk(""); saveKey("last_wk_sug", ""); }}/>
+
+      {editSetObj && (
+        <div style={{
+          position:"fixed", top:0, left:0, right:0, bottom:0,
+          background:"rgba(0,0,0,0.6)", backdropFilter:"blur(4px)",
+          display:"grid", placeItems:"center", zIndex:9999, padding:20
+        }} onClick={() => setEditSetObj(null)}>
+          <div style={{
+            background: C.panel, border:`1px solid ${C.line}`, borderRadius:16,
+            padding:20, width:"100%", maxWidth:320, display:"flex", flexDirection:"column", gap:12
+          }} onClick={e => e.stopPropagation()}>
+            {!editSetObj.isEditing ? (
+              <>
+                <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Opciones de Serie</div>
+                <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>{editSetObj.s.w} kg x {editSetObj.s.reps}</div>
+                <button onClick={() => setEditSetObj({...editSetObj, isEditing: true})} style={{background:C.lime, color:"#1a2400", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
+                  ✏️ Editar Serie
+                </button>
+                <button onClick={() => { delSetFromDay(editSetObj.exName, editSetObj.s); setEditSetObj(null); }} style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}>
+                  🗑️ Borrar Serie
+                </button>
+              </>
+            ) : (
+              <>
+                <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center", marginBottom:8}}>Editar Serie</div>
+                <div style={{display:"flex", gap:8}}>
+                  <div style={{flex:1}}>
+                    <label style={{fontSize:11, color:C.muted, fontWeight:700}}>Peso (kg)</label>
+                    <input type="number" id="es-w" defaultValue={editSetObj.s.w} style={{width:"100%", padding:"8px", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink, marginTop:4}} />
+                  </div>
+                  <div style={{flex:1}}>
+                    <label style={{fontSize:11, color:C.muted, fontWeight:700}}>Reps</label>
+                    <input type="text" id="es-r" defaultValue={editSetObj.s.reps} style={{width:"100%", padding:"8px", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink, marginTop:4}} />
+                  </div>
+                </div>
+                <button onClick={() => {
+                  const newW = parseFloat(document.getElementById("es-w").value);
+                  const newReps = document.getElementById("es-r").value;
+                  if(!isNaN(newW) && newReps) {
+                    const currentDayExlog = exlog[editSetObj.exName] || [];
+                    const updatedSets = currentDayExlog.map(old => (old.date === editSetObj.s.date && old.w === editSetObj.s.w && old.reps === editSetObj.s.reps) ? { ...old, w: newW, reps: newReps } : old);
+                    setExlog({ ...exlog, [editSetObj.exName]: updatedSets });
+                  }
+                  setEditSetObj(null);
+                }} style={{background:C.lime, color:"#1a2400", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
+                  Guardar
+                </button>
+              </>
+            )}
+            <button onClick={() => setEditSetObj(null)} style={{background:"transparent", color:C.muted, fontWeight:700, padding:10, border:"none", cursor:"pointer"}}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {editExObj && (
+        <div style={{
+          position:"fixed", top:0, left:0, right:0, bottom:0,
+          background:"rgba(0,0,0,0.6)", backdropFilter:"blur(4px)",
+          display:"grid", placeItems:"center", zIndex:9999, padding:20
+        }} onClick={() => setEditExObj(null)}>
+          <div style={{
+            background: C.panel, border:`1px solid ${C.line}`, borderRadius:16,
+            padding:20, width:"100%", maxWidth:320, display:"flex", flexDirection:"column", gap:12
+          }} onClick={e => e.stopPropagation()}>
+            {!editExObj.isEditing ? (
+              <>
+                <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Opciones de Ejercicio</div>
+                <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>
+                  {editExObj.ex.name} {editExObj.isSession && `(Sesión: ${formatDay(editExObj.sessionDate)})`}
+                </div>
+                <button onClick={() => setEditExObj({...editExObj, isEditing: true})} style={{background:C.lime, color:"#1a2400", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
+                  ✏️ Editar Ejercicio
+                </button>
+                {editExObj.isSession && (
+                  <button 
+                    onClick={() => { 
+                      delExFromSession(editExObj.ex.name, editExObj.sessionDate); 
+                      setEditExObj(null); 
+                    }} 
+                    style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}
+                  >
+                    🗑️ Quitar de esta Sesión
+                  </button>
+                )}
+                <button 
+                  onClick={() => { 
+                    delExercise(editExObj.ex.name); 
+                    setEditExObj(null); 
+                  }} 
+                  style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:700, padding:10, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer", fontSize:12.5}}
+                >
+                  🗑️ Borrar Ejercicio (Global)
+                </button>
+              </>
+            ) : (
+              <>
+                <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center", marginBottom:8}}>Editar Ejercicio</div>
+                
+                <div style={{display:"flex", flexDirection:"column", gap:8}}>
+                  <div>
+                    <label style={{fontSize:11, color:C.muted, fontWeight:700}}>Nombre del Ejercicio</label>
+                    <input type="text" id="ee-name" defaultValue={editExObj.ex.name} style={{width:"100%", padding:"8px", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink, marginTop:4}} />
+                  </div>
+                  
+                  <div>
+                    <label style={{fontSize:11, color:C.muted, fontWeight:700}}>Nombre Técnico / Ejecución</label>
+                    <input type="text" id="ee-tecnico" defaultValue={editExObj.ex.tecnico || ""} style={{width:"100%", padding:"8px", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink, marginTop:4}} />
+                  </div>
+                  
+                  <div>
+                    <label style={{fontSize:11, color:C.muted, fontWeight:700}}>Músculos (separados por coma)</label>
+                    <input type="text" id="ee-musculos" defaultValue={(editExObj.ex.musculos || []).join(", ")} style={{width:"100%", padding:"8px", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink, marginTop:4}} />
+                  </div>
+                </div>
+                
+                <button onClick={() => {
+                  const newName = document.getElementById("ee-name").value.trim();
+                  const newTecnico = document.getElementById("ee-tecnico").value.trim();
+                  const newMusculosStr = document.getElementById("ee-musculos").value;
+                  const newMusculosList = newMusculosStr.split(",").map(m => m.trim()).filter(Boolean);
+                  
+                  if(newName) {
+                    handleUpdateExercise(editExObj.ex.name, newName, newTecnico, newMusculosList);
+                  }
+                  setEditExObj(null);
+                }} style={{background:C.lime, color:"#1a2400", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
+                  Guardar
+                </button>
+              </>
+            )}
+            <button onClick={() => setEditExObj(null)} style={{background:"transparent", color:C.muted, fontWeight:700, padding:10, border:"none", cursor:"pointer"}}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -4466,10 +5318,10 @@ function Registro({
         r.onerror = rej;
         r.readAsDataURL(file);
       });
-      const media = ["image/jpeg","image/png","image/webp"].includes(file.type) ? file.type : "image/jpeg";
+      const media = ["image/jpeg","image/png","image/webp","application/pdf"].includes(file.type) ? file.type : "image/jpeg";
       
-      const prompt = "Analiza esta foto de una báscula o reporte de composición corporal (InBody) y extrae: peso total (kg), masa muscular (kg), porcentaje de grasa (%) y opcionalmente nivel de grasa visceral (escala 1-20, aproximado si no sale, pon 9 si no hay datos).";
-      const sys = "Eres un analista de datos de salud. Extrae los números indicados en la foto y responde estrictamente con el formato JSON.";
+      const prompt = "Analiza esta foto o documento (InBody, PDF o foto de balanza/reporte) de composición corporal y extrae de forma precisa: peso total (kg), masa muscular (kg), porcentaje de grasa (%) y opcionalmente nivel de grasa visceral (escala 1-20, aproximado si no sale, pon 9 si no hay datos).";
+      const sys = "Eres un analista de datos de salud experto. Extrae los números indicados en el archivo (foto o PDF) y responde estrictamente con el formato JSON.";
       const schema = {
         type: "OBJECT",
         properties: {
@@ -4497,15 +5349,16 @@ function Registro({
       setBodyComp(nextComp);
       
       const currentMetric = metricslog[selectedDateStr] || {};
+      const nextMetricObj = {
+        ...currentMetric,
+        weight: o.peso,
+        musculo: o.musculo,
+        grasaPct: o.grasaPct,
+        visceral: o.visceral || nextComp.visceral
+      };
       const newMetricslog = {
         ...metricslog,
-        [selectedDateStr]: {
-          ...currentMetric,
-          weight: o.peso,
-          musculo: o.musculo,
-          grasaPct: o.grasaPct,
-          visceral: o.visceral || nextComp.visceral
-        }
+        [selectedDateStr]: nextMetricObj
       };
       setMetricslog(newMetricslog);
       
@@ -4522,13 +5375,17 @@ function Registro({
         id: uid(),
         type: "composicion",
         date: noteDate,
-        text: `Composición (Foto): Músculo ${o.musculo} kg, Grasa ${o.grasaPct}%, Visceral Grado ${o.visceral || nextComp.visceral}`
+        text: `Composición (Reporte/Archivo): Músculo ${o.musculo} kg, Grasa ${o.grasaPct}%, Visceral Grado ${o.visceral || nextComp.visceral}`
       };
       
-      setNotes([eComp, eWeight, ...notes]);
+      const nextNotes = [eComp, eWeight, ...notes];
+      setNotes(nextNotes);
       
+      const nextWeights = nextNotes.filter(n => n.type === "peso" && n.weight).slice().reverse();
+      analyze(nextWeights, nextMetricObj);
+
     } catch(err) {
-      setErrComp("No pude extraer los datos de la foto. Asegura que los números sean legibles y estén bien iluminados.");
+      setErrComp("No pude extraer los datos del archivo. Asegúrate de que los números sean legibles y el archivo sea válido.");
     }
     setBusyComp(false);
     e.target.value = "";
@@ -4548,22 +5405,23 @@ function Registro({
     if (isNaN(wNum) || wNum <= 0) return;
     
     const currentMetric = metricslog[selectedDateStr] || {};
+    const nextMetric = {
+      ...currentMetric,
+      weight: wNum,
+      musculo: currentMetric.musculo !== undefined ? currentMetric.musculo : (activeMetrics.musculo || 64.7),
+      grasaPct: currentMetric.grasaPct !== undefined ? currentMetric.grasaPct : (activeMetrics.grasaPct || 26.2),
+      visceral: currentMetric.visceral !== undefined ? currentMetric.visceral : (activeMetrics.visceral || 9)
+    };
     const newMetricslog = {
       ...metricslog,
-      [selectedDateStr]: {
-        ...currentMetric,
-        weight: wNum,
-        musculo: currentMetric.musculo !== undefined ? currentMetric.musculo : (activeMetrics.musculo || 64.7),
-        grasaPct: currentMetric.grasaPct !== undefined ? currentMetric.grasaPct : (activeMetrics.grasaPct || 26.2),
-        visceral: currentMetric.visceral !== undefined ? currentMetric.visceral : (activeMetrics.visceral || 9)
-      }
+      [selectedDateStr]: nextMetric
     };
     setMetricslog(newMetricslog);
     
     setBodyComp({
-      musculo: currentMetric.musculo !== undefined ? currentMetric.musculo : (activeMetrics.musculo || 64.7),
-      grasaPct: currentMetric.grasaPct !== undefined ? currentMetric.grasaPct : (activeMetrics.grasaPct || 26.2),
-      visceral: currentMetric.visceral !== undefined ? currentMetric.visceral : (activeMetrics.visceral || 9)
+      musculo: nextMetric.musculo,
+      grasaPct: nextMetric.grasaPct,
+      visceral: nextMetric.visceral
     });
     
     const noteDate = new Date(selectedDateStr + "T" + new Date().toTimeString().slice(0, 8)).toISOString();
@@ -4574,8 +5432,12 @@ function Registro({
       text: `${wNum} kg`,
       weight: wNum
     };
-    setNotes([e, ...notes]);
+    const nextNotes = [e, ...notes];
+    setNotes(nextNotes);
     setWeight("");
+
+    const nextWeights = nextNotes.filter(n => n.type === "peso" && n.weight).slice().reverse();
+    analyze(nextWeights, nextMetric);
   };
 
   const saveComposicion = () => {
@@ -4586,15 +5448,16 @@ function Registro({
     if (isNaN(parsedM) || isNaN(parsedF)) return;
     
     const currentMetric = metricslog[selectedDateStr] || {};
+    const nextMetric = {
+      ...currentMetric,
+      weight: currentMetric.weight !== undefined ? currentMetric.weight : (activeMetrics.weight || START_W),
+      musculo: parsedM,
+      grasaPct: parsedF,
+      visceral: parsedV
+    };
     const newMetricslog = {
       ...metricslog,
-      [selectedDateStr]: {
-        ...currentMetric,
-        weight: currentMetric.weight !== undefined ? currentMetric.weight : (activeMetrics.weight || START_W),
-        musculo: parsedM,
-        grasaPct: parsedF,
-        visceral: parsedV
-      }
+      [selectedDateStr]: nextMetric
     };
     setMetricslog(newMetricslog);
     
@@ -4607,10 +5470,14 @@ function Registro({
       date: noteDate,
       text: `Composición: Músculo ${parsedM} kg, Grasa ${parsedF}%, Visceral Grado ${parsedV}`
     };
-    setNotes([e, ...notes]);
+    const nextNotes = [e, ...notes];
+    setNotes(nextNotes);
     setMuscInput("");
     setFatInput("");
     setViscInput("");
+
+    const nextWeights = nextNotes.filter(n => n.type === "peso" && n.weight).slice().reverse();
+    analyze(nextWeights, nextMetric);
   };
 
   const savePerimetros = () => {
@@ -4789,10 +5656,12 @@ function Registro({
   const fatBarPct = ((parseFloat(fatWeight) / totalBar) * 100).toFixed(1);
   const remPct = (100 - parseFloat(muscPct) - parseFloat(fatBarPct)).toFixed(1);
 
-  const analyze = async() => { 
+  const analyze = async(customWeights = null, customMetrics = null) => { 
     setBusy(true); 
     setTrend(""); 
-    const series = weights.map(w => `${fdate(w.date)}: ${w.weight}kg`).join(" -> ") || "Sin datos";
+    const weightsToUse = customWeights || weights;
+    const metricsToUse = customMetrics || activeMetrics;
+    const series = weightsToUse.map(w => `${fdate(w.date)}: ${w.weight}kg`).join(" -> ") || "Sin datos";
     
     // Calculate 7-day nutritional average
     let totalKcal = 0, totalP = 0, totalC = 0, totalF = 0, loggedDays = 0;
@@ -4817,8 +5686,8 @@ function Registro({
       : "Sin registros nutricionales recientes.";
 
     try{ 
-      const sys = `Eres el coach de Bruno. ${getProfileStr(isGuardia, activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Déficit de grasa progresivo, manteniendo masa muscular magra. Corto y al grano.`;
-      const out = await callGemini([{role:"user", content:`Historial de peso de Bruno: ${series}. Composición actual: Músculo ${activeMetrics.musculo}kg, Grasa ${activeMetrics.grasaPct}%, Visceral Grado ${activeMetrics.visceral}. ${nutAvgText} Analiza la tendencia y da sugerencias calóricas.`}], sys);
+      const sys = `Eres el coach de Bruno. ${getProfileStr(isGuardia, metricsToUse.weight, metricsToUse.musculo, metricsToUse.grasaPct, metricsToUse.visceral)} Déficit de grasa progresivo, manteniendo masa muscular magra. Corto y al grano.`;
+      const out = await callGemini([{role:"user", content:`Historial de peso de Bruno: ${series}. Composición actual: Músculo ${metricsToUse.musculo}kg, Grasa ${metricsToUse.grasaPct}%, Visceral Grado ${metricsToUse.visceral}. ${nutAvgText} Analiza la tendencia y da sugerencias calóricas.`}], sys);
       setTrend(out); 
       saveKey("last_trend", out);
     } catch(e){ 
@@ -5091,9 +5960,9 @@ function Registro({
                 }}
               >
                 {busyComp ? <Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/> : <Camera size={16}/>}
-                <span>{busyComp ? "Analizando Foto..." : "Escanear reporte/balanza con IA"}</span>
+                <span>{busyComp ? "Analizando archivo..." : "Escanear foto o PDF con IA"}</span>
               </button>
-              <input ref={fileCompRef} type="file" accept="image/*" capture="environment" onChange={onPhotoComp} style={{display:"none"}}/>
+              <input ref={fileCompRef} type="file" accept="image/*,application/pdf" onChange={onPhotoComp} style={{display:"none"}}/>
             </div>
             {errComp && <div style={{color:C.rose, fontSize:12, marginTop:6}}>{errComp}</div>}
           </div>
