@@ -5023,28 +5023,45 @@ function Registro({
   const [type, setType] = useState("peso");
   const [statsPeriod, setStatsPeriod] = useState(7); // 7 or 30 days
 
-  const getDailyNutritionHistory = (days) => {
+  const [dailyNutritionData, hasNutritionData, macroStats] = useMemo(() => {
     const today = new Date(selectedDateStr);
     const data = [];
-    for (let i = days - 1; i >= 0; i--) {
+    let totalKcal = 0, totalP = 0, totalC = 0, totalF = 0;
+    let activeDays = 0;
+
+    for (let i = statsPeriod - 1; i >= 0; i--) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
       const dateStr = d.toISOString().slice(0, 10);
       const entries = (foodlog || {})[dateStr] || [];
       let kcal = 0, p = 0, c = 0, f = 0;
-      entries.forEach(e => {
-        kcal += parseFloat(e.kcal) || 0;
-        p += parseFloat(e.proteina) || 0;
-        c += parseFloat(e.carbo) || 0;
-        f += parseFloat(e.grasa) || 0;
-      });
+
+      if (entries.length > 0) {
+        activeDays++;
+        entries.forEach(e => {
+          kcal += parseFloat(e.kcal) || 0;
+          p += parseFloat(e.proteina) || 0;
+          c += parseFloat(e.carbo) || 0;
+          f += parseFloat(e.grasa) || 0;
+        });
+        totalKcal += kcal;
+        totalP += p;
+        totalC += c;
+        totalF += f;
+      }
       data.push({ date: dateStr, kcal, p, c, f });
     }
-    return data;
-  };
 
-  const dailyNutritionData = getDailyNutritionHistory(statsPeriod);
-  const hasNutritionData = dailyNutritionData.some(d => d.kcal > 0);
+    const mStats = activeDays === 0 ? null : {
+      kcal: Math.round(totalKcal / activeDays),
+      p: Math.round(totalP / activeDays),
+      c: Math.round(totalC / activeDays),
+      f: Math.round(totalF / activeDays),
+      activeDays
+    };
+
+    return [data, data.some(d => d.kcal > 0), mStats];
+  }, [selectedDateStr, foodlog, statsPeriod]);
 
   const renderNutritionHistory = () => {
     if (!hasNutritionData) {
@@ -5152,43 +5169,12 @@ function Registro({
     );
   };
 
-  // Macro Statistics
-  const getMacroStats = (days) => {
-    const today = new Date(selectedDateStr);
-    let totalKcal = 0, totalP = 0, totalC = 0, totalF = 0;
-    let activeDays = 0;
-    
-    for (let i = 0; i < days; i++) {
-      const d = new Date(today);
-      d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().slice(0, 10);
-      const entries = (foodlog || {})[dateStr];
-      if (entries && entries.length > 0) {
-        activeDays++;
-        entries.forEach(e => {
-          totalKcal += parseFloat(e.kcal) || 0;
-          totalP += parseFloat(e.proteina) || 0;
-          totalC += parseFloat(e.carbo) || 0;
-          totalF += parseFloat(e.grasa) || 0;
-        });
-      }
-    }
-    if (activeDays === 0) return null;
-    return {
-      kcal: Math.round(totalKcal / activeDays),
-      p: Math.round(totalP / activeDays),
-      c: Math.round(totalC / activeDays),
-      f: Math.round(totalF / activeDays),
-      activeDays
-    };
-  };
-
   // Water Statistics
-  const getWaterStats = (days) => {
+  const waterStats = useMemo(() => {
     const today = new Date(selectedDateStr);
     let totalWater = 0;
     let loggedDays = 0;
-    for (let i = 0; i < days; i++) {
+    for (let i = 0; i < statsPeriod; i++) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
       const dateStr = d.toISOString().slice(0, 10);
@@ -5199,10 +5185,10 @@ function Registro({
       }
     }
     return loggedDays > 0 ? (totalWater / loggedDays).toFixed(1) : "0.0";
-  };
+  }, [selectedDateStr, waterlog, statsPeriod]);
 
   // Training Sessions Statistics
-  const getTrainingStats = (days) => {
+  const trainingStats = useMemo(() => {
     const today = new Date(selectedDateStr);
     let count = 0;
     const workoutDays = new Set();
@@ -5213,7 +5199,7 @@ function Registro({
         }
       });
     });
-    for (let i = 0; i < days; i++) {
+    for (let i = 0; i < statsPeriod; i++) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
       const dateStr = d.toISOString().slice(0, 10);
@@ -5222,10 +5208,10 @@ function Registro({
       }
     }
     return count;
-  };
+  }, [selectedDateStr, exlog, statsPeriod]);
 
   // Weight Change Statistics
-  const getWeightChangeStats = (days) => {
+  const weightChangeStats = useMemo(() => {
     const today = new Date(selectedDateStr);
     let newestW = null;
     let oldestW = null;
@@ -5240,7 +5226,7 @@ function Registro({
     newestW = sortedWeights[0].w;
     
     const limitDate = new Date(today);
-    limitDate.setDate(limitDate.getDate() - days);
+    limitDate.setDate(limitDate.getDate() - statsPeriod);
     const limitDateStr = limitDate.toISOString().slice(0, 10);
     
     const oldestEntries = sortedWeights.filter(x => x.date >= limitDateStr);
@@ -5257,12 +5243,7 @@ function Registro({
       };
     }
     return null;
-  };
-
-  const macroStats = getMacroStats(statsPeriod);
-  const waterStats = getWaterStats(statsPeriod);
-  const trainingStats = getTrainingStats(statsPeriod);
-  const weightChangeStats = getWeightChangeStats(statsPeriod); 
+  }, [selectedDateStr, metricslog, statsPeriod]);
   const [text, setText] = useState(""); 
   const [weight, setWeight] = useState("");
   
