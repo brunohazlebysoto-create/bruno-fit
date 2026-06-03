@@ -265,6 +265,22 @@ const getProfileStr = (isGuardia, weight = 93.9, musculo = 64.7, grasaPct = 26.2
   }`;
 };
 
+async function parseDailyCloudData(cloudData, today) {
+  let finalLog = [];
+  let finalWater = 0;
+  let finalSupplements = { Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false };
+  if (cloudData.dailyDate === today) {
+    finalLog = cloudData.log || [];
+    finalWater = cloudData.water || 0;
+    finalSupplements = cloudData.supplements || { Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false };
+  } else {
+    finalLog = await loadKey(todayKey(), []);
+    finalWater = await loadKey(waterKey(), 0);
+    finalSupplements = await loadKey(suppsKey(), { Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false });
+  }
+  return { finalLog, finalWater, finalSupplements };
+}
+
 async function callGemini(messages, systemInstruction, responseSchema = null) {
   let apiKeysStr = await loadKey("gemini_api_key", "");
   
@@ -1551,18 +1567,7 @@ export default function App(){
       await saveKey("cloud_sync_enabled", true);
 
       // Decidir datos diarios
-      let finalLog = [];
-      let finalWater = 0;
-      let finalSupplements = { Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false };
-      if (cloudData.dailyDate === today) {
-        finalLog = cloudData.log || [];
-        finalWater = cloudData.water || 0;
-        finalSupplements = cloudData.supplements || { Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false };
-      } else {
-        finalLog = await loadKey(todayKey(), []);
-        finalWater = await loadKey(waterKey(), 0);
-        finalSupplements = await loadKey(suppsKey(), { Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false });
-      }
+      const { finalLog, finalWater, finalSupplements } = await parseDailyCloudData(cloudData, today);
 
       // Reemplazar estado React
       setPresetKey(cloudData.presetKey || "definicion");
@@ -1632,18 +1637,7 @@ export default function App(){
       const updateTime = cloudData.updatedAt || Date.now();
 
       // Decidir datos diarios
-      let finalLog = [];
-      let finalWater = 0;
-      let finalSupplements = { Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false };
-      if (cloudData.dailyDate === today) {
-        finalLog = cloudData.log || [];
-        finalWater = cloudData.water || 0;
-        finalSupplements = cloudData.supplements || { Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false };
-      } else {
-        finalLog = await loadKey(todayKey(), []);
-        finalWater = await loadKey(waterKey(), 0);
-        finalSupplements = await loadKey(suppsKey(), { Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false });
-      }
+      const { finalLog, finalWater, finalSupplements } = await parseDailyCloudData(cloudData, today);
 
       setPresetKey(cloudData.presetKey || "definicion");
       setLog(finalLog);
