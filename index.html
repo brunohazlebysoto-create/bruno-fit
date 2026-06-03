@@ -19,11 +19,39 @@
       errDiv.style.fontFamily = 'monospace';
       errDiv.style.fontSize = '14px';
       errDiv.style.lineHeight = '1.5';
-      errDiv.innerHTML = '<h2>🚨 ERROR CRÍTICO DE APLICACIÓN</h2>' +
-        '<p><b>Mensaje:</b> ' + e.message + '</p>' +
-        '<p><b>Archivo:</b> ' + e.filename + ' (Línea ' + e.lineno + ', Columna ' + e.colno + ')</p>' +
-        '<p><b>Stack:</b></p><pre>' + (e.error ? e.error.stack : 'No disponible') + '</pre>' +
-        '<p>Por favor, copia este error y envíaselo al asistente para corregirlo de inmediato.</p>';
+
+      var h2 = document.createElement('h2');
+      h2.textContent = '🚨 ERROR CRÍTICO DE APLICACIÓN';
+      errDiv.appendChild(h2);
+
+      var pMsg = document.createElement('p');
+      var bMsg = document.createElement('b');
+      bMsg.textContent = 'Mensaje: ';
+      pMsg.appendChild(bMsg);
+      pMsg.appendChild(document.createTextNode(e.message));
+      errDiv.appendChild(pMsg);
+
+      var pFile = document.createElement('p');
+      var bFile = document.createElement('b');
+      bFile.textContent = 'Archivo: ';
+      pFile.appendChild(bFile);
+      pFile.appendChild(document.createTextNode(e.filename + ' (Línea ' + e.lineno + ', Columna ' + e.colno + ')'));
+      errDiv.appendChild(pFile);
+
+      var pStackTitle = document.createElement('p');
+      var bStackTitle = document.createElement('b');
+      bStackTitle.textContent = 'Stack:';
+      pStackTitle.appendChild(bStackTitle);
+      errDiv.appendChild(pStackTitle);
+
+      var preStack = document.createElement('pre');
+      preStack.textContent = e.error ? e.error.stack : 'No disponible';
+      errDiv.appendChild(preStack);
+
+      var pFooter = document.createElement('p');
+      pFooter.textContent = 'Por favor, copia este error y envíaselo al asistente para corregirlo de inmediato.';
+      errDiv.appendChild(pFooter);
+
       root.appendChild(errDiv);
     });
     window.addEventListener('unhandledrejection', function(e) {
@@ -42,10 +70,32 @@
       errDiv.style.fontFamily = 'monospace';
       errDiv.style.fontSize = '14px';
       errDiv.style.lineHeight = '1.5';
-      errDiv.innerHTML = '<h2>🚨 PROMESA RECHAZADA (UNHANDLED REJECTION)</h2>' +
-        '<p><b>Razón:</b> ' + (e.reason ? (e.reason.message || e.reason) : 'Desconocida') + '</p>' +
-        '<p><b>Stack:</b></p><pre>' + (e.reason && e.reason.stack ? e.reason.stack : 'No disponible') + '</pre>' +
-        '<p>Por favor, copia este error y envíaselo al asistente para corregirlo de inmediato.</p>';
+
+      var h2 = document.createElement('h2');
+      h2.textContent = '🚨 PROMESA RECHAZADA (UNHANDLED REJECTION)';
+      errDiv.appendChild(h2);
+
+      var pReason = document.createElement('p');
+      var bReason = document.createElement('b');
+      bReason.textContent = 'Razón: ';
+      pReason.appendChild(bReason);
+      pReason.appendChild(document.createTextNode(e.reason ? (e.reason.message || e.reason) : 'Desconocida'));
+      errDiv.appendChild(pReason);
+
+      var pStackTitle = document.createElement('p');
+      var bStackTitle = document.createElement('b');
+      bStackTitle.textContent = 'Stack:';
+      pStackTitle.appendChild(bStackTitle);
+      errDiv.appendChild(pStackTitle);
+
+      var preStack = document.createElement('pre');
+      preStack.textContent = (e.reason && e.reason.stack) ? e.reason.stack : 'No disponible';
+      errDiv.appendChild(preStack);
+
+      var pFooter = document.createElement('p');
+      pFooter.textContent = 'Por favor, copia este error y envíaselo al asistente para corregirlo de inmediato.';
+      errDiv.appendChild(pFooter);
+
       root.appendChild(errDiv);
     });
   </script>

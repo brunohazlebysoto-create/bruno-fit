@@ -140,6 +140,18 @@ describe('App Component', () => {
       render(<App />);
     });
 
+    // click on the Coach button first to reveal the settings button
+    const coachTabButton = screen.getAllByText('Coach')[0].closest('button');
+    await act(async () => {
+        coachTabButton.click();
+    });
+
+    // click on the settings button first to reveal the preset buttons
+    const settingsButton = screen.getByText('Ajustes').closest('button');
+    await act(async () => {
+        settingsButton.click();
+    });
+
     expect(screen.getAllByText('Definición').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Mantenimiento').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Volumen').length).toBeGreaterThan(0);
