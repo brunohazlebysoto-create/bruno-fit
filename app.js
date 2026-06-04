@@ -5573,7 +5573,7 @@ function Registro({
     }
   }
 
-  const getBodyCompHistory = () => {
+  const bodyCompHistory = useMemo(() => {
     const sortedDates = Object.keys(metricslog || {}).sort();
     if (sortedDates.length === 0) return [];
     
@@ -5596,9 +5596,7 @@ function Registro({
         w: lastWVal
       };
     });
-  };
-
-  const bodyCompHistory = getBodyCompHistory();
+  }, [metricslog, bodyComp]);
 
   const bD = parseFloat(brazoDer);
   const bI = parseFloat(brazoIzq);
