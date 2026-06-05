@@ -140,6 +140,17 @@ describe('App Component', () => {
       render(<App />);
     });
 
+    // El test original fallaba porque el selector de PRESETS está en la pestaña Coach, pero la app inicia en la pestaña Hoy.
+    // Aquí validamos que si abrimos la pestaña Coach se muestran los botones.
+    const coachTabButton = screen.getAllByText('Coach')[0].closest('button');
+    await act(async () => {
+      fireEvent.click(coachTabButton);
+    });
+    // Abrir Ajustes primero
+    const settingsButton = screen.getByText('Ajustes').closest('button');
+    await act(async () => {
+      fireEvent.click(settingsButton);
+    });
     expect(screen.getAllByText('Definición').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Mantenimiento').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Volumen').length).toBeGreaterThan(0);

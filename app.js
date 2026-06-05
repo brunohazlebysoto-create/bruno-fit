@@ -471,7 +471,8 @@ function seedExercises(){
 }
 
 /* ===== GRÁFICO SVG COMPARTIDO ===== */
-function Chart({entries, color=C.lime, height=128}){
+// ⚡ Bolt: Memoize expensive Chart SVG rendering to avoid re-drawing on every keystroke in parent inputs
+const Chart = React.memo(function Chart({entries, color=C.lime, height=128}){
   if(!entries || entries.length < 2) return null;
   const W = 320, H = height, pad = 22;
   const ws = entries.map(d => d.w), mn = Math.min(...ws), mx = Math.max(...ws), rg = (mx - mn) || 1;
@@ -492,7 +493,15 @@ function Chart({entries, color=C.lime, height=128}){
       <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.muted,marginTop:-2}}><span>{fdate(entries[0].date)}</span><span>{fdate(entries[entries.length-1].date)}</span></div>
     </div>
   );
-}
+}, (prevProps, nextProps) => {
+  if (prevProps.color !== nextProps.color || prevProps.height !== nextProps.height) return false;
+  if (prevProps.entries === nextProps.entries) return true;
+  if (!prevProps.entries || !nextProps.entries) return false;
+  if (prevProps.entries.length !== nextProps.entries.length) return false;
+  // If array reference changed but length is same, check first and last element to detect changes, avoiding full iteration or JSON.stringify
+  const pLen = prevProps.entries.length;
+  return prevProps.entries[0].w === nextProps.entries[0].w && prevProps.entries[0].date === nextProps.entries[0].date && prevProps.entries[pLen-1].w === nextProps.entries[pLen-1].w && prevProps.entries[pLen-1].date === nextProps.entries[pLen-1].date;
+});
 
 /* ===== COMPONENTE PRINCIPAL APP ===== */
 export default function App(){
@@ -2356,7 +2365,8 @@ function AIPanel({title, busy, text, color=C.lime, onClose}){
 }
 
 /* ===== TAB HOY ===== */
-function Bar({icon:Ic, label, val, max, unit, color}){
+// ⚡ Bolt: Memoize Bar to prevent unnecessary re-renders when typing in the Hoy tab's input field
+const Bar = React.memo(function Bar({icon:Ic, label, val, max, unit, color}){
   const pct = Math.min(100, max ? (val / max) * 100 : 0); 
   const over = val > max;
   return (
@@ -2374,7 +2384,7 @@ function Bar({icon:Ic, label, val, max, unit, color}){
       </div>
     </div>
   );
-}
+});
 
 function Hoy({
   target, totals, log, setLog, loaded, water, setWater, isGuardia, geminiKey, supplements, handleUpdateSupplements,
