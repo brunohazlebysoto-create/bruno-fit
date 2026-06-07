@@ -3008,6 +3008,8 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
           </div>
         </div>
       )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -9972,8 +9974,6 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           </div>
         </div>
       )}
-        </div>
-      </div>
     </div>
   );
 }
