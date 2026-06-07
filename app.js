@@ -71,10 +71,21 @@ const PAUTAS = [
   ["🍷 Alcohol","Mínimo en definición."],
 ];
 
-const C = { 
-  bg:"#0c0e0b", panel:"#15170f", panel2:"#1c1f15", line:"#2a2e20", 
-  ink:"#f3f4ea", muted:"#9aa088", lime:"#cdff4a", cyan:"#4ad6ff", 
-  amber:"#ffb13d", rose:"#ff6b8a" 
+const C = {
+  bg: "var(--bg-color)",
+  panel: "var(--panel-bg)",
+  panel2: "var(--panel-bg-sec)",
+  panelTint: "var(--panel-bg-tint)",
+  line: "var(--line-color)",
+  ink: "var(--text-ink)",
+  muted: "var(--text-muted)",
+  lime: "var(--accent-primary)",
+  limeHover: "var(--accent-primary-hover)",
+  limeGreen: "var(--accent-lime)",
+  cyan: "var(--accent-cyan)",
+  amber: "var(--accent-amber)",
+  blue: "var(--accent-blue)",
+  rose: "var(--accent-red)"
 };
 
 const START_W = 93.9, GOAL_W = 85;
@@ -734,7 +745,13 @@ function getWeeklyStats(foodlog, exlog, metricslog, notes) {
 }
 
 export default function App(){
-  const [view, setView] = useState("hoy");
+  const [view, setView] = useState(() => {
+    return localStorage.getItem("onboarding_shown") ? "hoy" : "onboarding";
+  });
+  const [aiParsedResults, setAiParsedResults] = useState([]);
+  const [editingEntryIdx, setEditingEntryIdx] = useState(null);
+  const [editingEntryData, setEditingEntryData] = useState(null);
+  const [addFoodInputText, setAddFoodInputText] = useState("");
   const [splits, setSplits] = useState(DEFAULT_SPLITS);
   const [presetKey, setPresetKey] = useState("definicion");
   const [customPresets, setCustomPresets] = useState(DEFAULT_PRESETS);
@@ -2672,50 +2689,134 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
 
   return (
     <div style={{
-      minHeight:"100vh",
-      background:`radial-gradient(700px 400px at 90% -10%, rgba(205,255,74,.10), transparent 60%), radial-gradient(600px 400px at -10% 10%, rgba(74,214,255,.07), transparent 55%), ${C.bg}`,
-      color:C.ink,
-      fontFamily:"'Manrope',system-ui,sans-serif",
-      paddingTop:65
+      height: "100dvh",
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "center",
+      background: "#f3f4f6", // Outer grey desktop background
+      color: C.ink,
+      fontFamily: "var(--font-sans)",
+      overflow: "hidden"
     }}>
-      {/* Nav de navegación superior fija */}
-      <div style={{position:"fixed", top:0, left:0, right:0, background:"rgba(12,14,11,.92)", backdropFilter:"blur(10px)", borderBottom:`1px solid ${C.line}`, zIndex:99}}>
-        <div style={{maxWidth:520, margin:"0 auto", display:"flex"}}>
-          {[["hoy","Hoy",Utensils],["coach","Coach",MessageSquare],["entreno","Entreno",Dumbbell],["reg","Registro",NotebookPen],["plan","Plan",ClipboardList]].map(([k,lbl,Ic]) => (
-            <button 
-              key={k} 
-              onClick={() => setView(k)} 
-              style={{
-                flex:1, 
-                background:"none", 
-                border:"none", 
-                cursor:"pointer", 
-                padding:"8px 0 10px", 
-                display:"flex", 
-                flexDirection:"column", 
-                alignItems:"center", 
-                gap:4, 
-                color:view===k ? C.lime : C.muted
-              }}
-            >
-              <Ic size={18}/><span style={{fontSize:9.5, fontWeight:700}}>{lbl}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div style={{maxWidth:520, margin:"0 auto", padding:"26px 16px 14px"}}>
-        <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
-          <div>
-            <div style={{fontSize:10, letterSpacing:"0.3em", textTransform:"uppercase", color:C.lime, fontWeight:800}}>
-              Espacio IA · Bruno
-            </div>
-            <div className="disp" style={{fontSize:34, marginTop:2}}>CENTRO DE MANDO</div>
+      <div style={{
+        width: "100%",
+        maxWidth: 390,
+        height: "100%",
+        maxHeight: "100dvh",
+        background: C.bg,
+        boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)",
+        display: "flex",
+        flexDirection: "column",
+        position: "relative",
+        overflow: "hidden"
+      }}>
+        {/* Navigation Bottom Bar */}
+        {["hoy", "coach", "entreno", "reg", "perfil", "plan"].includes(view) && (
+          <div style={{
+            position: "absolute",
+            bottom: 0,
+            left: 0,
+            width: "100%",
+            height: 80,
+            paddingBottom: "env(safe-area-inset-bottom)",
+            display: "flex",
+            flexDirection: "row",
+            justifyContent: "space-around",
+            alignItems: "center",
+            background: C.panel,
+            borderTop: `1px solid ${C.line}`,
+            zIndex: 100
+          }}>
+            {[
+              ["hoy", "Hoy", Flame],
+              ["coach", "Coach", MessageSquare],
+              ["entreno", "Entreno", Dumbbell],
+              ["reg", "Registro", ClipboardList],
+              ["perfil", "Perfil", Settings]
+            ].map(([k, lbl, Ic]) => {
+              const isActive = view === k || (k === "perfil" && view === "plan");
+              return (
+                <button
+                  key={k}
+                  onClick={() => setView(k)}
+                  className="btn-active-scale"
+                  style={{
+                    flex: 1,
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: "8px 0 10px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: 4,
+                    color: isActive ? "var(--accent-primary)" : "var(--text-muted)",
+                    outline: "none"
+                  }}
+                >
+                  <Ic size={22} strokeWidth={isActive ? 2.5 : 1.8}/>
+                  <span style={{ fontSize: 10, fontWeight: isActive ? 700 : 500, letterSpacing: "0.01em" }}>{lbl}</span>
+                </button>
+              );
+            })}
           </div>
-        </div>
+        )}
+
+        {/* Main Content Viewport */}
+        <div style={{
+          flex: 1,
+          overflowY: "auto",
+          paddingBottom: ["hoy", "coach", "entreno", "reg", "perfil", "plan"].includes(view) ? 90 : 0,
+          display: "flex",
+          flexDirection: "column"
+        }}>
+
+      <div style={{maxWidth:520, margin:"0 auto", padding:"20px 16px 10px"}}>
+        {view === "hoy" && (
+          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+            <div style={{display:"flex", alignItems:"center", gap:10}}>
+              <div style={{width:36, height:36, borderRadius:10, background:C.lime, display:"flex", alignItems:"center", justifyContent:"center"}}>
+                <Sparkles size={18} color="#ffffff"/>
+              </div>
+              <span style={{fontWeight:800, fontSize:16, color:C.ink}}>Espacio IA</span>
+            </div>
+            <div style={{width:36, height:36, borderRadius:99, background:C.panel2, border:`1px solid ${C.line}`, display:"flex", alignItems:"center", justifyContent:"center", overflow:"hidden"}}>
+              <span style={{fontSize:14, fontWeight:700, color:C.muted}}>B</span>
+            </div>
+          </div>
+        )}
+        {view === "hoy" && (
+          <div style={{marginTop:16}}>
+            <div style={{fontSize:13, color:C.muted}}>¡Hola, Bruno!</div>
+            <div className="disp" style={{fontSize:32, marginTop:2, lineHeight:1}}>CENTRO DE MANDO</div>
+          </div>
+        )}
+        {view === "coach" && (
+          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+            <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Coach Bruno</div>
+            <div style={{width:36, height:36, borderRadius:99, background:C.panel2, border:`1px solid ${C.line}`, display:"flex", alignItems:"center", justifyContent:"center"}}>
+              <span style={{fontSize:14, fontWeight:700, color:C.muted}}>B</span>
+            </div>
+          </div>
+        )}
+        {view === "entreno" && (
+          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+            <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Rutina de Hoy</div>
+            <Dumbbell size={20} color={C.muted}/>
+          </div>
+        )}
+        {view === "reg" && (
+          <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Registro Histórico</div>
+        )}
+        {view === "plan" && (
+          <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Plan de Objetivos</div>
+        )}
       </div>
 
-      <div style={{maxWidth:520, margin:"0 auto", padding:"0 16px"}}>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {view === "onboarding" && (
+          <Onboarding setView={setView} />
+        )}
         {view === "hoy" && (
           <Hoy 
             target={target} 
@@ -2752,6 +2853,11 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
             upcomingEvent={upcomingEvent}
             experiments={experiments}
             setExperiments={setExperiments}
+            setView={setView}
+            setShowNutritionModal={setShowNutritionModal}
+            setModalVals={setModalVals}
+            addFoodInputText={addFoodInputText}
+            setAddFoodInputText={setAddFoodInputText}
           />
         )}
         {view === "coach" && (
@@ -2875,7 +2981,7 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
           border: `2px solid ${C.lime}`,
           borderRadius: 16,
           padding: 16,
-          boxShadow: "0 10px 30px rgba(205,255,74,.2), 0 0 20px rgba(0,0,0,0.8)",
+          boxShadow: "0 4px 24px rgba(107,78,255,.18), 0 2px 8px rgba(0,0,0,0.06)",
           zIndex: 9999,
           display: "flex",
           flexDirection: "column",
@@ -2911,7 +3017,7 @@ function AIPanel({title, busy, text, color=C.lime, onClose}){
   if(!busy && !text) return null;
   return (
     <div className="pop" style={{
-      background:"rgba(205,255,74,.05)", 
+      background:"rgba(107,78,255,.05)", 
       border:`1px solid ${C.line}`, 
       borderLeft:`3px solid ${color}`, 
       borderRadius:12, 
@@ -2963,21 +3069,776 @@ function AIPanel({title, busy, text, color=C.lime, onClose}){
 }
 
 /* ===== TAB HOY ===== */
-function Bar({icon:Ic, label, val, max, unit, color}){
-  const pct = Math.min(100, max ? (val / max) * 100 : 0); 
-  const over = val > max;
+function Bar({ icon: Ic, label, val, max, unit, color, onSettingsClick }) {
+  const pct = Math.min(100, max ? (val / max) * 100 : 0);
+  
+  // Choose background tint and icon color based on color
+  let circleBg = "var(--panel-bg-sec)";
+  let iconColor = color;
+  if (color === "var(--accent-primary)") {
+    circleBg = "var(--panel-bg-tint)";
+    iconColor = "var(--accent-primary)";
+  } else if (color === "var(--accent-cyan)") {
+    circleBg = "#e6fffa";
+    iconColor = "var(--accent-cyan)";
+  } else if (color === "var(--accent-amber)") {
+    circleBg = "#fffbeb";
+    iconColor = "var(--accent-amber)";
+  } else if (color === "var(--accent-blue)") {
+    circleBg = "#ebf8ff";
+    iconColor = "var(--accent-blue)";
+  }
+
   return (
-    <div style={{background:C.panel, border:`1px solid ${over ? C.amber : C.line}`, borderRadius:14, padding:"13px 15px", marginBottom:10}}>
-      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8}}>
-        <span style={{display:"flex", alignItems:"center", gap:8, fontSize:13, fontWeight:700}}>
-          <Ic size={16} color={color}/>{label}
-        </span>
-        <span style={{fontVariantNumeric:"tabular-nums", fontSize:13, color:over ? C.amber : C.muted}}>
-          <b style={{color:over ? C.amber : C.ink, fontSize:15}}>{Math.round(val)}</b> / {max} {unit}
-        </span>
+    <div style={{
+      display: "flex",
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: 16,
+      border: "1px solid var(--line-color)",
+      borderRadius: "var(--radius-md)",
+      background: "var(--bg-color)",
+      boxShadow: "var(--shadow-card)",
+      marginBottom: 12,
+      gap: 12
+    }}>
+      {/* Left Icon circular 44x44 */}
+      <div style={{
+        width: 44,
+        height: 44,
+        borderRadius: "50%",
+        background: circleBg,
+        color: iconColor,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0
+      }}>
+        <Ic size={20} strokeWidth={2}/>
       </div>
-      <div style={{height:8, background:C.panel2, borderRadius:4, overflow:"hidden"}}>
-        <div style={{height:"100%", width:`${pct}%`, background:color, borderRadius:4}}/>
+
+      {/* Center Column */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text-ink)" }}>{label}</span>
+          <span style={{ fontSize: 13, fontWeight: 800, color: "var(--text-ink)", fontVariantNumeric: "tabular-nums" }}>
+            {Math.round(val)}<span style={{ color: "var(--text-muted)", fontSize: 11, fontWeight: 500 }}> / {max} {unit}</span>
+          </span>
+        </div>
+        
+        {/* Progress Bar height: 6px */}
+        <div style={{ height: 6, background: "var(--panel-bg-sec)", borderRadius: "var(--radius-pill)", overflow: "hidden", width: "100%" }}>
+          <div className="macro-progress-bar" style={{ height: "100%", width: `${pct}%`, background: iconColor, borderRadius: "var(--radius-pill)" }}/>
+        </div>
+      </div>
+
+      {/* Right Settings Icon */}
+      <button 
+        onClick={onSettingsClick}
+        className="btn-active-scale"
+        style={{
+          width: 44,
+          height: 44,
+          borderRadius: "50%",
+          background: "none",
+          border: "none",
+          color: "var(--text-muted)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: "pointer",
+          flexShrink: 0,
+          outline: "none"
+        }}
+      >
+        <Settings size={18} />
+      </button>
+    </div>
+  );
+}
+
+function Onboarding({ setView }) {
+  const handleOmit = () => {
+    localStorage.setItem("onboarding_shown", "true");
+    setView("hoy");
+  };
+
+  const handleRegisterNow = () => {
+    localStorage.setItem("onboarding_shown", "true");
+    setView("addfood");
+  };
+
+  const handleConfigurePlan = () => {
+    localStorage.setItem("onboarding_shown", "true");
+    setView("plan");
+  };
+
+  return (
+    <div style={{
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: "32px 16px",
+      minHeight: "100%",
+      background: "var(--bg-color)"
+    }}>
+      {/* Top Welcome Section */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", width: "100%" }}>
+        {/* Large Purple Lightning Icon Wrapper */}
+        <div style={{
+          width: 96,
+          height: 96,
+          borderRadius: "50%",
+          background: "var(--accent-primary)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "#ffffff",
+          marginBottom: 16,
+          position: "relative",
+          boxShadow: "0 8px 16px rgba(92, 79, 223, 0.2)"
+        }}>
+          <Flame size={48} strokeWidth={2}/>
+          <div style={{
+            position: "absolute",
+            bottom: -6,
+            background: "var(--panel-bg-sec)",
+            border: "1px solid var(--line-color)",
+            color: "var(--accent-primary)",
+            fontSize: 9,
+            fontWeight: 700,
+            padding: "2px 8px",
+            borderRadius: "var(--radius-pill)",
+            display: "flex",
+            alignItems: "center",
+            gap: 2
+          }}>
+            <Sparkles size={10}/> IA ACTIVA
+          </div>
+        </div>
+
+        <h1 style={{ fontSize: 28, fontWeight: 800, color: "var(--text-ink)", margin: "8px 0" }}>
+          ¡Hola, soy <span style={{ color: "var(--accent-primary)" }}>Bruno</span>!
+        </h1>
+        <p style={{ fontSize: 16, color: "var(--text-muted)", maxHeight: "4.5em", overflow: "hidden", lineHeight: 1.4, padding: "0 16px" }}>
+          Tu compañero inteligente para transformar tu salud y nutrición.
+        </p>
+
+        {/* Pills / Tags Row */}
+        <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
+          {["Registro IA", "Planificación", "Coaching"].map((pill, i) => (
+            <div key={i} style={{
+              background: i === 0 ? "var(--panel-bg-tint)" : "var(--panel-bg-sec)",
+              color: i === 0 ? "var(--accent-primary)" : "var(--text-muted)",
+              padding: "6px 12px",
+              borderRadius: "var(--radius-pill)",
+              fontSize: 12,
+              fontWeight: 600,
+              border: i === 0 ? "1px solid var(--accent-primary)" : "1px solid transparent"
+            }}>
+              {pill}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Tus Primeros Pasos Section */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 16, width: "100%", marginTop: 24, flex: 1, justifyContent: "center" }}>
+        <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.05em", color: "var(--text-muted)", textTransform: "uppercase" }}>
+          TUS PRIMEROS PASOS
+        </div>
+
+        {/* Step 1 Card */}
+        <div style={{
+          border: "1px solid var(--line-color)",
+          borderRadius: "var(--radius-md)",
+          padding: 16,
+          background: "var(--panel-bg)",
+          boxShadow: "var(--shadow-card)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 12
+        }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <div style={{
+              width: 44,
+              height: 44,
+              borderRadius: "50%",
+              background: "var(--panel-bg-tint)",
+              color: "var(--accent-primary)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center"
+            }}>
+              <Utensils size={20}/>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: "var(--text-ink)" }}>Tu primera comida</div>
+              <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2, lineHeight: 1.3 }}>
+                Cuéntame qué has comido o toma una foto para analizar tus macros.
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleRegisterNow}
+            className="btn-active-scale"
+            style={{
+              height: 44,
+              borderRadius: "var(--radius-md)",
+              background: "var(--accent-primary)",
+              color: "#ffffff",
+              fontSize: 14,
+              fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              cursor: "pointer",
+              width: "100%"
+            }}
+          >
+            Registrar ahora <Plus size={16}/>
+          </button>
+        </div>
+
+        {/* Step 2 Card */}
+        <div style={{
+          border: "1px solid var(--line-color)",
+          borderRadius: "var(--radius-md)",
+          padding: 16,
+          background: "var(--panel-bg)",
+          boxShadow: "var(--shadow-card)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 12
+        }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <div style={{
+              width: 44,
+              height: 44,
+              borderRadius: "50%",
+              background: "#e6fcf5",
+              color: "var(--accent-cyan)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center"
+            }}>
+              <Target size={20}/>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: "var(--text-ink)" }}>Define tus objetivos</div>
+              <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2, lineHeight: 1.3 }}>
+                Configura tus metas de calorías y macros según tu ritmo de vida.
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleConfigurePlan}
+            className="btn-active-scale"
+            style={{
+              height: 44,
+              borderRadius: "var(--radius-md)",
+              background: "var(--accent-cyan)",
+              color: "#ffffff",
+              fontSize: 14,
+              fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              cursor: "pointer",
+              width: "100%"
+            }}
+          >
+            Configurar plan <Plus size={16}/>
+          </button>
+        </div>
+      </div>
+
+      {/* Footer link */}
+      <button
+        onClick={handleOmit}
+        style={{
+          background: "none",
+          border: "none",
+          color: "var(--accent-primary)",
+          fontSize: 14,
+          fontWeight: 600,
+          cursor: "pointer",
+          marginTop: 20,
+          display: "flex",
+          alignItems: "center",
+          gap: 4
+        }}
+      >
+        Omitir tutorial e ir al centro de mando &rarr;
+      </button>
+    </div>
+  );
+}
+
+function AddFood({
+  addFoodInputText,
+  setAddFoodInputText,
+  aiParsedResults,
+  setAiParsedResults,
+  setView,
+  setEditingEntryIdx,
+  setEditingEntryData,
+  log,
+  setLog,
+  geminiKey,
+  saveState
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const fileRef = useRef();
+
+  const FOOD_SYS = "Eres un nutricionista experto. Estima los macros de la comida detallada por el usuario (puede ser texto o imagen).\n" +
+                    "REGLAS CRÍTICAS DE ESTIMACIÓN:\n" +
+                    "1. Devuelve un listado de ingredientes o platos individuales de forma desglosada.\n" +
+                    "2. Asume porciones genéricas estándar si el usuario no las detalla.\n" +
+                    "Responde ÚNICAMENTE con el formato JSON y nada más. Ejemplo de esquema requerido:\n" +
+                    "{\n" +
+                    "  \"items\": [\n" +
+                    "    { \"resumen\": \"Pechuga de pollo a la plancha\", \"peso\": \"200g\", \"kcal\": 330, \"proteina\": 62, \"carbo\": 0, \"grasa\": 7, \"precision\": 95 },\n" +
+                    "    { \"resumen\": \"Arroz blanco cocido\", \"peso\": \"150g\", \"kcal\": 195, \"proteina\": 4, \"carbo\": 42, \"grasa\": 1, \"precision\": 95 }\n" +
+                    "  ]\n" +
+                    "}";
+
+  const FOOD_SCHEMA = {
+    type: "OBJECT",
+    properties: {
+      items: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: {
+            resumen: { type: "STRING" },
+            peso: { type: "STRING" },
+            kcal: { type: "INTEGER" },
+            proteina: { type: "INTEGER" },
+            carbo: { type: "INTEGER" },
+            grasa: { type: "INTEGER" },
+            precision: { type: "INTEGER" }
+          },
+          required: ["resumen", "peso", "kcal", "proteina", "carbo", "grasa", "precision"]
+        }
+      }
+    },
+    required: ["items"]
+  };
+
+  const handleAnalyze = async () => {
+    if (!addFoodInputText.trim() || busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const out = await callGemini([{ role: "user", content: addFoodInputText.trim() }], FOOD_SYS, FOOD_SCHEMA);
+      const parsed = cleanAndParseJSON(out);
+      if (parsed && parsed.items) {
+        setAiParsedResults(prev => [...prev, ...parsed.items]);
+      } else {
+        throw new Error("No se devolvió un formato correcto.");
+      }
+    } catch (e) {
+      setErr("Error al analizar: Describe los alimentos de forma natural o detalla pesos.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onPhotoUpload = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const b64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result.split(",")[1]);
+        r.onerror = rej;
+        r.readAsDataURL(file);
+      });
+      const media = ["image/jpeg", "image/png", "image/webp"].includes(file.type) ? file.type : "image/jpeg";
+      const out = await callGemini([
+        {
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: media, data: b64 } },
+            { type: "text", text: "Analiza esta comida y estima los macros de cada plato desglosado en un listado de items." }
+          ]
+        }
+      ], FOOD_SYS, FOOD_SCHEMA);
+      const parsed = cleanAndParseJSON(out);
+      if (parsed && parsed.items) {
+        setAiParsedResults(prev => [...prev, ...parsed.items]);
+      }
+    } catch (err) {
+      setErr("Error leyendo la foto. Sube otra imagen.");
+    } finally {
+      setBusy(false);
+      e.target.value = "";
+    }
+  };
+
+  const handleAddCustomItem = () => {
+    const newItem = {
+      resumen: "Nuevo alimento",
+      peso: "100g",
+      kcal: 100,
+      proteina: 10,
+      carbo: 10,
+      grasa: 2,
+      precision: 95
+    };
+    setAiParsedResults(prev => [...prev, newItem]);
+  };
+
+  const handleEditItem = (idx) => {
+    setEditingEntryIdx(idx);
+    setEditingEntryData({ ...aiParsedResults[idx] });
+    setView("editentry");
+  };
+
+  const handleRemoveItem = (idx) => {
+    setAiParsedResults(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleSaveAll = () => {
+    if (aiParsedResults.length === 0) return;
+    const entries = aiParsedResults.map(item => ({
+      id: uid(),
+      resumen: `${item.resumen} (${item.peso})`,
+      kcal: item.kcal,
+      proteina: item.proteina,
+      carbo: item.carbo,
+      grasa: item.grasa,
+      t: Date.now()
+    }));
+    const next = [...entries, ...log];
+    setLog(next);
+    setAiParsedResults([]);
+    setAddFoodInputText("");
+    setView("hoy");
+  };
+
+  // Calculations for total impact card
+  const totalImpact = aiParsedResults.reduce((acc, item) => {
+    acc.kcal += item.kcal || 0;
+    acc.p += item.proteina || 0;
+    acc.c += item.carbo || 0;
+    acc.f += item.grasa || 0;
+    return acc;
+  }, { kcal: 0, p: 0, c: 0, f: 0 });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "100%", background: "var(--bg-color)" }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 8px", borderBottom: "1px solid var(--line-color)" }}>
+        <button onClick={() => setView("hoy")} className="btn-active-scale" style={{ background: "none", border: "none", cursor: "pointer", width: 44, height: 44, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-ink)" }}>
+          &larr;
+        </button>
+        <span style={{ fontSize: 16, fontWeight: 700, color: "var(--text-ink)" }}>Añadir comida</span>
+        <div style={{ width: 44 }}/>
+      </div>
+
+      {/* Content */}
+      <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ fontSize: 20, fontWeight: 800, color: "var(--text-ink)" }}>¿Qué has comido?</div>
+        <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: -8 }}>Escribe los alimentos y cantidades de forma natural.</div>
+
+        <div style={{ position: "relative" }}>
+          <textarea
+            value={addFoodInputText}
+            onChange={(e) => setAddFoodInputText(e.target.value)}
+            placeholder="Ej: Dos huevos revueltos con una tostada de aguacate y café con leche..."
+            rows={4}
+            style={{ width: "100%", resize: "none", background: "var(--panel-bg)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: 14, color: "var(--text-ink)", fontSize: 14, outline: "none" }}
+          />
+          <div style={{ position: "absolute", bottom: 8, right: 8, fontSize: 11, color: "var(--text-muted)", opacity: 0.7 }}>Powered by Bruno AI</div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10 }}>
+          <button
+            onClick={handleAnalyze}
+            disabled={busy || !addFoodInputText.trim()}
+            className="btn-active-scale"
+            style={{
+              flex: 1,
+              height: 56,
+              borderRadius: "var(--radius-md)",
+              background: "var(--accent-primary)",
+              color: "#ffffff",
+              fontSize: 15,
+              fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              cursor: "pointer",
+              border: "none"
+            }}
+          >
+            {busy ? <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }}/> : <Sparkles size={16}/>}
+            Analizar con IA
+          </button>
+          <button
+            onClick={() => fileRef.current.click()}
+            disabled={busy}
+            className="btn-active-scale"
+            style={{ width: 56, height: 56, borderRadius: "var(--radius-md)", border: "1px solid var(--line-color)", background: "var(--panel-bg)", color: "var(--text-muted)", cursor: "pointer", display: "grid", placeItems: "center" }}
+          >
+            <Camera size={20}/>
+          </button>
+          <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onPhotoUpload} style={{ display: "none" }}/>
+        </div>
+        {err && <div style={{ color: "var(--accent-red)", fontSize: 12 }}>{err}</div>}
+
+        {/* Resultados IA */}
+        <div style={{ marginTop: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <span style={{ fontSize: 16, fontWeight: 800, color: "var(--text-ink)" }}>Resultados IA</span>
+            <button onClick={handleAddCustomItem} style={{ background: "none", border: "none", color: "var(--accent-primary)", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>+ Añadir otro</button>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {aiParsedResults.map((item, idx) => (
+              <div key={idx} style={{ padding: 14, border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", background: "var(--bg-color)", boxShadow: "var(--shadow-card)", display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 15, color: "var(--text-ink)" }}>{item.resumen}</div>
+                    <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>{item.peso}</div>
+                  </div>
+                  <div style={{ background: "#e6fcf5", color: "var(--accent-cyan)", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: "var(--radius-pill)" }}>
+                    &bull; {item.precision}% Precisión
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, background: "var(--panel-bg)", padding: 8, borderRadius: "var(--radius-sm)", textAlign: "center" }}>
+                  <div>
+                    <div style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>kcal</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-ink)" }}>{item.kcal}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>prot</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: "var(--accent-blue)" }}>{item.proteina}g</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>carb</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: "var(--accent-amber)" }}>{item.carbo}g</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>gras</div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: "var(--accent-cyan)" }}>{item.grasa}g</div>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 4 }}>
+                  <button onClick={() => handleEditItem(idx)} className="btn-active-scale" style={{ flex: 1, height: 36, border: "1px solid var(--line-color)", background: "var(--bg-color)", color: "var(--text-ink)", fontSize: 13, fontWeight: 600, borderRadius: "var(--radius-sm)", cursor: "pointer" }}>
+                    Editar
+                  </button>
+                  <button onClick={() => handleRemoveItem(idx)} className="btn-active-scale" style={{ width: 36, height: 36, border: "1px solid var(--line-color)", background: "var(--bg-color)", color: "var(--accent-red)", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "var(--radius-sm)", cursor: "pointer" }}>
+                    <Trash2 size={16}/>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Nutritional Impact Card */}
+        {aiParsedResults.length > 0 && (
+          <div style={{ background: "var(--panel-bg-tint)", padding: 16, borderRadius: "var(--radius-lg)", border: "1px solid var(--line-color)", marginTop: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: "var(--accent-primary)", letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 12, textAlign: "center" }}>
+              IMPACTO NUTRICIONAL TOTAL
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-around" }}>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "var(--accent-primary)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
+                  <Flame size={16}/>
+                </div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>KCAL</div>
+                <div style={{ fontSize: 14, fontWeight: 800 }}>{totalImpact.kcal}</div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "var(--accent-blue)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
+                  <Beef size={16}/>
+                </div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>PROT</div>
+                <div style={{ fontSize: 14, fontWeight: 800 }}>{totalImpact.p}g</div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "var(--accent-amber)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
+                  <Wheat size={16}/>
+                </div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>CARB</div>
+                <div style={{ fontSize: 14, fontWeight: 800 }}>{totalImpact.c}g</div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "var(--accent-cyan)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
+                  <Droplet size={16}/>
+                </div>
+                <div style={{ fontSize: 10, color: "var(--text-muted)" }}>GRAS</div>
+                <div style={{ fontSize: 14, fontWeight: 800 }}>{totalImpact.f}g</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Save Button */}
+        {aiParsedResults.length > 0 && (
+          <button
+            onClick={handleSaveAll}
+            className="btn-active-scale"
+            style={{
+              height: 56,
+              background: "var(--text-ink)",
+              color: "#ffffff",
+              fontSize: 16,
+              fontWeight: 700,
+              borderRadius: "var(--radius-md)",
+              border: "none",
+              cursor: "pointer",
+              marginTop: 12,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8
+            }}
+          >
+            Guardar registro
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EditEntry({
+  editingEntryIdx,
+  editingEntryData,
+  setEditingEntryData,
+  aiParsedResults,
+  setAiParsedResults,
+  setView
+}) {
+  if (!editingEntryData) return null;
+
+  const handleIncrement = (field, amount) => {
+    setEditingEntryData(prev => {
+      const next = { ...prev, [field]: Math.max(0, (prev[field] || 0) + amount) };
+      // Recalculate kcal roughly based on macros if user changes them
+      next.kcal = (next.proteina || 0) * 4 + (next.carbo || 0) * 4 + (next.grasa || 0) * 9;
+      return next;
+    });
+  };
+
+  const handleSave = () => {
+    setAiParsedResults(prev => prev.map((item, idx) => idx === editingEntryIdx ? editingEntryData : item));
+    setView("addfood");
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "100%", background: "var(--bg-color)" }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 8px", borderBottom: "1px solid var(--line-color)" }}>
+        <button onClick={() => setView("addfood")} className="btn-active-scale" style={{ background: "none", border: "none", cursor: "pointer", width: 44, height: 44, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-ink)" }}>
+          &larr;
+        </button>
+        <span style={{ fontSize: 16, fontWeight: 700, color: "var(--text-ink)" }}>Editar registro</span>
+        <div style={{ width: 44 }}/>
+      </div>
+
+      <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 16 }}>
+        {/* Top Card */}
+        <div style={{ display: "flex", gap: 12, alignItems: "center", border: "1px solid var(--line-color)", padding: 16, borderRadius: "var(--radius-lg)" }}>
+          <div style={{ width: 54, height: 54, borderRadius: "50%", background: "var(--panel-bg-sec)", display: "flex", alignItems: "center", justifyTarget: "center", justifyContent: "center", overflow: "hidden", color: "var(--accent-primary)" }}>
+            <Utensils size={24}/>
+          </div>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "var(--text-ink)" }}>{editingEntryData.resumen}</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Registrado hoy, {new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</div>
+          </div>
+        </div>
+
+        {/* KPI Grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div style={{ border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: 16, textAlign: "center", background: "var(--panel-bg)" }}>
+            <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700, marginBottom: 4 }}>CANTIDAD</div>
+            <input 
+              type="text" 
+              value={editingEntryData.peso} 
+              onChange={e => setEditingEntryData({ ...editingEntryData, peso: e.target.value })}
+              style={{ fontSize: 18, fontWeight: 800, width: "100%", textAlign: "center", background: "none", border: "none" }}
+            />
+          </div>
+          <div style={{ border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: 16, textAlign: "center", background: "var(--panel-bg)" }}>
+            <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700, marginBottom: 4 }}>ENERGÍA</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "var(--accent-amber)" }}>{editingEntryData.kcal} kcal</div>
+          </div>
+        </div>
+
+        {/* Incremental Inputs */}
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <span style={{ fontSize: 12, fontWeight: 800, color: "var(--text-muted)", textTransform: "uppercase" }}>MACRONUTRIENTES</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "var(--accent-primary)", cursor: "pointer" }}>Ajustar con IA</span>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {/* Proteínas */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: "10px 16px", background: "var(--panel-bg)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 24, height: 24, borderRadius: "50%", background: "var(--accent-blue)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}><Beef size={12}/></div>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text-ink)" }}>Proteínas</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <button onClick={() => handleIncrement("proteina", -5)} className="btn-active-scale" style={{ width: 44, height: 44, borderRadius: "var(--radius-pill)", border: "1px solid var(--line-color)", background: "var(--bg-color)", fontSize: 20, cursor: "pointer" }}>-</button>
+                <span style={{ fontSize: 16, fontWeight: 800, width: 30, textAlign: "center" }}>{editingEntryData.proteina}g</span>
+                <button onClick={() => handleIncrement("proteina", 5)} className="btn-active-scale" style={{ width: 44, height: 44, borderRadius: "var(--radius-pill)", border: "1px solid var(--line-color)", background: "var(--bg-color)", fontSize: 20, cursor: "pointer" }}>+</button>
+              </div>
+            </div>
+
+            {/* Carbohidratos */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: "10px 16px", background: "var(--panel-bg)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 24, height: 24, borderRadius: "50%", background: "var(--accent-amber)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}><Wheat size={12}/></div>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text-ink)" }}>Carbohidratos</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <button onClick={() => handleIncrement("carbo", -5)} className="btn-active-scale" style={{ width: 44, height: 44, borderRadius: "var(--radius-pill)", border: "1px solid var(--line-color)", background: "var(--bg-color)", fontSize: 20, cursor: "pointer" }}>-</button>
+                <span style={{ fontSize: 16, fontWeight: 800, width: 30, textAlign: "center" }}>{editingEntryData.carbo}g</span>
+                <button onClick={() => handleIncrement("carbo", 5)} className="btn-active-scale" style={{ width: 44, height: 44, borderRadius: "var(--radius-pill)", border: "1px solid var(--line-color)", background: "var(--bg-color)", fontSize: 20, cursor: "pointer" }}>+</button>
+              </div>
+            </div>
+
+            {/* Grasas */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: "10px 16px", background: "var(--panel-bg)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 24, height: 24, borderRadius: "50%", background: "var(--accent-cyan)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}><Droplet size={12}/></div>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text-ink)" }}>Grasas</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <button onClick={() => handleIncrement("grasa", -2)} className="btn-active-scale" style={{ width: 44, height: 44, borderRadius: "var(--radius-pill)", border: "1px solid var(--line-color)", background: "var(--bg-color)", fontSize: 20, cursor: "pointer" }}>-</button>
+                <span style={{ fontSize: 16, fontWeight: 800, width: 30, textAlign: "center" }}>{editingEntryData.grasa}g</span>
+                <button onClick={() => handleIncrement("grasa", 2)} className="btn-active-scale" style={{ width: 44, height: 44, borderRadius: "var(--radius-pill)", border: "1px solid var(--line-color)", background: "var(--bg-color)", fontSize: 20, cursor: "pointer" }}>+</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Save Buttons */}
+        <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+          <button onClick={() => setView("addfood")} className="btn-active-scale" style={{ flex: 1, height: 56, border: "1px solid var(--line-color)", background: "var(--bg-color)", color: "var(--text-ink)", fontSize: 15, fontWeight: 600, borderRadius: "var(--radius-md)", cursor: "pointer" }}>
+            Cancelar
+          </button>
+          <button onClick={handleSave} className="btn-active-scale" style={{ flex: 1, height: 56, background: "var(--accent-primary)", color: "#ffffff", fontSize: 15, fontWeight: 600, borderRadius: "var(--radius-md)", border: "none", cursor: "pointer" }}>
+            Guardar cambios
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -2987,7 +3848,8 @@ function Hoy({
   target, totals, log, setLog, loaded, water, setWater, geminiKey, supplements, handleUpdateSupplements,
   activeSplitKey, suppsInventory, setSuppsInventory, selectedDateStr, setSelectedDateStr,
   proactiveMsg, aiNotifications, setAiNotifications, macroAdjustSuggestion, setMacroAdjustSuggestion, saveState, customPresets,
-  weeklyInsight, smartGoals, challenges, updateChallengeProgress, upcomingEvent, experiments, setExperiments, splits
+  weeklyInsight, smartGoals, challenges, updateChallengeProgress, upcomingEvent, experiments, setExperiments, splits,
+  setView, setShowNutritionModal, setModalVals, addFoodInputText, setAddFoodInputText
 }){
   const [text, setText] = useState(""); 
   const [busy, setBusy] = useState(false); 
@@ -3226,7 +4088,7 @@ function Hoy({
     fontWeight:700,
     cursor:"pointer",
     border:`1px solid ${a ? C.lime : C.line}`,
-    background: a ? "rgba(205,255,74,.12)" : C.panel,
+    background: a ? "rgba(107,78,255,.12)" : C.panel,
     color: a ? C.lime : C.ink,
     display:"flex",
     alignItems:"center",
@@ -3235,15 +4097,68 @@ function Hoy({
     flex:1
   });
 
+  const SUGGESTIONS = [
+    {name:"Bowl de Avena y Frutos", kcal:350, time:"10 min", img:"https://images.unsplash.com/photo-1517673132405-a56a62b18caf?w=300&q=75&fit=crop"},
+    {name:"Pollo al Curry con Arroz", kcal:520, time:"25 min", img:"https://images.unsplash.com/photo-1603133872878-684f208fb84b?w=300&q=75&fit=crop"},
+    {name:"Ensalada César Proteica", kcal:380, time:"15 min", img:"https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=300&q=75&fit=crop"},
+    {name:"Salmón con Espárragos", kcal:410, time:"20 min", img:"https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?w=300&q=75&fit=crop"},
+  ];
+
   return (
-    <div className="pop">
-      {/* Selector de fecha superior */}
-      <div style={{display:"flex", alignItems:"center", justifyTarget:"space-between", justifyContent:"space-between", background:C.panel, border:`1px solid ${C.line}`, borderRadius:12, padding:"8px 12px", marginBottom:12}}>
-        <button onClick={handlePrevDay} style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink, width:32, height:32, cursor:"pointer", display:"grid", placeItems:"center", fontWeight:"bold"}}>◀</button>
-        <span style={{fontSize:13, fontWeight:800, textTransform:"uppercase", color:C.lime, textAlign:"center"}}>
-          {selectedDateStr === getLocalDateStr(new Date()) ? "Hoy · " : ""}{formatSelectedDate(selectedDateStr)}
+    <div className="pop" style={{ display: "flex", flexDirection: "column", padding: "0 16px 16px" }}>
+      {/* Selector de fecha — pill gris con flechas 44x44 */}
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        background: "var(--panel-bg-sec)",
+        borderRadius: "var(--radius-pill)",
+        padding: "4px 8px",
+        marginBottom: 20
+      }}>
+        <button 
+          onClick={handlePrevDay} 
+          className="btn-active-scale"
+          style={{
+            width: 44,
+            height: 44,
+            borderRadius: "50%",
+            background: "none",
+            border: "none",
+            color: "var(--text-ink)",
+            cursor: "pointer",
+            fontSize: 20,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            outline: "none"
+          }}
+        >
+          ‹
+        </button>
+        <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text-ink)", letterSpacing: "0.01em" }}>
+          {selectedDateStr === getLocalDateStr(new Date()) ? "Hoy, " : ""}{formatSelectedDate(selectedDateStr)}
         </span>
-        <button onClick={handleNextDay} style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink, width:32, height:32, cursor:"pointer", display:"grid", placeItems:"center", fontWeight:"bold"}}>▶</button>
+        <button 
+          onClick={handleNextDay} 
+          className="btn-active-scale"
+          style={{
+            width: 44,
+            height: 44,
+            borderRadius: "50%",
+            background: "none",
+            border: "none",
+            color: "var(--text-ink)",
+            cursor: "pointer",
+            fontSize: 20,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            outline: "none"
+          }}
+        >
+          ›
+        </button>
       </div>
 
       {upcomingEvent && upcomingEvent.date && (() => {
@@ -3277,22 +4192,45 @@ function Hoy({
       })()}
 
       {proactiveMsg && (
-        <div style={{
-          background: `linear-gradient(135deg, ${C.lime}11, ${C.lime}22)`,
-          border: `1.5px solid ${C.lime}`,
-          borderRadius: 14,
-          padding: "12px 16px",
-          marginBottom: 12,
-          display: "flex",
-          alignItems: "flex-start",
-          gap: 10,
-          animation: "pop 0.3s ease"
-        }}>
-          <span style={{fontSize:20}}>{proactiveMsg.icon || "💡"}</span>
-          <div style={{flex:1}}>
-            <div style={{fontSize:11, fontWeight:800, color:C.lime, textTransform:"uppercase", letterSpacing:".05em", marginBottom:2}}>Coach Proactivo</div>
-            <div style={{fontSize:13, color:C.ink, lineHeight:1.45}}>{proactiveMsg.text}</div>
+        <div 
+          onClick={() => setView("addfood")}
+          className="btn-active-scale"
+          style={{
+            background: "var(--panel-bg-tint)",
+            border: "1px solid var(--line-color)",
+            borderRadius: "var(--radius-md)",
+            padding: "16px",
+            marginBottom: 20,
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            cursor: "pointer",
+            animation: "pop 0.3s ease",
+            boxShadow: "var(--shadow-card)"
+          }}
+        >
+          <div style={{
+            width: 40,
+            height: 40,
+            borderRadius: "50%",
+            background: "rgba(92, 79, 223, 0.1)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            color: "var(--accent-primary)"
+          }}>
+            <Sparkles size={18}/>
           </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: "var(--accent-primary)", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 2 }}>
+              PRIORIDAD IA
+            </div>
+            <div style={{ fontSize: 13, color: "var(--text-ink)", lineHeight: 1.45 }}>
+              {proactiveMsg.text}
+            </div>
+          </div>
+          <div style={{ color: "var(--accent-primary)", fontSize: 18, fontWeight: 700, flexShrink: 0 }}>&rarr;</div>
         </div>
       )}
 
@@ -3535,23 +4473,66 @@ function Hoy({
         </div>
       ))}
 
-      {/* Tarjetas de macros */}
-      <Bar icon={Flame} label="Calorías" val={totals.kcal} max={target.kcal} unit="kcal" color={C.lime}/>
-      <Bar icon={Beef} label="Proteína" val={totals.p} max={target.p} unit="g" color={C.cyan}/>
-      <Bar icon={Wheat} label="Carbohidratos" val={totals.c} max={target.c} unit="g" color={C.lime}/>
-      <Bar icon={Droplet} label="Grasas" val={totals.f} max={target.f} unit="g" color={C.amber}/>
-      
-      <div style={{
-        background:"rgba(74,214,255,.08)",
-        border:`1px solid rgba(74,214,255,.2)`,
-        borderRadius:12,
-        padding:"10px 14px",
-        margin:"4px 0 12px",
-        fontSize:12.5,
-        color:"#cfe9f5"
-      }}>
-        Te quedan <b style={{color:C.cyan}}>{rem.p} g de proteína</b> hoy. Objetivo prioritario.
+      {/* Header sección nutrición */}
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14}}>
+        <span style={{fontSize:11, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".1em"}}>Resumen de Nutrición</span>
+        <span 
+          onClick={() => setView("plan")}
+          style={{fontSize:12, fontWeight:700, color:"var(--accent-primary)", cursor:"pointer"}}
+        >
+          Ver objetivos
+        </span>
       </div>
+
+      {/* Tarjetas de macros */}
+      <Bar 
+        icon={Flame} 
+        label="Calorías" 
+        val={totals.kcal} 
+        max={target.kcal} 
+        unit="kcal" 
+        color="var(--accent-primary)"
+        onSettingsClick={() => {
+          setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
+          setShowNutritionModal(true);
+        }}
+      />
+      <Bar 
+        icon={Beef} 
+        label="Proteína" 
+        val={totals.p} 
+        max={target.p} 
+        unit="g" 
+        color="var(--accent-blue)"
+        onSettingsClick={() => {
+          setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
+          setShowNutritionModal(true);
+        }}
+      />
+      <Bar 
+        icon={Wheat} 
+        label="Carbohidratos" 
+        val={totals.c} 
+        max={target.c} 
+        unit="g" 
+        color="var(--accent-amber)"
+        onSettingsClick={() => {
+          setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
+          setShowNutritionModal(true);
+        }}
+      />
+      <Bar 
+        icon={Droplet} 
+        label="Grasas" 
+        val={totals.f} 
+        max={target.f} 
+        unit="g" 
+        color="var(--accent-cyan)"
+        onSettingsClick={() => {
+          setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
+          setShowNutritionModal(true);
+        }}
+      />
 
       {/* Proporción de macros consumidos */}
       {totals.p + totals.c + totals.f > 0 && (
@@ -3573,51 +4554,132 @@ function Hoy({
         </div>
       )}
 
-      {/* Registro de comida manual / cámara */}
-      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:14, marginBottom:14}}>
-        <div style={{fontSize:13, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", gap:8}}>
-          <Plus size={16} color={C.lime}/>Registrar comida
+      {/* Registro de comida — nuevo diseño */}
+      <div style={{marginBottom:20}}>
+        <div style={{fontSize:16, fontWeight:800, marginBottom:12, display:"flex", alignItems:"center", gap:8, color:C.ink}}>
+          <Sparkles size={18} color="var(--accent-primary)"/>Registrar comida
         </div>
-        <textarea 
-          value={text} 
-          onChange={e => setText(e.target.value)} 
-          className="ph" 
-          rows={2} 
-          placeholder="Ej: 200g pollo a la plancha, 150g arroz blanco, ensalada de palta..." 
-          style={{width:"100%", resize:"none", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none"}}
+        <textarea
+          value={addFoodInputText}
+          onChange={e => setAddFoodInputText(e.target.value)}
+          className="ph"
+          rows={3}
+          placeholder="Describe lo que comiste (ej: Ensalada César con pollo a la parrilla y agua)..."
+          style={{width:"100%", resize:"none", background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"14px", color:C.ink, fontSize:13.5, outline:"none", boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}
         />
-        <div style={{display:"flex", gap:8, marginTop:8}}>
-          <button 
-            onClick={addFood} 
-            disabled={busy} 
+        <div style={{display:"flex", gap:10, marginTop:10}}>
+          <button
+            onClick={() => setView("addfood")}
+            className="btn-active-scale"
             style={{
-              flex:1, 
-              padding:"11px", 
-              borderRadius:10, 
-              border:"none", 
-              cursor:"pointer", 
-              background: busy ? C.panel2 : C.lime, 
-              color: busy ? C.muted : "#1a2400", 
-              fontWeight:800, 
-              fontSize:14, 
-              display:"flex", 
-              alignItems:"center", 
-              justifyContent:"center", 
-              gap:8
+              flex:1,
+              height:56,
+              borderRadius:14,
+              border:"none",
+              cursor:"pointer",
+              background: "var(--accent-primary)",
+              color: "#ffffff",
+              fontWeight:800,
+              fontSize:14,
+              display:"flex",
+              alignItems:"center",
+              justifyContent:"center",
+              gap:8,
+              boxShadow: "0 4px 14px rgba(92, 79, 223, 0.2)"
             }}
           >
-            {busy ? <><Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/>Estimando…</> : "Añadir con IA"}
+            <Sparkles size={15}/>Añadir con IA
           </button>
-          <button 
-            onClick={() => fileRef.current.click()} 
-            disabled={busy} 
-            style={{width:52, borderRadius:10, border:`1px solid ${C.line}`, background:C.panel2, color:C.lime, cursor:"pointer", display:"grid", placeItems:"center"}}
+          <button
+            onClick={() => setView("addfood")}
+            className="btn-active-scale"
+            style={{width:54, height:56, borderRadius:14, border:`1px solid ${C.line}`, background:C.panel, color:C.muted, cursor:"pointer", display:"grid", placeItems:"center", boxShadow:"0 1px 3px rgba(0,0,0,0.05)"}}
           >
             <Camera size={20}/>
           </button>
-          <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onPhoto} style={{display:"none"}}/>
+        </div>
         </div>
         {err && <div style={{color:C.rose, fontSize:12, marginTop:8}}>{err}</div>}
+      </div>
+
+      {/* Sugerencias para ti */}
+      <div style={{marginBottom:16}}>
+        <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10}}>
+          <span style={{fontSize:13, fontWeight:800, color:C.ink}}>Sugerencias para ti</span>
+          <span style={{fontSize:11, fontWeight:700, color:"var(--accent-primary)", cursor:"pointer"}}>Ver todas</span>
+        </div>
+        <div style={{
+          display: "flex", 
+          gap: 16, 
+          overflowX: "auto", 
+          scrollSnapType: "x mandatory", 
+          paddingBottom: 8,
+          scrollbarWidth: "none",
+          msOverflowStyle: "none"
+        }}>
+          {SUGGESTIONS.map((s,i) => (
+            <div 
+              key={i} 
+              style={{
+                display: "flex", 
+                flexDirection: "column", 
+                width: 160, 
+                flexShrink: 0, 
+                background: C.panel, 
+                border: `1px solid ${C.line}`, 
+                borderRadius: 16, 
+                overflow: "hidden", 
+                boxShadow: "var(--shadow-card)",
+                scrollSnapAlign: "start"
+              }}
+            >
+              <div style={{ width: "100%", height: 100, position: "relative", overflow: "hidden" }}>
+                <img src={s.img} alt={s.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="lazy" />
+                <div style={{
+                  position: "absolute",
+                  top: 8,
+                  right: 8,
+                  background: "rgba(255,255,255,0.9)",
+                  padding: "2px 8px",
+                  borderRadius: "var(--radius-pill)",
+                  fontSize: 10,
+                  fontWeight: 800,
+                  color: "var(--text-ink)"
+                }}>
+                  {s.kcal} kcal
+                </div>
+              </div>
+              <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8, flex: 1, justifyContent: "space-between" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-ink)", lineHeight: 1.3, height: 34, overflow: "hidden" }}>{s.name}</div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, color: "var(--text-muted)" }}>
+                    <Clock size={12}/>{s.time}
+                  </span>
+                  <button 
+                    onClick={() => {
+                      pushEntry({ resumen: s.name, kcal: s.kcal, proteina: 20, carbo: 30, grasa: 10 }, s.name);
+                    }}
+                    className="btn-active-scale"
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: "50%",
+                      background: "var(--panel-bg-tint)",
+                      color: "var(--accent-primary)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      border: "none"
+                    }}
+                  >
+                    <Plus size={14}/>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Tarjeta de Hidratación */}
@@ -3738,7 +4800,7 @@ function Hoy({
           />
           <button 
             onClick={addCustomSupplement}
-            style={{padding:"6px 12px", background:C.lime, color:"#1a2400", fontWeight:800, borderRadius:8, fontSize:11, cursor:"pointer"}}
+            style={{padding:"6px 12px", background:C.lime, color:"#ffffff", fontWeight:800, borderRadius:8, fontSize:11, cursor:"pointer"}}
           >
             Añadir
           </button>
@@ -3836,7 +4898,7 @@ function Hoy({
               <>
                 <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Opciones de Comida</div>
                 <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>{editFoodObj.e.resumen}</div>
-                <button onClick={() => setEditFoodObj({...editFoodObj, isEditing: true})} style={{background:C.lime, color:"#1a2400", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
+                <button onClick={() => setEditFoodObj({...editFoodObj, isEditing: true})} style={{background:C.lime, color:"#ffffff", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
                   ✏️ Editar Comida
                 </button>
                 <button onClick={() => { del(editFoodObj.e.id); setEditFoodObj(null); }} style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}>
@@ -3878,7 +4940,7 @@ function Hoy({
                     setLog(nextLog);
                   }
                   setEditFoodObj(null);
-                }} style={{background:C.lime, color:"#1a2400", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
+                }} style={{background:C.lime, color:"#ffffff", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
                   Guardar
                 </button>
               </>
@@ -4025,7 +5087,7 @@ function Coach({
         <button 
           onClick={() => setShowSettings(!showSettings)}
           style={{
-            background: showSettings ? "rgba(205,255,74,.15)" : C.panel,
+            background: showSettings ? "rgba(107,78,255,.15)" : C.panel,
             border: `1px solid ${showSettings ? C.lime : C.line}`,
             color: showSettings ? C.lime : C.muted,
             padding: "5px 10px",
@@ -4092,7 +5154,7 @@ function Coach({
                   placeholder="Pegar nueva API Key (Gemini o OpenRouter)..." 
                   style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px 10px", fontSize:12, color:C.ink}}
                 />
-                <button onClick={handleAddKey} style={{padding:"8px 12px", background:C.lime, color:"#1a2400", fontWeight:700, borderRadius:8, fontSize:12, cursor:"pointer"}}>
+                <button onClick={handleAddKey} style={{padding:"8px 12px", background:C.lime, color:"#ffffff", fontWeight:700, borderRadius:8, fontSize:12, cursor:"pointer"}}>
                   Añadir
                 </button>
               </div>
@@ -4188,7 +5250,7 @@ function Coach({
                   borderRadius:8,
                   fontSize:11,
                   fontWeight:800,
-                  background: cloudSync ? "rgba(205,255,74,.15)" : C.panel2,
+                  background: cloudSync ? "rgba(107,78,255,.15)" : C.panel2,
                   border: `1px solid ${cloudSync ? C.lime : C.line}`,
                   color: cloudSync ? C.lime : C.muted,
                   cursor:"pointer"
@@ -4224,7 +5286,7 @@ function Coach({
                         setEmailErr("Error al crear código. Intenta de nuevo.");
                       }
                     }}
-                    style={{padding:"6px 12px", background:C.lime, color:"#1a2400", fontWeight:800, borderRadius:8, fontSize:11, cursor:"pointer"}}
+                    style={{padding:"6px 12px", background:C.lime, color:"#ffffff", fontWeight:800, borderRadius:8, fontSize:11, cursor:"pointer"}}
                   >
                     Crear Código
                   </button>
@@ -4330,7 +5392,7 @@ function Coach({
                           <button 
                             onClick={syncLocalToSupabase}
                             disabled={sbSyncing}
-                            style={{flex:1, padding:"8px", background:C.lime, color:"#1a2400", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
+                            style={{flex:1, padding:"8px", background:C.lime, color:"#ffffff", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
                           >
                             {sbSyncing ? <Loader2 size={13} style={{animation:"spin 1s linear infinite"}}/> : "Sincronizar ahora"}
                           </button>
@@ -4370,7 +5432,7 @@ function Coach({
                           <button 
                             onClick={() => handleSbRegister(sbEmail, sbPass)}
                             disabled={sbSyncing}
-                            style={{flex:1, padding:"8px", background:C.lime, color:"#1a2400", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer"}}
+                            style={{flex:1, padding:"8px", background:C.lime, color:"#ffffff", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer"}}
                           >
                             Registrarse
                           </button>
@@ -4452,7 +5514,7 @@ function Coach({
           placeholder="Pregúntale a tu coach…" 
           style={{flex:1, background:C.panel, border:`1px solid ${C.line}`, borderRadius:12, padding:"12px 14px", color:C.ink, fontSize:14, outline:"none"}}
         />
-        <button onClick={send} disabled={chatBusy} style={{width:48, borderRadius:12, border:"none", background:C.lime, color:"#1a2400", cursor:"pointer", display:"grid", placeItems:"center"}}>
+        <button onClick={send} disabled={chatBusy} style={{width:48, borderRadius:12, border:"none", background:C.lime, color:"#ffffff", cursor:"pointer", display:"grid", placeItems:"center"}}>
           <Send size={18}/>
         </button>
       </div>
@@ -4594,9 +5656,9 @@ function Entreno({
 
   const getHeatColor = (sets) => {
     if (sets === 0) return { bg: C.panel2, text: C.muted };
-    if (sets < 4) return { bg: "rgba(205, 255, 74, 0.15)", text: C.ink, border: "rgba(205, 255, 74, 0.3)" };
-    if (sets < 8) return { bg: "rgba(205, 255, 74, 0.35)", text: "#1a2400", border: C.lime, fontWeight: 700 };
-    return { bg: C.lime, text: "#1a2400", border: C.lime, fontWeight: 800, boxShadow: "0 0 10px rgba(205, 255, 74, 0.3)" };
+    if (sets < 4) return { bg: "rgba(107, 78, 255, 0.15)", text: C.ink, border: "rgba(107, 78, 255, 0.3)" };
+    if (sets < 8) return { bg: "rgba(107, 78, 255, 0.35)", text: "#ffffff", border: C.lime, fontWeight: 700 };
+    return { bg: C.lime, text: "#ffffff", border: C.lime, fontWeight: 800, boxShadow: "0 0 10px rgba(107, 78, 255, 0.3)" };
   };
 
   const allExistingExercises = Object.values(exercises || {}).flat().map(e => e.name);
@@ -5095,7 +6157,7 @@ function Entreno({
                   return <div key={`empty-${idx}`} style={{height:38}} />;
                 }
                 const cellBg = cell.isSelected 
-                  ? "rgba(205, 255, 74, 0.18)" 
+                  ? "rgba(107, 78, 255, 0.18)" 
                   : cell.isToday 
                     ? "rgba(74, 214, 255, 0.12)" 
                     : "transparent";
@@ -5239,9 +6301,9 @@ function Entreno({
                                   <span style={{
                                     fontSize:10, 
                                     fontWeight:700, 
-                                    background:"rgba(205,255,74,0.12)", 
+                                    background:"rgba(107,78,255,0.12)", 
                                     color:C.lime, 
-                                    border:`1px solid rgba(205,255,74,0.3)`, 
+                                    border:`1px solid rgba(107,78,255,0.3)`, 
                                     borderRadius:6, 
                                     padding:"2px 6px",
                                     display:"inline-flex",
@@ -5287,8 +6349,8 @@ function Entreno({
                               position:"absolute",
                               right:12,
                               top:12,
-                              background:"rgba(205,255,74,0.06)",
-                              border:`1px solid rgba(205,255,74,0.2)`,
+                              background:"rgba(107,78,255,0.06)",
+                              border:`1px solid rgba(107,78,255,0.2)`,
                               borderRadius:8,
                               width:28,
                               height:28,
@@ -5338,7 +6400,7 @@ function Entreno({
                                 style={{
                                   flex:1, padding:"6px", borderRadius:8, fontSize:10, fontWeight:700, cursor:"pointer", 
                                   border:`1px solid ${setType === "work" ? C.lime : C.line}`, 
-                                  background: setType === "work" ? "rgba(205,255,74,.12)" : "transparent", 
+                                  background: setType === "work" ? "rgba(107,78,255,.12)" : "transparent", 
                                   color: setType === "work" ? C.lime : C.muted
                                 }}
                               >
@@ -5395,7 +6457,7 @@ function Entreno({
                                 placeholder="Series" 
                                 style={{width:70, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"9px 11px", color:C.ink, fontSize:14, outline:"none", textAlign:"center"}}
                               />
-                              <button onClick={() => addSet(exName)} style={{width:44, borderRadius:9, border:"none", background:C.lime, color:"#1a2400", cursor:"pointer", fontSize:20, fontWeight:700}}>＋</button>
+                              <button onClick={() => addSet(exName)} style={{width:44, borderRadius:9, border:"none", background:C.lime, color:"#ffffff", cursor:"pointer", fontSize:20, fontWeight:700}}>＋</button>
                             </div>
 
                             <Chart entries={cd}/>
@@ -5466,7 +6528,7 @@ function Entreno({
               fontSize:22, 
               cursor:"pointer", 
               border:`1px solid ${sel === d.key ? C.lime : C.line}`, 
-              background: sel === d.key ? "rgba(205,255,74,.14)" : C.panel, 
+              background: sel === d.key ? "rgba(107,78,255,.14)" : C.panel, 
               color: sel === d.key ? C.lime : C.muted
             }}
           >
@@ -5543,9 +6605,9 @@ function Entreno({
                       <span style={{
                         fontSize:10, 
                         fontWeight:700, 
-                        background:"rgba(205,255,74,0.12)", 
+                        background:"rgba(107,78,255,0.12)", 
                         color:C.lime, 
-                        border:`1px solid rgba(205,255,74,0.3)`, 
+                        border:`1px solid rgba(107,78,255,0.3)`, 
                         borderRadius:6, 
                         padding:"2px 6px",
                         display:"inline-flex",
@@ -5591,8 +6653,8 @@ function Entreno({
                   position:"absolute",
                   right:12,
                   top:12,
-                  background:"rgba(205,255,74,0.06)",
-                  border:`1px solid rgba(205,255,74,0.2)`,
+                  background:"rgba(107,78,255,0.06)",
+                  border:`1px solid rgba(107,78,255,0.2)`,
                   borderRadius:8,
                   width:28,
                   height:28,
@@ -5627,7 +6689,7 @@ function Entreno({
                       fontWeight:700, 
                       cursor:"pointer", 
                       border:`1px solid ${setType === "work" ? C.lime : C.line}`, 
-                      background: setType === "work" ? "rgba(205,255,74,.12)" : "transparent", 
+                      background: setType === "work" ? "rgba(107,78,255,.12)" : "transparent", 
                       color: setType === "work" ? C.lime : C.muted
                     }}
                   >
@@ -5694,7 +6756,7 @@ function Entreno({
                     placeholder="Series" 
                     style={{width:70, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"9px 11px", color:C.ink, fontSize:14, outline:"none", textAlign:"center"}}
                   />
-                  <button onClick={() => addSet(ex.name)} style={{width:44, borderRadius:9, border:"none", background:C.lime, color:"#1a2400", cursor:"pointer", fontSize:20, fontWeight:700}}>＋</button>
+                  <button onClick={() => addSet(ex.name)} style={{width:44, borderRadius:9, border:"none", background:C.lime, color:"#ffffff", cursor:"pointer", fontSize:20, fontWeight:700}}>＋</button>
                 </div>
 
                 <Chart entries={cd}/>
@@ -5784,7 +6846,7 @@ function Entreno({
                     border:"none", 
                     cursor:"pointer", 
                     background: importBusy ? C.panel2 : C.lime, 
-                    color: importBusy ? C.muted : "#1a2400", 
+                    color: importBusy ? C.muted : "#ffffff", 
                     fontWeight:800, 
                     fontSize:14, 
                     display:"flex", 
@@ -5899,7 +6961,7 @@ function Entreno({
                 <div style={{display:"flex", gap:8, marginTop:4}}>
                   <button 
                     onClick={handleConfirmAndImport}
-                    style={{flex:1, padding:"10px", borderRadius:8, border:"none", background:C.lime, color:"#1a2400", fontWeight:800, fontSize:13, cursor:"pointer"}}
+                    style={{flex:1, padding:"10px", borderRadius:8, border:"none", background:C.lime, color:"#ffffff", fontWeight:800, fontSize:13, cursor:"pointer"}}
                   >
                     Confirmar e Importar
                   </button>
@@ -5916,10 +6978,10 @@ function Entreno({
         ) : (
           <div>
             <div style={{display:"flex", gap:7, marginBottom:10}}>
-              <button onClick={() => setAddMode("nombre")} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "nombre" ? C.lime : C.line}`, background: addMode === "nombre" ? "rgba(205,255,74,.12)" : "transparent", color: addMode === "nombre" ? C.lime : C.muted}}>
+              <button onClick={() => setAddMode("nombre")} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "nombre" ? C.lime : C.line}`, background: addMode === "nombre" ? "rgba(107,78,255,.12)" : "transparent", color: addMode === "nombre" ? C.lime : C.muted}}>
                 Sé el nombre
               </button>
-              <button onClick={() => setAddMode("describir")} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "describir" ? C.lime : C.line}`, background: addMode === "describir" ? "rgba(205,255,74,.12)" : "transparent", color: addMode === "describir" ? C.lime : C.muted}}>
+              <button onClick={() => setAddMode("describir")} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "describir" ? C.lime : C.line}`, background: addMode === "describir" ? "rgba(107,78,255,.12)" : "transparent", color: addMode === "describir" ? C.lime : C.muted}}>
                 Describirlo
               </button>
             </div>
@@ -5935,7 +6997,7 @@ function Entreno({
               <button 
                 onClick={addExercise} 
                 disabled={addBusy} 
-                style={{flex:1, padding:"10px", borderRadius:10, border:"none", background: addBusy ? C.panel2 : C.lime, color: addBusy ? C.muted : "#1a2400", cursor:"pointer", fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:6}}
+                style={{flex:1, padding:"10px", borderRadius:10, border:"none", background: addBusy ? C.panel2 : C.lime, color: addBusy ? C.muted : "#ffffff", cursor:"pointer", fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:6}}
               >
                 {addBusy ? <><Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/>Procesando…</> : (addMode === "nombre" ? "Añadir ejercicio" : "Identificar y añadir")}
               </button>
@@ -5956,7 +7018,7 @@ function Entreno({
           border:"none", 
           cursor:"pointer", 
           background:`linear-gradient(90deg, ${C.cyan}, ${C.lime})`, 
-          color:"#1a2400", 
+          color:"#ffffff", 
           fontWeight:800, 
           fontSize:14, 
           display:"flex", 
@@ -5973,7 +7035,7 @@ function Entreno({
       <button 
         onClick={suggest} 
         disabled={dayBusy} 
-        style={{width:"100%", marginTop:12, padding:"12px", borderRadius:12, border:"none", cursor:"pointer", background: dayBusy ? C.panel2 : C.lime, color: dayBusy ? C.muted : "#1a2400", fontWeight:800, fontSize:14, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:8}}
+        style={{width:"100%", marginTop:12, padding:"12px", borderRadius:12, border:"none", cursor:"pointer", background: dayBusy ? C.panel2 : C.lime, color: dayBusy ? C.muted : "#ffffff", fontWeight:800, fontSize:14, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:8}}
       >
         {dayBusy ? <><Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/>Planificando…</> : <><Sparkles size={16}/>Rutina sugerida para hoy</>}
       </button>
@@ -6002,7 +7064,7 @@ function Entreno({
               <>
                 <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Opciones de Serie</div>
                 <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>{editSetObj.s.w} kg x {editSetObj.s.reps}</div>
-                <button onClick={() => setEditSetObj({...editSetObj, isEditing: true})} style={{background:C.lime, color:"#1a2400", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
+                <button onClick={() => setEditSetObj({...editSetObj, isEditing: true})} style={{background:C.lime, color:"#ffffff", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
                   ✏️ Editar Serie
                 </button>
                 <button onClick={() => { delSetFromDay(editSetObj.exName, editSetObj.s); setEditSetObj(null); }} style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}>
@@ -6031,7 +7093,7 @@ function Entreno({
                     setExlog({ ...exlog, [editSetObj.exName]: updatedSets });
                   }
                   setEditSetObj(null);
-                }} style={{background:C.lime, color:"#1a2400", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
+                }} style={{background:C.lime, color:"#ffffff", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
                   Guardar
                 </button>
               </>
@@ -6059,7 +7121,7 @@ function Entreno({
                 <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>
                   {editExObj.ex.name} {editExObj.isSession && `(Sesión: ${formatDay(editExObj.sessionDate)})`}
                 </div>
-                <button onClick={() => setEditExObj({...editExObj, isEditing: true})} style={{background:C.lime, color:"#1a2400", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
+                <button onClick={() => setEditExObj({...editExObj, isEditing: true})} style={{background:C.lime, color:"#ffffff", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
                   ✏️ Editar Ejercicio
                 </button>
                 {editExObj.isSession && (
@@ -6114,7 +7176,7 @@ function Entreno({
                     handleUpdateExercise(editExObj.ex.name, newName, newTecnico, newMusculosList);
                   }
                   setEditExObj(null);
-                }} style={{background:C.lime, color:"#1a2400", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
+                }} style={{background:C.lime, color:"#ffffff", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
                   Guardar
                 </button>
               </>
@@ -6187,7 +7249,7 @@ function Entreno({
             background: C.panel, border: `1px solid ${C.line}`, borderRadius: 16,
             padding: 20, width: "100%", maxWidth: 460, display: "flex",
             flexDirection: "column", gap: 14, maxHeight: "calc(100vh - 32px)",
-            boxShadow: "0 10px 30px rgba(0,0,0,0.6)"
+            boxShadow: "0 8px 32px rgba(0,0,0,0.12)"
           }}>
             <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
               <span style={{fontSize:14, fontWeight:900, color:C.lime, letterSpacing:".05em"}}>
@@ -6370,7 +7432,7 @@ function Entreno({
                           setNewExText("");
                         }
                       }}
-                      style={{padding:"0 14px", background:C.lime, color:"#1a2400", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+                      style={{padding:"0 14px", background:C.lime, color:"#ffffff", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
                     >
                       Añadir
                     </button>
@@ -6407,7 +7469,7 @@ function Entreno({
               </button>
               <button 
                 onClick={() => saveSplitsAndSyncExercises(editSplitsData)}
-                style={{flex:1, padding:"10px", background:C.lime, color:"#1a2400", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+                style={{flex:1, padding:"10px", background:C.lime, color:"#ffffff", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
               >
                 Guardar Todo
               </button>
@@ -7117,7 +8179,7 @@ function Registro({
         </div>
         <div style={{position:"relative", height:12, background:C.panel2, borderRadius:6, overflow:"hidden", display:"flex", border:`1px solid ${C.line}`}}>
           <div style={{width:`${underPct}%`, height:"100%", background:"rgba(74,214,255,.07)"}}/>
-          <div style={{width:`${normalPct}%`, height:"100%", background:"rgba(205,255,74,.10)"}}/>
+          <div style={{width:`${normalPct}%`, height:"100%", background:"rgba(107,78,255,.10)"}}/>
           <div style={{width:`${overPct}%`, height:"100%", background:"rgba(255,107,138,.07)"}}/>
           
           <div 
@@ -7553,7 +8615,7 @@ function Registro({
           />
         )}
 
-        <button onClick={add} style={{width:"100%", marginTop:8, padding:"10px", borderRadius:10, border:"none", cursor:"pointer", background:C.lime, color:"#1a2400", fontWeight:800, fontSize:14}}>
+        <button onClick={add} style={{width:"100%", marginTop:8, padding:"10px", borderRadius:10, border:"none", cursor:"pointer", background:C.lime, color:"#ffffff", fontWeight:800, fontSize:14}}>
           {buttonLabels[type] || "Guardar Registro"}
         </button>
       </div>
@@ -7731,7 +8793,7 @@ function Registro({
                 key={d}
                 onClick={() => setStatsPeriod(d)}
                 style={{
-                  background: statsPeriod === d ? "rgba(205,255,74,.14)" : C.panel2,
+                  background: statsPeriod === d ? "rgba(107,78,255,.14)" : C.panel2,
                   border: `1px solid ${statsPeriod === d ? C.lime : C.line}`,
                   color: statsPeriod === d ? C.lime : C.muted,
                   fontSize: 10,
@@ -8296,76 +9358,108 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
   // Preset selector labels
   const PRESET_LABELS = Object.entries(customPresets).map(([k, v]) => ({ key: k, label: v.label || k }));
 
+  const totalKcalFromMacros = (editVals.p * 4 + editVals.c * 4 + editVals.f * 9) || 1;
+  const pPctCalc = Math.round(editVals.p * 4 / totalKcalFromMacros * 100);
+  const cPctCalc = Math.round(editVals.c * 4 / totalKcalFromMacros * 100);
+  const fPctCalc = 100 - pPctCalc - cPctCalc;
+  const totalPctCalc = pPctCalc + cPctCalc + fPctCalc;
+
+  const MODE_CARDS = [
+    { key:"definicion",    label:"Definición", icon:Sparkles, desc:"Déficit calórico para perder grasa manteniendo músculo." },
+    { key:"volumen",       label:"Volumen",    icon:Flame,    desc:"Superávit para maximizar la ganancia de masa muscular." },
+    { key:"mantenimiento", label:"Balance",    icon:Scale,    desc:"Mantén tu peso actual con energía equilibrada." },
+  ];
+
   return (
     <div className="pop">
-      {/* Selector de objetivo */}
-      <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:14, flexWrap:"wrap"}}>
-        {PRESET_LABELS.map(({key, label}) => (
-          <button
-            key={key}
-            onClick={() => setPresetKey(key)}
-            style={{
-              padding:"6px 14px", borderRadius:20, border: presetKey===key ? `1.5px solid ${C.lime}` : `1px solid ${C.line}`,
-              background: presetKey===key ? `${C.lime}22` : C.panel2, color: presetKey===key ? C.lime : C.muted,
-              fontSize:11, fontWeight:700, cursor:"pointer", textTransform:"uppercase", letterSpacing:".05em",
-              transition:"all .2s"
-            }}
-          >{label}</button>
-        ))}
-      </div>
-      <div className="disp" style={{fontSize:24, color:C.lime, marginBottom:10}}>TU PLAN: {target.label.toUpperCase()}</div>
-      
-      {/* Objetivos de macros */}
-      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"16px 18px", marginBottom:14}}>
-        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10}}>
-          <div style={{fontSize:11, color:C.muted, fontWeight:700, letterSpacing:".1em", textTransform:"uppercase"}}>Objetivos de Nutrición</div>
-          <button 
-            onClick={() => {
-              setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
-              setModalAiPrompt("");
-              setModalAiReasoning("");
-              setModalAiErr("");
-              setModalMode("manual");
-              setShowNutritionModal(true);
-            }}
-            style={{
-              padding:"4px 10px",
-              borderRadius:6,
-              background: C.lime,
-              border: "none",
-              color: "#1a2400",
-              fontSize:11,
-              fontWeight:800,
-              cursor:"pointer",
-              display:"flex",
-              alignItems:"center",
-              gap:4
-            }}
-          >
-            <Settings size={11}/>
-            <span>Ajustar</span>
-          </button>
-        </div>
 
-        <div style={{display:"grid", gridTemplateColumns:"repeat(2, 1fr)", gap:12}}>
-          <div style={{background:C.panel2, borderRadius:12, padding:12, border:`1px solid ${C.line}`, userSelect:"none"}}>
-            <div style={{fontSize:12, color:C.muted}}>Calorías Diarias</div>
-            <div className="disp" style={{fontSize:28, color:C.lime, marginTop:4}}>{target.kcal} <span style={{fontSize:12, fontFamily:"'Manrope'", fontWeight:500, color:C.muted}}>kcal</span></div>
-          </div>
-          <div style={{background:C.panel2, borderRadius:12, padding:12, border:`1px solid ${C.line}`, userSelect:"none"}}>
-            <div style={{fontSize:12, color:C.cyan}}>Proteína (Objetivo)</div>
-            <div className="disp" style={{fontSize:28, color:C.cyan, marginTop:4}}>{target.p} <span style={{fontSize:12, fontFamily:"'Manrope'", fontWeight:500, color:C.muted}}>g</span></div>
-          </div>
-          <div style={{background:C.panel2, borderRadius:12, padding:12, border:`1px solid ${C.line}`, userSelect:"none"}}>
-            <div style={{fontSize:12, color:C.lime}}>Carbohidratos</div>
-            <div className="disp" style={{fontSize:28, color:C.lime, marginTop:4}}>{target.c} <span style={{fontSize:12, fontFamily:"'Manrope'", fontWeight:500, color:C.muted}}>g</span></div>
-          </div>
-          <div style={{background:C.panel2, borderRadius:12, padding:12, border:`1px solid ${C.line}`, userSelect:"none"}}>
-            <div style={{fontSize:12, color:C.amber}}>Grasas</div>
-            <div className="disp" style={{fontSize:28, color:C.amber, marginTop:4}}>{target.f} <span style={{fontSize:12, fontFamily:"'Manrope'", fontWeight:500, color:C.muted}}>g</span></div>
-          </div>
+      {/* Objetivo — chips compactos */}
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:11, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".1em", marginBottom:10}}>Modo de Entrenamiento</div>
+        <div style={{display:"flex", gap:8}}>
+          {MODE_CARDS.map(({key, label, icon:Ic}) => {
+            const sel = presetKey === key;
+            return (
+              <button key={key} onClick={() => setPresetKey(key)} style={{
+                flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:5,
+                padding:"10px 6px", borderRadius:12, cursor:"pointer",
+                background: sel ? C.lime : C.panel,
+                border: sel ? `1.5px solid ${C.lime}` : `1px solid ${C.line}`,
+                color: sel ? "#fff" : C.muted,
+                boxShadow: sel ? "0 2px 8px rgba(107,78,255,0.2)" : "none"
+              }}>
+                <Ic size={14} color={sel ? "#fff" : C.muted} strokeWidth={sel ? 2.5 : 1.8}/>
+                <span style={{fontSize:11, fontWeight:700, whiteSpace:"nowrap"}}>{label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
+
+      {/* Presupuesto Diario */}
+      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"14px 16px", marginBottom:14}}>
+        <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10}}>
+          <span style={{fontSize:12, fontWeight:700, color:C.ink}}>Presupuesto Diario</span>
+          <span style={{fontSize:20, fontWeight:900, color:C.lime, fontFamily:"'Bebas Neue',sans-serif", letterSpacing:".02em"}}>{editVals.kcal} <span style={{fontSize:11, fontWeight:600, color:C.muted, fontFamily:"'Manrope',sans-serif"}}>kcal</span></span>
+        </div>
+        <input type="range" min={1200} max={4500} step={50} value={editVals.kcal}
+          onChange={e => {
+            const newKcal = parseInt(e.target.value);
+            const factor = newKcal / (editVals.kcal || 1);
+            setEditVals({ kcal:newKcal, p:Math.round(editVals.p*factor), c:Math.round(editVals.c*factor), f:Math.round(editVals.f*factor) });
+            setEditDirty(true);
+          }}
+          style={{width:"100%", accentColor:C.lime, height:4, cursor:"pointer"}}
+        />
+        <div style={{display:"flex", justifyContent:"space-between", fontSize:10, color:C.muted, marginTop:5}}>
+          <span>1200</span><span>4500</span>
+        </div>
+      </div>
+
+      {/* Distribución de Macros */}
+      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"14px 16px", marginBottom:14}}>
+        <div style={{fontSize:12, fontWeight:700, color:C.ink, marginBottom:12}}>Distribución de Macros</div>
+        {[
+          {label:"Proteínas",     pct:pPctCalc, g:editVals.p, color:C.lime,  onChange:(v)=>{ const newP=Math.round(editVals.kcal*v/100/4); setEditVals(ev=>({...ev,p:newP})); setEditDirty(true); }},
+          {label:"Carbohidratos", pct:cPctCalc, g:editVals.c, color:C.amber, onChange:(v)=>{ const newC=Math.round(editVals.kcal*v/100/4); setEditVals(ev=>({...ev,c:newC})); setEditDirty(true); }},
+          {label:"Grasas",        pct:fPctCalc, g:editVals.f, color:C.cyan,  onChange:(v)=>{ const newF=Math.round(editVals.kcal*v/100/9); setEditVals(ev=>({...ev,f:newF})); setEditDirty(true); }},
+        ].map(({label,pct,g,color,onChange}) => (
+          <div key={label} style={{marginBottom:12}}>
+            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5}}>
+              <span style={{fontSize:12, fontWeight:600, color:C.ink}}>{label}</span>
+              <span style={{fontSize:12, fontWeight:800, color}}>{pct}% <span style={{fontSize:10, color:C.muted, fontWeight:500}}>· {g}g</span></span>
+            </div>
+            <input type="range" min={5} max={70} step={1} value={pct}
+              onChange={e => onChange(parseInt(e.target.value))}
+              style={{width:"100%", accentColor:color, height:3, cursor:"pointer"}}
+            />
+          </div>
+        ))}
+        <div style={{display:"flex", justifyContent:"space-between", borderTop:`1px solid ${C.line}`, paddingTop:8, fontSize:11, fontWeight:700}}>
+          <span style={{color:C.muted}}>Total</span>
+          <span style={{color: totalPctCalc === 100 ? C.lime : C.rose}}>{totalPctCalc}%</span>
+        </div>
+      </div>
+
+      {editDirty && (
+        <button onClick={commitMacros} style={{
+          width:"100%", padding:"16px", borderRadius:16, border:"none", cursor:"pointer",
+          background:C.lime, color:"#fff", fontWeight:800, fontSize:15, marginBottom:20,
+          display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+          boxShadow:"0 4px 16px rgba(107,78,255,0.3)"
+        }}>
+          <NotebookPen size={17}/>Guardar Cambios
+        </button>
+      )}
+      {!editDirty && (
+        <button onClick={() => { setShowNutritionModal(true); setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f }); }} style={{
+          width:"100%", padding:"14px", borderRadius:16, border:`1px solid ${C.line}`, cursor:"pointer",
+          background:C.panel, color:C.muted, fontWeight:700, fontSize:14, marginBottom:20,
+          display:"flex", alignItems:"center", justifyContent:"center", gap:8
+        }}>
+          <Settings size={15}/>Ajuste avanzado con IA
+        </button>
+      )}
 
       {/* Lista de Compras Inteligente */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"16px 18px", marginBottom:14}}>
@@ -8380,7 +9474,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
               padding:"6px 12px", 
               borderRadius:9, 
               background: shopBusy ? C.panel2 : C.lime, 
-              color: shopBusy ? C.muted : "#1a2400", 
+              color: shopBusy ? C.muted : "#ffffff", 
               fontSize:11.5, 
               fontWeight:800,
               cursor:"pointer",
@@ -8465,7 +9559,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
               style={{
                 padding:"4px 10px",
                 borderRadius:6,
-                background: showMealsAiPanel ? "rgba(205,255,74,.12)" : C.panel2,
+                background: showMealsAiPanel ? "rgba(107,78,255,.12)" : C.panel2,
                 border: `1px solid ${showMealsAiPanel ? C.lime : C.line}`,
                 color: showMealsAiPanel ? C.lime : C.muted,
                 fontSize:11,
@@ -8498,7 +9592,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
               <button 
                 onClick={adjustMealsWithAI}
                 disabled={aiMealsBusy || !mealsPrompt.trim()}
-                style={{padding:"0 12px", background: aiMealsBusy ? C.panel : C.lime, color: aiMealsBusy ? C.muted : "#1a2400", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center"}}
+                style={{padding:"0 12px", background: aiMealsBusy ? C.panel : C.lime, color: aiMealsBusy ? C.muted : "#ffffff", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center"}}
               >
                 {aiMealsBusy ? <Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/> : <Send size={14}/>}
               </button>
@@ -8513,7 +9607,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
               <Sparkles size={12}/> Vista previa de cambios generada por la IA
             </div>
             <div style={{display:"flex", gap:6, marginTop:8}}>
-              <button onClick={handleConfirmMeals} style={{flex:1, padding:"6px 12px", background:C.lime, color:"#1a2400", fontWeight:800, borderRadius:6, fontSize:11, cursor:"pointer"}}>
+              <button onClick={handleConfirmMeals} style={{flex:1, padding:"6px 12px", background:C.lime, color:"#ffffff", fontWeight:800, borderRadius:6, fontSize:11, cursor:"pointer"}}>
                 Confirmar y Aplicar
               </button>
               <button onClick={handleCancelPreview} style={{padding:"6px 12px", background:"none", border:`1px solid ${C.line}`, color:C.muted, fontWeight:700, borderRadius:6, fontSize:11, cursor:"pointer"}}>
@@ -8661,7 +9755,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
               <button 
                 onClick={saveMeal}
                 style={{
-                  flex:1, padding:"8px 14px", background:C.lime, color:"#1a2400", border:"none",
+                  flex:1, padding:"8px 14px", background:C.lime, color:"#ffffff", border:"none",
                   borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"
                 }}
               >
@@ -8704,7 +9798,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
                 style={{
                   flex:1, padding:"6px 12px", borderRadius:8, border:"none",
                   background: modalMode === "manual" ? C.lime : "transparent",
-                  color: modalMode === "manual" ? "#1a2400" : C.muted,
+                  color: modalMode === "manual" ? "#ffffff" : C.muted,
                   fontSize:12, fontWeight:800, cursor:"pointer"
                 }}
               >
@@ -8715,7 +9809,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
                 style={{
                   flex:1, padding:"6px 12px", borderRadius:8, border:"none",
                   background: modalMode === "ai" ? C.lime : "transparent",
-                  color: modalMode === "ai" ? "#1a2400" : C.muted,
+                  color: modalMode === "ai" ? "#ffffff" : C.muted,
                   fontSize:12, fontWeight:800, cursor:"pointer",
                   display:"flex", alignItems:"center", justifyContent:"center", gap:4
                 }}
@@ -8816,7 +9910,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
                   <button
                     onClick={handleQueryAiNutrition}
                     disabled={modalAiBusy || !modalAiPrompt.trim()}
-                    style={{padding:"0 12px", background: modalAiBusy ? C.panel2 : C.lime, color: modalAiBusy ? C.muted : "#1a2400", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center"}}
+                    style={{padding:"0 12px", background: modalAiBusy ? C.panel2 : C.lime, color: modalAiBusy ? C.muted : "#ffffff", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center"}}
                   >
                     {modalAiBusy ? <Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/> : <Send size={16}/>}
                   </button>
@@ -8870,7 +9964,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
                   updateAllMacrosAndAdjustMeals(modalVals.kcal, modalVals.p, modalVals.c, modalVals.f);
                   setShowNutritionModal(false);
                 }}
-                style={{flex:1, padding:"10px", background:C.lime, color:"#1a2400", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+                style={{flex:1, padding:"10px", background:C.lime, color:"#ffffff", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
               >
                 Guardar y Aplicar
               </button>
@@ -8878,6 +9972,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           </div>
         </div>
       )}
+        </div>
+      </div>
     </div>
   );
 }
