@@ -1,0 +1,44 @@
+{
+"Dark Modern": {
+"--bg-color": "#0c0e0b",
+"--panel-bg": "#15170f",
+"--panel-bg-sec": "#1c1f15",
+"--line-color": "#2a2e20",
+"--text-ink": "#f3f4ea",
+"--text-muted": "#9aa088",
+"--accent-lime": "#cdff4a",
+"--accent-cyan": "#4ad6ff",
+"--accent-amber": "#ffb13d",
+"--accent-rose": "#ff6b8a",
+"--font-display": "Bebas Neue, sans-serif",
+"--font-sans": "Manrope, system-ui, sans-serif"
+},
+"Neutral Clean": {
+"--bg-color": "#0f1110",
+"--panel-bg": "#1e1f1e",
+"--panel-bg-sec": "#262726",
+"--line-color": "#2e302e",
+"--text-ink": "#f5f6f4",
+"--text-muted": "#9aa088",
+"--accent-lime": "#ffd36a",
+"--accent-cyan": "#8fd6ff",
+"--accent-amber": "#ffd36a",
+"--accent-rose": "#ff9aa8",
+"--font-display": "Bebas Neue, sans-serif",
+"--font-sans": "Inter, system-ui, sans-serif"
+},
+"Vibrant Gradient": {
+"--bg-color": "#070709",
+"--panel-bg": "linear-gradient(180deg,#0f1110,#0a0b10)",
+"--panel-bg-sec": "#121217",
+"--line-color": "#222428",
+"--text-ink": "#f7f8f6",
+"--text-muted": "#a0a8a0",
+"--accent-lime": "#ff7a66",
+"--accent-cyan": "#ffd36a",
+"--accent-amber": "#ffb13d",
+"--accent-rose": "#ff6b8a",
+"--font-display": "Bebas Neue, sans-serif",
+"--font-sans": "Manrope, system-ui, sans-serif"
+}
+}
