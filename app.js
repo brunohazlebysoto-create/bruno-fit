@@ -912,6 +912,119 @@ export default function App(){
 
   const target = customPresets[presetKey] || customPresets.personalizado || DEFAULT_PRESETS.personalizado;
 
+  const [showNutritionModal, setShowNutritionModal] = useState(false);
+  const [modalMode, setModalMode] = useState("manual"); // "manual" or "ai"
+  const [modalVals, setModalVals] = useState({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
+  const [modalAiPrompt, setModalAiPrompt] = useState("");
+  const [modalAiReasoning, setModalAiReasoning] = useState("");
+  const [modalAiBusy, setModalAiBusy] = useState(false);
+  const [modalAiErr, setModalAiErr] = useState("");
+
+  const updateAllMacrosAndAdjustMeals = (newKcal, newP, newC, newF) => {
+    const oldTarget = { ...target };
+    const factor = newKcal / oldTarget.kcal;
+    
+    let nextMeals = meals;
+    if (factor > 0 && factor !== 1) {
+      nextMeals = meals.map(meal => {
+        let newKcalStr = meal.kcal;
+        const kcalMatch = meal.kcal.match(/(\d+)/);
+        if (kcalMatch) {
+          const val = parseInt(kcalMatch[1]);
+          const scaledVal = Math.round(val * factor);
+          newKcalStr = meal.kcal.replace(/\d+/, scaledVal);
+        }
+        
+        const nextOpts = meal.opts.map(opt => {
+          return opt.replace(/(\d+(\.\d+)?)\s*(g|ml|scoop|scoops|huevo|huevos|clara|claras|rebanada|rebanadas|tostada|tostadas|unidades|unidad)\b/gi, (match, numStr, decimal, unitWord) => {
+            const val = parseFloat(numStr);
+            const scaled = Math.round(val * factor * 10) / 10;
+            const formatted = Number.isInteger(scaled) ? scaled.toString() : scaled.toFixed(1);
+            return `${formatted} ${unitWord}`;
+          });
+        });
+        
+        return {
+          ...meal,
+          kcal: newKcalStr,
+          opts: nextOpts
+        };
+      });
+    }
+    
+    const nextVals = { kcal: newKcal, p: newP, c: newC, f: newF };
+    const newPresets = {
+      ...customPresets,
+      [presetKey]: {
+        ...customPresets[presetKey],
+        ...nextVals
+      }
+    };
+    
+    const updates = { customPresets: newPresets };
+    if (factor > 0 && factor !== 1) {
+      updates.meals = nextMeals;
+    }
+    saveState(updates);
+  };
+
+  const handleQueryAiNutrition = async () => {
+    if (!modalAiPrompt.trim() || modalAiBusy) return;
+    setModalAiBusy(true);
+    setModalAiErr("");
+    setModalAiReasoning("");
+    
+    try {
+      const promptText = `Bruno quiere ajustar sus objetivos de nutrición.
+Datos actuales:
+- Preset actual: ${presetKey} (${target.label})
+- Macros actuales: ${target.kcal} kcal, ${target.p}g Proteína, ${target.c}g Carbohidratos, ${target.f}g Grasas.
+- Peso corporal: ${activeMetrics.weight} kg
+- Masa muscular: ${activeMetrics.musculo} kg
+- Grasa corporal: ${activeMetrics.grasaPct}%
+
+Solicitud del usuario: "${modalAiPrompt.trim()}"
+
+Calcula los nuevos objetivos de calorías y macronutrientes optimizados para esta solicitud y su perfil.
+Fórmula calórica obligatoria: kcal = (proteina * 4) + (carbo * 4) + (grasa * 9).
+Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos.`;
+
+      const sysInstruction = "Eres un nutricionista deportivo de élite y experto en recomposición corporal. Calcula los macros optimizados en gramos y calorías totales. Devuelve un formato JSON estricto que cumpla con el esquema requerido.";
+      
+      const schema = {
+        type: "OBJECT",
+        properties: {
+          kcal: { type: "NUMBER" },
+          proteina: { type: "NUMBER" },
+          carbo: { type: "NUMBER" },
+          grasa: { type: "NUMBER" },
+          reasoning: { type: "STRING" }
+        },
+        required: ["kcal", "proteina", "carbo", "grasa", "reasoning"]
+      };
+
+      const out = await callGemini([{ role: "user", content: promptText }], sysInstruction, schema);
+      const parsed = cleanAndParseJSON(out);
+      
+      if (!parsed.kcal || !parsed.proteina || !parsed.carbo || !parsed.grasa) {
+        throw new Error("No se recibieron los macros optimizados.");
+      }
+      
+      setModalVals({
+        kcal: Math.round(parsed.kcal),
+        p: Math.round(parsed.proteina),
+        c: Math.round(parsed.carbo),
+        f: Math.round(parsed.grasa)
+      });
+      setModalAiReasoning(parsed.reasoning || "Cálculo completado.");
+    } catch (e) {
+      console.error(e);
+      setModalAiErr("Error al consultar la IA: " + (e.message || "Verifica tu conexión y API Key."));
+    } finally {
+      setModalAiBusy(false);
+    }
+  };
+
   // Carga inicial
   useEffect(() => { 
     (async() => {
@@ -2965,6 +3078,8 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
             meals={meals}
             setMeals={(ml) => { setMeals(ml); saveState({ meals: ml }); }}
             activeMetrics={activeMetrics}
+            setShowNutritionModal={setShowNutritionModal}
+            setModalVals={setModalVals}
           />
         )}
       </div>
@@ -3005,6 +3120,213 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
                 {msg}
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {showNutritionModal && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, width: "100%", height: "100%",
+          background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center",
+          justifyContent: "center", zIndex: 9999, padding: 16
+        }}>
+          <div style={{
+            background: C.panel, border: `1px solid ${C.line}`, borderRadius: 16,
+            padding: 20, width: "100%", maxWidth: 420, display: "flex",
+            flexDirection: "column", gap: 14, boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
+            maxHeight: "calc(100vh - 32px)", overflowY: "auto"
+          }}>
+            {/* Header */}
+            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+              <span style={{fontSize:14, fontWeight:900, color:C.lime, letterSpacing:".05em"}}>
+                AJUSTAR OBJETIVOS DE NUTRICIÓN
+              </span>
+              <button 
+                onClick={() => setShowNutritionModal(false)}
+                style={{background:"none", border:"none", color:C.muted, cursor: "pointer", padding:4}}
+              >
+                <X size={20}/>
+              </button>
+            </div>
+
+            {/* Mode Switcher Tabs */}
+            <div style={{display:"flex", gap:6, background:C.panel2, padding:4, borderRadius:10, border:`1px solid ${C.line}`}}>
+              <button
+                onClick={() => setModalMode("manual")}
+                style={{
+                  flex:1, padding:"6px 12px", borderRadius:8, border:"none",
+                  background: modalMode === "manual" ? C.lime : "transparent",
+                  color: modalMode === "manual" ? "#ffffff" : C.muted,
+                  fontSize:12, fontWeight:800, cursor:"pointer"
+                }}
+              >
+                Ajuste Manual
+              </button>
+              <button
+                onClick={() => setModalMode("ai")}
+                style={{
+                  flex:1, padding:"6px 12px", borderRadius:8, border:"none",
+                  background: modalMode === "ai" ? C.lime : "transparent",
+                  color: modalMode === "ai" ? "#ffffff" : C.muted,
+                  fontSize:12, fontWeight:800, cursor:"pointer",
+                  display:"flex", alignItems:"center", justifyContent:"center", gap:4
+                }}
+              >
+                <Sparkles size={12}/>
+                <span>Ajuste con IA</span>
+              </button>
+            </div>
+
+            {/* Manual Tab Content */}
+            {modalMode === "manual" && (
+              <div style={{display:"flex", flexDirection:"column", gap:10}}>
+                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
+                  <div>
+                    <label style={{fontSize:11, color:C.muted, fontWeight:700, display:"block", marginBottom:4}}>Calorías (kcal)</label>
+                    <input 
+                      type="number" 
+                      value={modalVals.kcal}
+                      onChange={e => {
+                        const val = parseInt(e.target.value)||0;
+                        const oldKcal = modalVals.kcal || 1;
+                        const factor = val / oldKcal;
+                        setModalVals(prev => ({
+                          kcal: val,
+                          p: Math.round(prev.p * factor),
+                          c: Math.round(prev.c * factor),
+                          f: Math.round(prev.f * factor)
+                        }));
+                      }}
+                      style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px", fontSize:13, color:C.ink, outline:"none", textAlign:"center", fontWeight:600}}
+                    />
+                  </div>
+                  <div>
+                    <label style={{fontSize:11, color:C.cyan, fontWeight:700, display:"block", marginBottom:4}}>Proteína (g)</label>
+                    <input 
+                      type="number" 
+                      value={modalVals.p}
+                      onChange={e => {
+                        const val = parseInt(e.target.value)||0;
+                        setModalVals(prev => {
+                          const next = { ...prev, p: val };
+                          return { ...next, kcal: next.p * 4 + next.c * 4 + next.f * 9 };
+                        });
+                      }}
+                      style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px", fontSize:13, color:C.ink, outline:"none", textAlign:"center", fontWeight:600}}
+                    />
+                  </div>
+                </div>
+                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
+                  <div>
+                    <label style={{fontSize:11, color:C.lime, fontWeight:700, display:"block", marginBottom:4}}>Carbohidratos (g)</label>
+                    <input 
+                      type="number" 
+                      value={modalVals.c}
+                      onChange={e => {
+                        const val = parseInt(e.target.value)||0;
+                        setModalVals(prev => {
+                          const next = { ...prev, c: val };
+                          return { ...next, kcal: next.p * 4 + next.c * 4 + next.f * 9 };
+                        });
+                      }}
+                      style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px", fontSize:13, color:C.ink, outline:"none", textAlign:"center", fontWeight:600}}
+                    />
+                  </div>
+                  <div>
+                    <label style={{fontSize:11, color:C.amber, fontWeight:700, display:"block", marginBottom:4}}>Grasas (g)</label>
+                    <input 
+                      type="number" 
+                      value={modalVals.f}
+                      onChange={e => {
+                        const val = parseInt(e.target.value)||0;
+                        setModalVals(prev => {
+                          const next = { ...prev, f: val };
+                          return { ...next, kcal: next.p * 4 + next.c * 4 + next.f * 9 };
+                        });
+                      }}
+                      style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px", fontSize:13, color:C.ink, outline:"none", textAlign:"center", fontWeight:600}}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* AI Tab Content */}
+            {modalMode === "ai" && (
+              <div style={{display:"flex", flexDirection:"column", gap:10}}>
+                <div style={{fontSize:11.5, color:C.muted}}>
+                  Describe qué cambios quieres en tus macros o tu plan de alimentación (ej: "baja mis calorías a 2300 y sube proteína a 220g", "haz un déficit agresivo para definir"):
+                </div>
+                <div style={{display:"flex", gap:6}}>
+                  <textarea
+                    value={modalAiPrompt}
+                    onChange={e => setModalAiPrompt(e.target.value)}
+                    placeholder="Escribe tu solicitud aquí..."
+                    rows={2}
+                    style={{flex:1, background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px 10px", fontSize:12.5, color:C.ink, resize:"none", outline:"none"}}
+                  />
+                  <button
+                    onClick={handleQueryAiNutrition}
+                    disabled={modalAiBusy || !modalAiPrompt.trim()}
+                    style={{padding:"0 12px", background: modalAiBusy ? C.panel2 : C.lime, color: modalAiBusy ? C.muted : "#ffffff", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center"}}
+                  >
+                    {modalAiBusy ? <Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/> : <Send size={16}/>}
+                  </button>
+                </div>
+
+                {modalAiErr && (
+                  <div style={{color:C.rose, fontSize:12, marginTop:4}}>
+                    {modalAiErr}
+                  </div>
+                )}
+
+                {modalAiReasoning && (
+                  <div style={{background:"rgba(74,214,255,.05)", border:`1px solid ${C.cyan}`, borderRadius:10, padding:10, fontSize:12, color:C.ink, marginTop:4}}>
+                    <div style={{fontWeight:800, color:C.cyan, marginBottom:4}}>Propuesta de la IA:</div>
+                    {modalAiReasoning}
+                  </div>
+                )}
+
+                {/* AI Calculated Values Preview */}
+                <div style={{display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:6, background:C.panel2, padding:10, borderRadius:10, border:`1px solid ${C.line}`, marginTop:4}}>
+                  <div style={{textAlign:"center"}}>
+                    <div style={{fontSize:9, color:C.muted, fontWeight:700}}>kcal</div>
+                    <div style={{fontSize:13, fontWeight:800, color:C.lime}}>{modalVals.kcal}</div>
+                  </div>
+                  <div style={{textAlign:"center"}}>
+                    <div style={{fontSize:9, color:C.cyan, fontWeight:700}}>Prot</div>
+                    <div style={{fontSize:13, fontWeight:800, color:C.cyan}}>{modalVals.p}g</div>
+                  </div>
+                  <div style={{textAlign:"center"}}>
+                    <div style={{fontSize:9, color:C.lime, fontWeight:700}}>Carb</div>
+                    <div style={{fontSize:13, fontWeight:800, color:C.lime}}>{modalVals.c}g</div>
+                  </div>
+                  <div style={{textAlign:"center"}}>
+                    <div style={{fontSize:9, color:C.amber, fontWeight:700}}>Grasa</div>
+                    <div style={{fontSize:13, fontWeight:800, color:C.amber}}>{modalVals.f}g</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Action Footer */}
+            <div style={{display:"flex", gap:8, borderTop:`1px solid ${C.line}`, paddingTop:12, marginTop:4}}>
+              <button 
+                onClick={() => setShowNutritionModal(false)}
+                style={{flex:1, padding:"10px", background:"none", border:`1px solid ${C.line}`, color:C.muted, borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+              >
+                Cancelar
+              </button>
+              <button 
+                onClick={() => {
+                  updateAllMacrosAndAdjustMeals(modalVals.kcal, modalVals.p, modalVals.c, modalVals.f);
+                  setShowNutritionModal(false);
+                }}
+                style={{flex:1, padding:"10px", background:C.lime, color:"#ffffff", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+              >
+                Guardar y Aplicar
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -8935,7 +9257,7 @@ function Registro({
 }
 
 /* ===== TAB PLAN / DIETA Y LISTA DE COMPRAS ===== */
-function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppingList, setShoppingList, geminiKey, meals, setMeals, activeMetrics}){
+function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppingList, setShoppingList, geminiKey, meals, setMeals, activeMetrics, setShowNutritionModal, setModalVals}){
   const target = customPresets[presetKey] || customPresets.personalizado || DEFAULT_PRESETS.personalizado;
   // Local state for macro editor — avoids async-lag with controlled inputs
   const [editVals, setEditVals] = React.useState({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
@@ -9094,114 +9416,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
   const [shopBusy, setShopBusy] = useState(false);
   const [shopErr, setShopErr] = useState("");
 
-  const [showNutritionModal, setShowNutritionModal] = useState(false);
-  const [modalMode, setModalMode] = useState("manual"); // "manual" or "ai"
-  const [modalVals, setModalVals] = useState({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
-  const [modalAiPrompt, setModalAiPrompt] = useState("");
-  const [modalAiReasoning, setModalAiReasoning] = useState("");
-  const [modalAiBusy, setModalAiBusy] = useState(false);
-  const [modalAiErr, setModalAiErr] = useState("");
 
-  const updateAllMacrosAndAdjustMeals = (newKcal, newP, newC, newF) => {
-    const oldTarget = { ...target };
-    const factor = newKcal / oldTarget.kcal;
-    
-    if (factor > 0 && factor !== 1) {
-      const nextMeals = meals.map(meal => {
-        let newKcalStr = meal.kcal;
-        const kcalMatch = meal.kcal.match(/(\d+)/);
-        if (kcalMatch) {
-          const val = parseInt(kcalMatch[1]);
-          const scaledVal = Math.round(val * factor);
-          newKcalStr = meal.kcal.replace(/\d+/, scaledVal);
-        }
-        
-        const nextOpts = meal.opts.map(opt => {
-          return opt.replace(/(\d+(\.\d+)?)\s*(g|ml|scoop|scoops|huevo|huevos|clara|claras|rebanada|rebanadas|tostada|tostadas|unidades|unidad)\b/gi, (match, numStr, decimal, unitWord) => {
-            const val = parseFloat(numStr);
-            const scaled = Math.round(val * factor * 10) / 10;
-            const formatted = Number.isInteger(scaled) ? scaled.toString() : scaled.toFixed(1);
-            return `${formatted} ${unitWord}`;
-          });
-        });
-        
-        return {
-          ...meal,
-          kcal: newKcalStr,
-          opts: nextOpts
-        };
-      });
-      setMeals(nextMeals);
-    }
-    
-    const nextVals = { kcal: newKcal, p: newP, c: newC, f: newF };
-    const newPresets = {
-      ...customPresets,
-      [presetKey]: {
-        ...customPresets[presetKey],
-        ...nextVals
-      }
-    };
-    setCustomPresets(newPresets, false);
-    setEditVals(nextVals);
-  };
-
-  const handleQueryAiNutrition = async () => {
-    if (!modalAiPrompt.trim() || modalAiBusy) return;
-    setModalAiBusy(true);
-    setModalAiErr("");
-    setModalAiReasoning("");
-    
-    try {
-      const promptText = `Bruno quiere ajustar sus objetivos de nutrición.
-Datos actuales:
-- Preset actual: ${presetKey} (${target.label})
-- Macros actuales: ${target.kcal} kcal, ${target.p}g Proteína, ${target.c}g Carbohidratos, ${target.f}g Grasas.
-- Peso corporal: ${activeMetrics.weight} kg
-- Masa muscular: ${activeMetrics.musculo} kg
-- Grasa corporal: ${activeMetrics.grasaPct}%
-
-Solicitud del usuario: "${modalAiPrompt.trim()}"
-
-Calcula los nuevos objetivos de calorías y macronutrientes optimizados para esta solicitud y su perfil.
-Fórmula calórica obligatoria: kcal = (proteina * 4) + (carbo * 4) + (grasa * 9).
-Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos.`;
-
-      const sysInstruction = "Eres un nutricionista deportivo de élite y experto en recomposición corporal. Calcula los macros optimizados en gramos y calorías totales. Devuelve un formato JSON estricto que cumpla con el esquema requerido.";
-      
-      const schema = {
-        type: "OBJECT",
-        properties: {
-          kcal: { type: "NUMBER" },
-          proteina: { type: "NUMBER" },
-          carbo: { type: "NUMBER" },
-          grasa: { type: "NUMBER" },
-          reasoning: { type: "STRING" }
-        },
-        required: ["kcal", "proteina", "carbo", "grasa", "reasoning"]
-      };
-
-      const out = await callGemini([{ role: "user", content: promptText }], sysInstruction, schema);
-      const parsed = cleanAndParseJSON(out);
-      
-      if (!parsed.kcal || !parsed.proteina || !parsed.carbo || !parsed.grasa) {
-        throw new Error("No se recibieron los macros optimizados.");
-      }
-      
-      setModalVals({
-        kcal: Math.round(parsed.kcal),
-        p: Math.round(parsed.proteina),
-        c: Math.round(parsed.carbo),
-        f: Math.round(parsed.grasa)
-      });
-      setModalAiReasoning(parsed.reasoning || "Cálculo completado.");
-    } catch (e) {
-      console.error(e);
-      setModalAiErr("Error al consultar la IA: " + (e.message || "Verifica tu conexión y API Key."));
-    } finally {
-      setModalAiBusy(false);
-    }
-  };
 
 
 
@@ -9767,212 +9982,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         </div>
       )}
 
-      {showNutritionModal && (
-        <div style={{
-          position: "fixed", top: 0, left: 0, width: "100%", height: "100%",
-          background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center",
-          justifyContent: "center", zIndex: 9999, padding: 16
-        }}>
-          <div style={{
-            background: C.panel, border: `1px solid ${C.line}`, borderRadius: 16,
-            padding: 20, width: "100%", maxWidth: 420, display: "flex",
-            flexDirection: "column", gap: 14, boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
-            maxHeight: "calc(100vh - 32px)", overflowY: "auto"
-          }}>
-            {/* Header */}
-            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
-              <span style={{fontSize:14, fontWeight:900, color:C.lime, letterSpacing:".05em"}}>
-                AJUSTAR OBJETIVOS DE NUTRICIÓN
-              </span>
-              <button 
-                onClick={() => setShowNutritionModal(false)}
-                style={{background:"none", border:"none", color:C.muted, cursor: "pointer", padding:4}}
-              >
-                <X size={20}/>
-              </button>
-            </div>
 
-            {/* Mode Switcher Tabs */}
-            <div style={{display:"flex", gap:6, background:C.panel2, padding:4, borderRadius:10, border:`1px solid ${C.line}`}}>
-              <button
-                onClick={() => setModalMode("manual")}
-                style={{
-                  flex:1, padding:"6px 12px", borderRadius:8, border:"none",
-                  background: modalMode === "manual" ? C.lime : "transparent",
-                  color: modalMode === "manual" ? "#ffffff" : C.muted,
-                  fontSize:12, fontWeight:800, cursor:"pointer"
-                }}
-              >
-                Ajuste Manual
-              </button>
-              <button
-                onClick={() => setModalMode("ai")}
-                style={{
-                  flex:1, padding:"6px 12px", borderRadius:8, border:"none",
-                  background: modalMode === "ai" ? C.lime : "transparent",
-                  color: modalMode === "ai" ? "#ffffff" : C.muted,
-                  fontSize:12, fontWeight:800, cursor:"pointer",
-                  display:"flex", alignItems:"center", justifyContent:"center", gap:4
-                }}
-              >
-                <Sparkles size={12}/>
-                <span>Ajuste con IA</span>
-              </button>
-            </div>
-
-            {/* Manual Tab Content */}
-            {modalMode === "manual" && (
-              <div style={{display:"flex", flexDirection:"column", gap:10}}>
-                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
-                  <div>
-                    <label style={{fontSize:11, color:C.muted, fontWeight:700, display:"block", marginBottom:4}}>Calorías (kcal)</label>
-                    <input 
-                      type="number" 
-                      value={modalVals.kcal}
-                      onChange={e => {
-                        const val = parseInt(e.target.value)||0;
-                        const oldKcal = modalVals.kcal || 1;
-                        const factor = val / oldKcal;
-                        setModalVals(prev => ({
-                          kcal: val,
-                          p: Math.round(prev.p * factor),
-                          c: Math.round(prev.c * factor),
-                          f: Math.round(prev.f * factor)
-                        }));
-                      }}
-                      style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px", fontSize:13, color:C.ink, outline:"none", textAlign:"center", fontWeight:600}}
-                    />
-                  </div>
-                  <div>
-                    <label style={{fontSize:11, color:C.cyan, fontWeight:700, display:"block", marginBottom:4}}>Proteína (g)</label>
-                    <input 
-                      type="number" 
-                      value={modalVals.p}
-                      onChange={e => {
-                        const val = parseInt(e.target.value)||0;
-                        setModalVals(prev => {
-                          const next = { ...prev, p: val };
-                          return { ...next, kcal: next.p * 4 + next.c * 4 + next.f * 9 };
-                        });
-                      }}
-                      style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px", fontSize:13, color:C.ink, outline:"none", textAlign:"center", fontWeight:600}}
-                    />
-                  </div>
-                </div>
-                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
-                  <div>
-                    <label style={{fontSize:11, color:C.lime, fontWeight:700, display:"block", marginBottom:4}}>Carbohidratos (g)</label>
-                    <input 
-                      type="number" 
-                      value={modalVals.c}
-                      onChange={e => {
-                        const val = parseInt(e.target.value)||0;
-                        setModalVals(prev => {
-                          const next = { ...prev, c: val };
-                          return { ...next, kcal: next.p * 4 + next.c * 4 + next.f * 9 };
-                        });
-                      }}
-                      style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px", fontSize:13, color:C.ink, outline:"none", textAlign:"center", fontWeight:600}}
-                    />
-                  </div>
-                  <div>
-                    <label style={{fontSize:11, color:C.amber, fontWeight:700, display:"block", marginBottom:4}}>Grasas (g)</label>
-                    <input 
-                      type="number" 
-                      value={modalVals.f}
-                      onChange={e => {
-                        const val = parseInt(e.target.value)||0;
-                        setModalVals(prev => {
-                          const next = { ...prev, f: val };
-                          return { ...next, kcal: next.p * 4 + next.c * 4 + next.f * 9 };
-                        });
-                      }}
-                      style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px", fontSize:13, color:C.ink, outline:"none", textAlign:"center", fontWeight:600}}
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* AI Tab Content */}
-            {modalMode === "ai" && (
-              <div style={{display:"flex", flexDirection:"column", gap:10}}>
-                <div style={{fontSize:11.5, color:C.muted}}>
-                  Describe qué cambios quieres en tus macros o tu plan de alimentación (ej: "baja mis calorías a 2300 y sube proteína a 220g", "haz un déficit agresivo para definir"):
-                </div>
-                <div style={{display:"flex", gap:6}}>
-                  <textarea
-                    value={modalAiPrompt}
-                    onChange={e => setModalAiPrompt(e.target.value)}
-                    placeholder="Escribe tu solicitud aquí..."
-                    rows={2}
-                    style={{flex:1, background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px 10px", fontSize:12.5, color:C.ink, resize:"none", outline:"none"}}
-                  />
-                  <button
-                    onClick={handleQueryAiNutrition}
-                    disabled={modalAiBusy || !modalAiPrompt.trim()}
-                    style={{padding:"0 12px", background: modalAiBusy ? C.panel2 : C.lime, color: modalAiBusy ? C.muted : "#ffffff", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center"}}
-                  >
-                    {modalAiBusy ? <Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/> : <Send size={16}/>}
-                  </button>
-                </div>
-
-                {modalAiErr && (
-                  <div style={{color:C.rose, fontSize:12, marginTop:4}}>
-                    {modalAiErr}
-                  </div>
-                )}
-
-                {modalAiReasoning && (
-                  <div style={{background:"rgba(74,214,255,.05)", border:`1px solid ${C.cyan}`, borderRadius:10, padding:10, fontSize:12, color:C.ink, marginTop:4}}>
-                    <div style={{fontWeight:800, color:C.cyan, marginBottom:4}}>Propuesta de la IA:</div>
-                    {modalAiReasoning}
-                  </div>
-                )}
-
-                {/* AI Calculated Values Preview */}
-                <div style={{display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:6, background:C.panel2, padding:10, borderRadius:10, border:`1px solid ${C.line}`, marginTop:4}}>
-                  <div style={{textAlign:"center"}}>
-                    <div style={{fontSize:9, color:C.muted, fontWeight:700}}>kcal</div>
-                    <div style={{fontSize:13, fontWeight:800, color:C.lime}}>{modalVals.kcal}</div>
-                  </div>
-                  <div style={{textAlign:"center"}}>
-                    <div style={{fontSize:9, color:C.cyan, fontWeight:700}}>Prot</div>
-                    <div style={{fontSize:13, fontWeight:800, color:C.cyan}}>{modalVals.p}g</div>
-                  </div>
-                  <div style={{textAlign:"center"}}>
-                    <div style={{fontSize:9, color:C.lime, fontWeight:700}}>Carb</div>
-                    <div style={{fontSize:13, fontWeight:800, color:C.lime}}>{modalVals.c}g</div>
-                  </div>
-                  <div style={{textAlign:"center"}}>
-                    <div style={{fontSize:9, color:C.amber, fontWeight:700}}>Grasa</div>
-                    <div style={{fontSize:13, fontWeight:800, color:C.amber}}>{modalVals.f}g</div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Action Footer */}
-            <div style={{display:"flex", gap:8, borderTop:`1px solid ${C.line}`, paddingTop:12, marginTop:4}}>
-              <button 
-                onClick={() => setShowNutritionModal(false)}
-                style={{flex:1, padding:"10px", background:"none", border:`1px solid ${C.line}`, color:C.muted, borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
-              >
-                Cancelar
-              </button>
-              <button 
-                onClick={() => {
-                  updateAllMacrosAndAdjustMeals(modalVals.kcal, modalVals.p, modalVals.c, modalVals.f);
-                  setShowNutritionModal(false);
-                }}
-                style={{flex:1, padding:"10px", background:C.lime, color:"#ffffff", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
-              >
-                Guardar y Aplicar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
