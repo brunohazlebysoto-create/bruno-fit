@@ -2858,6 +2858,7 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
             geminiKey={geminiKey}
             meals={meals}
             setMeals={(ml) => { setMeals(ml); saveState({ meals: ml }); }}
+            activeMetrics={activeMetrics}
           />
         )}
       </div>
@@ -7869,7 +7870,7 @@ function Registro({
 }
 
 /* ===== TAB PLAN / DIETA Y LISTA DE COMPRAS ===== */
-function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppingList, setShoppingList, geminiKey, meals, setMeals}){
+function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppingList, setShoppingList, geminiKey, meals, setMeals, activeMetrics}){
   const target = customPresets[presetKey] || customPresets.personalizado || DEFAULT_PRESETS.personalizado;
   // Local state for macro editor — avoids async-lag with controlled inputs
   const [editVals, setEditVals] = React.useState({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
@@ -8027,6 +8028,113 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
   };
   const [shopBusy, setShopBusy] = useState(false);
   const [shopErr, setShopErr] = useState("");
+
+  const [aiOptBusy, setAiOptBusy] = useState(false);
+  const [aiOptErr, setAiOptErr] = useState("");
+  const [aiOptReasoning, setAiOptReasoning] = useState("");
+
+  const updateAllMacrosAndAdjustMeals = (newKcal, newP, newC, newF) => {
+    const oldTarget = { ...target };
+    const factor = newKcal / oldTarget.kcal;
+    
+    if (factor > 0 && factor !== 1) {
+      const nextMeals = meals.map(meal => {
+        let newKcalStr = meal.kcal;
+        const kcalMatch = meal.kcal.match(/(\d+)/);
+        if (kcalMatch) {
+          const val = parseInt(kcalMatch[1]);
+          const scaledVal = Math.round(val * factor);
+          newKcalStr = meal.kcal.replace(/\d+/, scaledVal);
+        }
+        
+        const nextOpts = meal.opts.map(opt => {
+          return opt.replace(/(\d+(\.\d+)?)\s*(g|ml|scoop|scoops|huevo|huevos|clara|claras|rebanada|rebanadas|tostada|tostadas|unidades|unidad)\b/gi, (match, numStr, decimal, unitWord) => {
+            const val = parseFloat(numStr);
+            const scaled = Math.round(val * factor * 10) / 10;
+            const formatted = Number.isInteger(scaled) ? scaled.toString() : scaled.toFixed(1);
+            return `${formatted} ${unitWord}`;
+          });
+        });
+        
+        return {
+          ...meal,
+          kcal: newKcalStr,
+          opts: nextOpts
+        };
+      });
+      setMeals(nextMeals);
+    }
+    
+    const nextVals = { kcal: newKcal, p: newP, c: newC, f: newF };
+    const newPresets = {
+      ...customPresets,
+      [presetKey]: {
+        ...customPresets[presetKey],
+        ...nextVals
+      }
+    };
+    setCustomPresets(newPresets, false);
+    setEditVals(nextVals);
+  };
+
+  const optimizeNutritionWithAI = async () => {
+    if (aiOptBusy) return;
+    setAiOptBusy(true);
+    setAiOptErr("");
+    setAiOptReasoning("");
+    
+    try {
+      const promptText = `Por favor calcula y optimiza los objetivos de nutrición (calorías, proteína, carbohidratos, grasas) para Bruno.
+Aquí tienes sus datos actuales:
+- Objetivo de fase: ${target.label} (Preset actual: ${presetKey})
+- Peso corporal actual: ${activeMetrics.weight} kg
+- Masa muscular estimada: ${activeMetrics.musculo} kg
+- Porcentaje de grasa corporal: ${activeMetrics.grasaPct}%
+
+Calcula una distribución balanceada de macros ideal para su perfil y su objetivo de ${target.label}.
+- Proteína: debe rondar entre 2.0 y 2.5g por kg de peso corporal (especialmente en definición o volumen).
+- Grasas: debe rondar entre 0.7 y 1.0g por kg de peso corporal.
+- Carbohidratos: el resto para completar el objetivo calórico.
+Fórmula calórica: kcal = (proteina * 4) + (carbo * 4) + (grasa * 9).
+Devuelve tu recomendación optimizada en un JSON estructurado con la explicación breve de tu razonamiento (en el campo reasoning).`;
+
+      const sysInstruction = "Eres un nutricionista deportivo de élite y experto en recomposición corporal. Calcula los macros exactos en gramos y calorías totales para el perfil deportivo de Bruno. Devuelve un formato JSON estricto que cumpla con el esquema requerido.";
+      
+      const schema = {
+        type: "OBJECT",
+        properties: {
+          kcal: { type: "NUMBER" },
+          proteina: { type: "NUMBER" },
+          carbo: { type: "NUMBER" },
+          grasa: { type: "NUMBER" },
+          reasoning: { type: "STRING" }
+        },
+        required: ["kcal", "proteina", "carbo", "grasa", "reasoning"]
+      };
+
+      const out = await callGemini([{ role: "user", content: promptText }], sysInstruction, schema);
+      const parsed = cleanAndParseJSON(out);
+      
+      if (!parsed.kcal || !parsed.proteina || !parsed.carbo || !parsed.grasa) {
+        throw new Error("No se recibieron los macros optimizados.");
+      }
+      
+      updateAllMacrosAndAdjustMeals(
+        Math.round(parsed.kcal),
+        Math.round(parsed.proteina),
+        Math.round(parsed.carbo),
+        Math.round(parsed.grasa)
+      );
+      
+      setAiOptReasoning(parsed.reasoning || "Tus objetivos de nutrición han sido actualizados con éxito por la IA.");
+    } catch (e) {
+      console.error(e);
+      setAiOptErr("Error al optimizar con la IA: " + (e.message || "Verifica tu conexión y API Key."));
+    } finally {
+      setAiOptBusy(false);
+    }
+  };
+
 
   const [aiMealsBusy, setAiMealsBusy] = useState(false);
   const [mealsPrompt, setMealsPrompt] = useState("");
@@ -8203,7 +8311,53 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
       
       {/* Objetivos de macros */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"16px 18px", marginBottom:14}}>
-        <div style={{fontSize:11, color:C.muted, fontWeight:700, letterSpacing:".1em", textTransform:"uppercase", marginBottom:10}}>Objetivos de Nutrición</div>
+        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10}}>
+          <div style={{fontSize:11, color:C.muted, fontWeight:700, letterSpacing:".1em", textTransform:"uppercase"}}>Objetivos de Nutrición</div>
+          <button 
+            onClick={optimizeNutritionWithAI}
+            disabled={aiOptBusy}
+            style={{
+              padding:"4px 10px",
+              borderRadius:6,
+              background: aiOptBusy ? C.panel2 : C.lime,
+              border: "none",
+              color: aiOptBusy ? C.muted : "#1a2400",
+              fontSize:11,
+              fontWeight:800,
+              cursor:"pointer",
+              display:"flex",
+              alignItems:"center",
+              gap:4
+            }}
+          >
+            {aiOptBusy ? <Loader2 size={11} style={{animation:"spin 1s linear infinite"}}/> : <Sparkles size={11}/>}
+            <span>Ajustar con IA</span>
+          </button>
+        </div>
+        
+        {aiOptReasoning && (
+          <div style={{
+            background: "rgba(74,214,255,.05)", border: `1px solid ${C.cyan}`, 
+            borderRadius: 12, padding: 10, marginBottom: 12, fontSize: 12, color: C.ink
+          }}>
+            <div style={{fontWeight:800, color:C.cyan, marginBottom:4, display:"flex", alignItems:"center", gap:4}}>
+              <Sparkles size={12}/> Optimización IA Aplicada:
+            </div>
+            {aiOptReasoning}
+            <button 
+              onClick={() => setAiOptReasoning("")} 
+              style={{background:"none", border:"none", color:C.muted, cursor:"pointer", padding:0, fontSize:10.5, textDecoration:"underline", display:"block", marginTop:4}}
+            >
+              Ocultar explicación
+            </button>
+          </div>
+        )}
+        {aiOptErr && (
+          <div style={{background:"rgba(255,107,138,.08)", border:`1px solid ${C.rose}`, borderRadius:12, padding:10, marginBottom:12, fontSize:12, color:C.rose}}>
+            {aiOptErr}
+          </div>
+        )}
+
         <div style={{display:"grid", gridTemplateColumns:"repeat(2, 1fr)", gap:12}}>
           <div 
             {...bindLongPress("kcal", target.kcal)}
