@@ -4600,7 +4600,6 @@ function Hoy({
             <Camera size={20}/>
           </button>
         </div>
-        </div>
         {err && <div style={{color:C.rose, fontSize:12, marginTop:8}}>{err}</div>}
       </div>
 
