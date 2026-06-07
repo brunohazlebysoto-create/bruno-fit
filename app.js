@@ -10,13 +10,14 @@ import {
 } from "lucide-react";
 
 /* ===== CONSTANTES Y PRESETS ===== */
-const PRESETS = {
+const DEFAULT_PRESETS = {
   definicion:   { label:"Definición",    kcal:2600, p:220, c:265, f:70 },
   mantenimiento:{ label:"Mantenimiento", kcal:3000, p:200, c:360, f:85 },
   volumen:      { label:"Volumen",       kcal:3400, p:200, c:450, f:90 },
+  personalizado:{ label:"Personalizado", kcal:2600, p:220, c:265, f:70 }
 };
 
-const SPLIT = [
+const DEFAULT_SPLITS = [
   { key:"A", name:"Pecho + Bíceps", fuel:"Carbo medio", ex:["Press banca","Press inclinado mancuerna","Aperturas","Curl inclinado","Curl martillo","Curl prono barra"] },
   { key:"B", name:"Pierna Cuádriceps + Hombros", fuel:"Carbo alto", ex:["Sentadilla","Prensa 45°","Sentadilla búlgara","Sentadilla ciclista Smith","Extensión cuádriceps","Press Arnold","Vuelos laterales","Vuelos posteriores polea"] },
   { key:"C", name:"Espalda + Tríceps", fuel:"Carbo medio-alto", ex:["Dominadas / Jalón","Remo barra","Remo máquina","Pullover polea","Face pull","Press cerrado","Extensión polea","Extensión sobre cabeza"] },
@@ -62,19 +63,18 @@ const DEFAULT_MEALS = [
 
 const PAUTAS = [
   ["🥩 Proteína repartida","30-50 g por toma, cada 3-4 h."],
-  ["💧 Hidratación","3-4 L/día, más en guardias. Electrolitos en turnos largos."],
+  ["💧 Hidratación","3-4 L/día. Mantén una buena ingesta de electrolitos."],
   ["🌾 Fibra","30-40 g/día. Verdura en cada comida + fruta."],
   ["⏱️ Timing","Carbos concentrados alrededor del entreno."],
   ["💊 Suplementos","Creatina 5 g/día, whey, vitamina D, cafeína pre-entreno."],
-  ["🏥 Guardias","Lleva barritas proteicas, frutos secos, shaker y fruta."],
-  ["😴 Sueño","Tu factor más frágil con turnos. Dormir poco frena la pérdida de grasa."],
+  ["😴 Sueño","Tu factor clave para la recuperación. Dormir poco frena la pérdida de grasa."],
   ["🍷 Alcohol","Mínimo en definición."],
 ];
 
 const C = { 
   bg:"#0c0e0b", panel:"#15170f", panel2:"#1c1f15", line:"#2a2e20", 
   ink:"#f3f4ea", muted:"#9aa088", lime:"#cdff4a", cyan:"#4ad6ff", 
-  amber:"#ffb13d", rose:"#ff6b8a", guardia:"#00f0ff" 
+  amber:"#ffb13d", rose:"#ff6b8a" 
 };
 
 const START_W = 93.9, GOAL_W = 85;
@@ -108,7 +108,35 @@ const COACH_SCHEMA = {
               weight: { type: "NUMBER" },
               exercise: { type: "STRING" },
               w: { type: "NUMBER" },
-              reps: { type: "STRING" }
+              reps: { type: "STRING" },
+              phase: { type: "STRING" },
+              eventName: { type: "STRING" },
+              eventDate: { type: "STRING" },
+              meals: {
+                type: "ARRAY",
+                items: {
+                  type: "OBJECT",
+                  properties: {
+                    slot: { type: "STRING" },
+                    kcal: { type: "STRING" },
+                    opts: { type: "ARRAY", items: { type: "STRING" } }
+                  },
+                  required: ["slot", "kcal", "opts"]
+                }
+              },
+              splits: {
+                type: "ARRAY",
+                items: {
+                  type: "OBJECT",
+                  properties: {
+                    key: { type: "STRING" },
+                    name: { type: "STRING" },
+                    fuel: { type: "STRING" },
+                    ex: { type: "ARRAY", items: { type: "STRING" } }
+                  },
+                  required: ["key", "name", "fuel", "ex"]
+                }
+              }
             }
           }
         },
@@ -149,7 +177,7 @@ const WORKOUT_PARSER_SCHEMA = {
   required: ["exercises"]
 };
 
-const MEALS_SYS = "Eres un nutricionista deportivo de élite. Tu tarea es recibir el plan de comidas actual de Bruno y la solicitud del usuario para modificar las opciones o la proporción de ingredientes. Debes reescribir y optimizar las opciones de comida del plan actual (manteniendo los 5 momentos del día: Desayuno, Almuerzo, Pre-entreno, Post-entreno, Cena) respetando su perfil, macros y guardias. Al estimar porciones, ingredientes y macronutrientes por porción, debes basarte estrictamente en bases de datos nutricionales oficiales (como USDA FoodData Central o tablas de composición de alimentos locales chilenas/latinoamericanas). Devuelve un formato JSON estricto que cumpla con el esquema MEALS_SCHEMA.";
+const MEALS_SYS = "Eres un nutricionista deportivo de élite. Tu tarea es recibir el plan de comidas actual de Bruno y la solicitud del usuario para modificar las opciones o la proporción de ingredientes. Debes reescribir y optimizar las opciones de comida del plan actual (manteniendo los 5 momentos del día: Desayuno, Almuerzo, Pre-entreno, Post-entreno, Cena) respetando su perfil y macros. Al estimar porciones, ingredientes y macronutrientes por porción, debes basarte estrictamente en bases de datos nutricionales oficiales (como USDA FoodData Central o tablas de composición de alimentos locales chilenas/latinoamericanas). Devuelve un formato JSON estricto que cumpla con el esquema MEALS_SCHEMA.";
 
 const MEALS_SCHEMA = {
   type: "OBJECT",
@@ -259,10 +287,33 @@ const aiErr = (e) => {
   }
   return "No se pudo conectar con la IA. Detalle: " + msg;
 };
-const getProfileStr = (isGuardia, weight = 93.9, musculo = 64.7, grasaPct = 26.2, visceral = 9) => {
-  return `Bruno: hombre, 34 años, 180 cm, ${weight} kg, residente de cirugía pediátrica con guardias de 24h. Objetivo: definición (bajar grasa manteniendo músculo; ${musculo} kg de músculo, ${grasaPct}% grasa, visceral grado ${visceral}). Dieta hiperproteica.${
-    isGuardia ? " [IMPORTANTE: HOY BRUNO ESTÁ EN GUARDIA DE 24H EN EL HOSPITAL. Priorizar timing de snacks rápidos, hidratación extra a 4.5L, evitar fatiga extrema en entrenamientos y priorizar movilidad]" : ""
-  }`;
+const getProfileStr = (weight = 93.9, musculo = 64.7, grasaPct = 26.2, visceral = 9) => {
+  return `Bruno: hombre, 34 años, 180 cm, ${weight} kg. Objetivo: definición (bajar grasa manteniendo músculo; ${musculo} kg de músculo, ${grasaPct}% grasa, visceral grado ${visceral}). Dieta hiperproteica.`;
+};
+
+const cleanAndParseJSON = (str) => {
+  if (!str) throw new Error("JSON string is empty");
+  let cleaned = str.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```[a-zA-Z]*\s*/, "").replace(/\s*```$/, "");
+  }
+  try {
+    return JSON.parse(cleaned.trim());
+  } catch (e) {
+    const firstBrace = cleaned.indexOf("{");
+    const lastBrace = cleaned.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+      return JSON.parse(cleaned);
+    }
+    const firstBracket = cleaned.indexOf("[");
+    const lastBracket = cleaned.lastIndexOf("]");
+    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+      cleaned = cleaned.substring(firstBracket, lastBracket + 1);
+      return JSON.parse(cleaned);
+    }
+    throw e;
+  }
 };
 
 async function parseDailyCloudData(cloudData, today) {
@@ -464,7 +515,7 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
 
 function seedExercises(){ 
   const o={}; 
-  SPLIT.forEach(d=>{ 
+  DEFAULT_SPLITS.forEach(d=>{ 
     o[d.key]=d.ex.map(n=>({name:n,tecnico:"",musculos:MUSCLES[n]||[]})); 
   }); 
   return o; 
@@ -495,9 +546,198 @@ function Chart({entries, color=C.lime, height=128}){
 }
 
 /* ===== COMPONENTE PRINCIPAL APP ===== */
+
+/* ===== AI INTELLIGENCE ENGINE — 20 FEATURES ===== */
+
+// ── Schemas nuevos para el Coach ──
+const ANALYSIS_SYS = `Eres el motor de análisis adaptativo de BrunoFit. Analiza los datos del usuario y devuelve acciones concretas de reconfiguración. Sé preciso con los números. Usa los datos históricos reales, no estimaciones genéricas. Responde SOLO en JSON válido.`;
+
+const ANALYSIS_SCHEMA = {
+  type:"OBJECT", properties:{
+    insights:{ type:"ARRAY", items:{ type:"OBJECT", properties:{
+      type:{ type:"STRING" }, // "macro_adjust","phase_change","deload","overtraining","plateau","challenge","goal","event","experiment","pattern","correlation"
+      title:{ type:"STRING" },
+      message:{ type:"STRING" },
+      urgency:{ type:"STRING" }, // "low","medium","high","critical"
+      actions:{ type:"ARRAY", items:{ type:"OBJECT", properties:{
+        type:{ type:"STRING" },
+        data:{ type:"OBJECT", properties:{
+          kcal:{ type:"NUMBER" }, proteina:{ type:"NUMBER" }, carbo:{ type:"NUMBER" }, grasa:{ type:"NUMBER" },
+          presetKey:{ type:"STRING" }, label:{ type:"STRING" },
+          exercise:{ type:"STRING" }, suggestedWeight:{ type:"NUMBER" },
+          challengeTitle:{ type:"STRING" }, challengeDesc:{ type:"STRING" }, challengeMetric:{ type:"STRING" }, challengeTarget:{ type:"NUMBER" },
+          goalTitle:{ type:"STRING" }, goalExercise:{ type:"STRING" }, goalTarget:{ type:"NUMBER" }, goalDeadlineDays:{ type:"NUMBER" },
+          eventName:{ type:"STRING" }, eventDate:{ type:"STRING" },
+          experimentTitle:{ type:"STRING" }, experimentDesc:{ type:"STRING" }, experimentVariable:{ type:"STRING" },
+          correlation:{ type:"STRING" },
+          message:{ type:"STRING" }
+        }}
+      }}}
+    }, required:["type","title","message","urgency"]}}
+  }, required:["insights"]
+};
+
+// ── Funciones estadísticas ──
+function linearRegression(ys) {
+  if (!ys || ys.length < 2) return { slope: 0, intercept: ys?.[0] || 0 };
+  const n = ys.length;
+  const xs = ys.map((_, i) => i);
+  const sumX = xs.reduce((a,b)=>a+b,0), sumY = ys.reduce((a,b)=>a+b,0);
+  const sumXY = xs.reduce((s,x,i)=>s+x*ys[i],0), sumX2 = xs.reduce((s,x)=>s+x*x,0);
+  const slope = (n*sumXY - sumX*sumY) / (n*sumX2 - sumX*sumX);
+  const intercept = (sumY - slope*sumX) / n;
+  return { slope, intercept };
+}
+
+function calcTDEE(foodlog, metricslog) {
+  // Necesita al menos 21 dias de datos
+  const dates = Object.keys(foodlog).filter(d => foodlog[d]?.length > 0).sort();
+  if (dates.length < 21) return null;
+  const last21 = dates.slice(-21);
+  const avgKcal = last21.reduce((s,d)=>{
+    const dayKcal = (foodlog[d]||[]).reduce((a,e)=>a+(+e.kcal||0),0);
+    return s + dayKcal;
+  },0) / last21.length;
+  const weightDates = Object.keys(metricslog).filter(d=>metricslog[d]?.weight).sort();
+  if (weightDates.length < 2) return null;
+  const firstW = parseFloat(metricslog[weightDates[0]]?.weight) || 0;
+  const lastW = parseFloat(metricslog[weightDates[weightDates.length-1]]?.weight) || 0;
+  const days = Math.max(1, (new Date(weightDates[weightDates.length-1]) - new Date(weightDates[0])) / 86400000);
+  const deltaKcalPerDay = ((lastW - firstW) * 7700) / days;
+  return Math.round(avgKcal - deltaKcalPerDay);
+}
+
+function calcBodyProjection(currentWeight, currentGrasaPct, tdee, targetKcal, weeks=12) {
+  const points = [];
+  let w = currentWeight, g = currentGrasaPct;
+  const dailyDelta = (targetKcal - tdee) / 7700;
+  for (let wk=0; wk<=weeks; wk++) {
+    const musculo = w * (1 - g/100);
+    points.push({ semana: wk, peso: Math.round(w*10)/10, grasaPct: Math.round(g*10)/10, musculo: Math.round(musculo*10)/10 });
+    const wChange = dailyDelta * 7;
+    // Asume pérdida mayoritariamente de grasa (85%) si déficit, ganancia mayoritariamente muscular (60%) si superávit
+    const fatChange = wChange < 0 ? wChange * 0.85 : wChange * 0.4;
+    const muscChange = wChange - fatChange;
+    const newFatKg = Math.max(0, (w * g/100) + fatChange);
+    const newMuscKg = Math.max(0, musculo + muscChange);
+    w = Math.max(40, newFatKg + newMuscKg);
+    g = Math.max(5, Math.min(50, (newFatKg / w) * 100));
+  }
+  return points;
+}
+
+function detectPlateaus(exlog) {
+  const plateaus = [];
+  Object.entries(exlog||{}).forEach(([exName, sets])=>{
+    if (!sets || sets.length < 9) return;
+    const sorted = [...sets].filter(s=>s?.date&&s?.w).sort((a,b)=>new Date(a.date)-new Date(b.date));
+    // Agrupamos por semana
+    const byWeek = {};
+    sorted.forEach(s=>{
+      const d = new Date(s.date);
+      const wk = `${d.getFullYear()}-W${Math.floor(d.getDay()/7)}`;
+      const wkKey = s.date.slice(0,10).slice(0,7) + "-" + Math.floor(parseInt(s.date.slice(8,10))/7);
+      if(!byWeek[wkKey]) byWeek[wkKey]=[];
+      byWeek[wkKey].push(parseFloat(s.w)||0);
+    });
+    const weekMaxes = Object.values(byWeek).map(ws=>Math.max(...ws));
+    if (weekMaxes.length >= 3) {
+      const last3 = weekMaxes.slice(-3);
+      if (last3.every(v => Math.abs(v - last3[0]) < 2.5)) {
+        plateaus.push({ exercise: exName, weight: last3[0], weeks: last3.length });
+      }
+    }
+  });
+  return plateaus;
+}
+
+function calcProgressiveOverload(exlog) {
+  const suggestions = {};
+  Object.entries(exlog||{}).forEach(([exName, sets])=>{
+    if (!sets || sets.length === 0) return;
+    const sorted = [...sets].filter(s=>s?.date&&s?.w).sort((a,b)=>new Date(b.date)-new Date(a.date));
+    const recent = sorted.slice(0,5);
+    const maxW = Math.max(...recent.map(s=>parseFloat(s.w)||0));
+    const maxReps = Math.max(...recent.filter(s=>parseFloat(s.w)===maxW).map(s=>parseInt(s.reps)||0));
+    const isCompound = ["Sentadilla","Peso muerto","Press banca","Dominadas","Remo barra","Prensa"].some(c=>exName.includes(c));
+    const increment = isCompound ? 2.5 : 1;
+    if (maxReps >= 8) suggestions[exName] = { currentMax: maxW, suggested: maxW + increment, reason: `${maxReps} reps con ${maxW}kg → sube` };
+  });
+  return suggestions;
+}
+
+function detectMuscleImbalances(exlog) {
+  const muscleCount = {};
+  Object.entries(exlog||{}).forEach(([exName, sets])=>{
+    if (!sets || sets.length === 0) return;
+    const recent = sets.filter(s=>s?.date && new Date(s.date) > new Date(Date.now()-28*86400000));
+    if (recent.length === 0) return;
+    const muscles = MUSCLES[exName] || [];
+    muscles.forEach(m=>{ muscleCount[m] = (muscleCount[m]||0) + recent.length; });
+  });
+  const imbalances = [];
+  const push = (muscleCount["Pectoral"]||0) + (muscleCount["Tríceps"]||0);
+  const pull = (muscleCount["Espalda"]||0) + (muscleCount["Bíceps"]||0);
+  const quad = (muscleCount["Cuádriceps"]||0);
+  const hams = (muscleCount["Isquios"]||0);
+  if (push > 0 && pull > 0 && push/pull > 1.5) imbalances.push(`Empuje (${push} series) vs Jalón (${pull} series) — desbalance ${Math.round(push/pull*10)/10}:1`);
+  if (quad > 0 && hams > 0 && quad/hams > 1.5) imbalances.push(`Cuádriceps (${quad}) vs Isquios (${hams}) — desbalance ${Math.round(quad/hams*10)/10}:1`);
+  return imbalances;
+}
+
+function analyzeMacroPattern(foodlog) {
+  const dates = Object.keys(foodlog).sort().slice(-7);
+  if (dates.length < 3) return null;
+  let totP=0, totC=0, totF=0, totKcal=0, days=0;
+  dates.forEach(d=>{
+    const entries = foodlog[d]||[];
+    if (entries.length===0) return;
+    entries.forEach(e=>{ totP+=(+e.proteina||0); totC+=(+e.carbo||0); totF+=(+e.grasa||0); totKcal+=(+e.kcal||0); });
+    days++;
+  });
+  if (days===0) return null;
+  return { avgP: Math.round(totP/days), avgC: Math.round(totC/days), avgF: Math.round(totF/days), avgKcal: Math.round(totKcal/days), days };
+}
+
+function detectFatigueFromNotes(notes) {
+  const fatigueKeywords = ["cansancio","agotado","agotada","fatiga","sin energía","sin energia","no dormí","no dormi","mal dormi","dolor muscular","recuperación","muy cansado","quemado","burnout"];
+  const recent = (notes||[]).filter(n=>n?.date && new Date(n.date) > new Date(Date.now()-7*86400000));
+  const fatigueCount = recent.filter(n=>{
+    const text = (n.text||"").toLowerCase();
+    return fatigueKeywords.some(k=>text.includes(k));
+  }).length;
+  return fatigueCount;
+}
+
+function calcWeightTrend(metricslog) {
+  const dates = Object.keys(metricslog||{}).filter(d=>metricslog[d]?.weight).sort().slice(-14);
+  if (dates.length < 3) return null;
+  const weights = dates.map(d=>parseFloat(metricslog[d].weight)||0);
+  const reg = linearRegression(weights);
+  // slope es cambio por día en índice, convertir a kg/semana
+  const kgPerWeek = reg.slope * 7;
+  return { kgPerWeek: Math.round(kgPerWeek*100)/100, trend: kgPerWeek < -0.1 ? "bajando" : kgPerWeek > 0.1 ? "subiendo" : "estancado", dataPoints: dates.length };
+}
+
+function getWeeklyStats(foodlog, exlog, metricslog, notes) {
+  const last7 = [...Array(7)].map((_,i)=>{
+    const d = new Date(); d.setDate(d.getDate()-i);
+    return d.toISOString().slice(0,10);
+  }).reverse();
+  const trainDays = last7.filter(d => Object.values(exlog||{}).some(sets=>(sets||[]).some(s=>s?.date?.slice(0,10)===d)));
+  const avgProtein = last7.reduce((s,d)=>{ const fl=foodlog[d]||[]; return s+(fl.reduce((a,e)=>a+(+e.proteina||0),0)); },0)/Math.max(1,last7.filter(d=>(foodlog[d]||[]).length>0).length);
+  const avgKcal = last7.reduce((s,d)=>{ const fl=foodlog[d]||[]; return s+(fl.reduce((a,e)=>a+(+e.kcal||0),0)); },0)/Math.max(1,last7.filter(d=>(foodlog[d]||[]).length>0).length);
+  const weightDates = last7.filter(d=>metricslog?.[d]?.weight);
+  const weightChange = weightDates.length>=2 ? parseFloat(metricslog[weightDates[weightDates.length-1]].weight)-parseFloat(metricslog[weightDates[0]].weight) : null;
+  const fatigueCount = detectFatigueFromNotes(notes);
+  return { trainDays: trainDays.length, avgProtein: Math.round(avgProtein), avgKcal: Math.round(avgKcal), weightChange, fatigueCount };
+}
+
 export default function App(){
   const [view, setView] = useState("hoy");
+  const [splits, setSplits] = useState(DEFAULT_SPLITS);
   const [presetKey, setPresetKey] = useState("definicion");
+  const [customPresets, setCustomPresets] = useState(DEFAULT_PRESETS);
   const [log, setLog] = useState([]); 
   const [notes, setNotes] = useState([]);
   const [chat, setChat] = useState([]); 
@@ -507,11 +747,27 @@ export default function App(){
   const [supplements, setSupplements] = useState({ Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false });
   const [chatBusy, setChatBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [isGuardia, setIsGuardia] = useState(false);
   const [geminiKey, setGeminiKey] = useState("");
   const [aiModel, setAiModel] = useState("moonshotai/kimi-k2.6:free");
   const [prAlerts, setPrAlerts] = useState([]);
   const [workoutDurations, setWorkoutDurations] = useState({});
+
+  // ── 20 AI Features: New States ──
+  const [smartGoals, setSmartGoals] = useState([]); // #10 - Adaptive Goals
+  const [challenges, setChallenges] = useState([]); // #20 - Gamification
+  const [weeklyInsight, setWeeklyInsight] = useState(null); // #19 - Correlations
+  const [projections, setProjections] = useState([]); // #15 - 12-week projection
+  const [tdeeEstimate, setTdeeEstimate] = useState(null); // #12 - Real TDEE
+  const [upcomingEvent, setUpcomingEvent] = useState(null); // #13 - Event planning
+  const [experiments, setExperiments] = useState([]); // #18 - A/B experiments
+  const [overloadSuggestions, setOverloadSuggestions] = useState({}); // #8 - Progressive overload
+  const [plateauAlerts, setPlateauAlerts] = useState([]); // #6 - Plateau detection
+  const [muscleImbalances, setMuscleImbalances] = useState([]); // #9 - Imbalances
+  const [proactiveMsg, setProactiveMsg] = useState(null); // #16 - Proactive coach
+  const [analyzeBusy, setAnalyzeBusy] = useState(false); // Analysis in progress
+  const [aiNotifications, setAiNotifications] = useState([]); // In-app AI notifications
+  const [macroAdjustSuggestion, setMacroAdjustSuggestion] = useState(null); // #1 - Macro adjustment
+  const [weightTrend, setWeightTrend] = useState(null); // Weight trend data
   
   // Elevated Calendar States & Helpers
   const [calMonth, setCalMonth] = useState(() => new Date());
@@ -637,7 +893,7 @@ export default function App(){
   const [sbSyncing, setSbSyncing] = useState(false);
   const [sbError, setSbError] = useState("");
 
-  const target = PRESETS[presetKey];
+  const target = customPresets[presetKey] || customPresets.personalizado || DEFAULT_PRESETS.personalizado;
 
   // Carga inicial
   useEffect(() => { 
@@ -701,6 +957,8 @@ export default function App(){
       let localMeals = await loadKey("meals", DEFAULT_MEALS);
       if (!Array.isArray(localMeals)) localMeals = DEFAULT_MEALS;
       const localSplitKey = await loadKey("active_split_key", "A");
+      let localSplits = await loadKey("training_splits", DEFAULT_SPLITS);
+      if (!Array.isArray(localSplits)) localSplits = DEFAULT_SPLITS;
 
       let localFoodlog = await loadKey("foodlog", {});
       if (!localFoodlog || typeof localFoodlog !== 'object') localFoodlog = {};
@@ -723,28 +981,35 @@ export default function App(){
       let localWorkoutDurations = await loadKey("workout_durations", {});
       if (!localWorkoutDurations || typeof localWorkoutDurations !== 'object') localWorkoutDurations = {};
 
+      let localCustomPresets = await loadKey("custom_presets", DEFAULT_PRESETS);
+      if (!localCustomPresets || typeof localCustomPresets !== 'object') {
+        localCustomPresets = DEFAULT_PRESETS;
+      }
+
       let finalPresetKey = localPresetKey;
+      let finalCustomPresets = localCustomPresets;
       let finalNotes = localNotes;
       let finalChat = localChat;
       let finalExlog = localExlog;
       let finalExercises = localExercises;
-      let finalIsGuardia = false; // Always default to false for desprioritization
       let finalBodyComp = localBodyComp;
       let finalShoppingList = localShoppingList;
       let finalMeals = localMeals;
       let finalSplitKey = localSplitKey;
+      let finalSplits = localSplits;
 
       if (initialData) {
         finalPresetKey = initialData.presetKey || localPresetKey;
+        finalCustomPresets = (initialData.customPresets && typeof initialData.customPresets === 'object') ? initialData.customPresets : localCustomPresets;
         finalNotes = Array.isArray(initialData.notes) ? initialData.notes : localNotes;
         finalChat = Array.isArray(initialData.chat) ? initialData.chat : localChat;
         finalExlog = (initialData.exlog && typeof initialData.exlog === 'object') ? initialData.exlog : localExlog;
         finalExercises = (initialData.exercises && typeof initialData.exercises === 'object') ? initialData.exercises : localExercises;
-        finalIsGuardia = initialData.isGuardia || false;
         finalBodyComp = (initialData.bodyComp && typeof initialData.bodyComp === 'object') ? initialData.bodyComp : localBodyComp;
         finalShoppingList = (initialData.shoppingList && typeof initialData.shoppingList === 'object') ? initialData.shoppingList : localShoppingList;
         finalMeals = Array.isArray(initialData.meals) ? initialData.meals : localMeals;
         finalSplitKey = initialData.activeSplitKey || localSplitKey;
+        finalSplits = Array.isArray(initialData.splits) ? initialData.splits : localSplits;
 
         localFoodlog = (initialData.foodlog && typeof initialData.foodlog === 'object') ? initialData.foodlog : localFoodlog;
         localWaterlog = (initialData.waterlog && typeof initialData.waterlog === 'object') ? initialData.waterlog : localWaterlog;
@@ -820,15 +1085,16 @@ export default function App(){
 
       // Persistir de inmediato localmente para evitar pérdidas
       await saveKey("profile", { presetKey: finalPresetKey });
+      await saveKey("custom_presets", finalCustomPresets);
       await saveKey("notes", finalNotes);
       await saveKey("chat", finalChat);
       await saveKey("exlog", finalExlog);
       await saveKey("exercises", finalExercises);
-      await saveKey("is_guardia", finalIsGuardia);
       await saveKey("body_comp", finalBodyComp);
       await saveKey("shopping_list", finalShoppingList);
       await saveKey("meals", finalMeals);
       await saveKey("active_split_key", finalSplitKey);
+      await saveKey("training_splits", finalSplits);
       
       await saveKey("foodlog", localFoodlog);
       await saveKey("waterlog", localWaterlog);
@@ -841,15 +1107,16 @@ export default function App(){
       }
 
       setPresetKey(finalPresetKey);
+      setCustomPresets(finalCustomPresets);
       setNotes(finalNotes);
       setChat(finalChat);
       setExlog(finalExlog);
       setExercises(finalExercises);
-      setIsGuardia(finalIsGuardia);
       setBodyComp(finalBodyComp);
       setShoppingList(finalShoppingList);
       setMeals(finalMeals);
       setActiveSplitKey(finalSplitKey);
+      setSplits(finalSplits);
 
       setFoodlog(localFoodlog || {});
       setWaterlog(localWaterlog || {});
@@ -870,17 +1137,44 @@ export default function App(){
       setAiModel(await loadKey("gemini_model", "moonshotai/kimi-k2.6:free"));
       setLoaded(true);
 
+      // Load persisted AI data
+      const savedGoals = await loadKey('smart_goals', []);
+      if (savedGoals.length > 0) setSmartGoals(savedGoals);
+      const savedChallenges = await loadKey('challenges', []);
+      if (savedChallenges.length > 0) setChallenges(savedChallenges);
+      const savedInsight = await loadKey('weekly_insight', null);
+      if (savedInsight) setWeeklyInsight(savedInsight);
+      const savedEvent = await loadKey('upcoming_event', null);
+      if (savedEvent) setUpcomingEvent(savedEvent);
+      const savedExperiments = await loadKey('experiments', []);
+      if (savedExperiments.length > 0) setExperiments(savedExperiments);
+      // Run initial pure-JS analysis (non-blocking)
+      setTimeout(() => {
+        try {
+          setOverloadSuggestions(calcProgressiveOverload(finalExlog));
+          setPlateauAlerts(detectPlateaus(finalExlog));
+          setMuscleImbalances(detectMuscleImbalances(finalExlog));
+          const trend = calcWeightTrend(localMetricslog);
+          setWeightTrend(trend);
+          const tdee = calcTDEE(localFoodlog, localMetricslog);
+          setTdeeEstimate(tdee);
+          if (trend && Math.abs(trend.kgPerWeek) < 0.1 && trend.dataPoints >= 7) {
+            setMacroAdjustSuggestion({ type:'stalled', message:'Tu peso lleva '+trend.dataPoints+' registros sin moverse. Considera bajar -150 kcal.', adjustment:-150 });
+          }
+        } catch(e) { console.warn('Load analysis:', e); }
+      }, 800);
+
       // Si la sincronización está activa, intentamos empujar el estado local actual
       if (activeCloudSync && activeCode) {
         const pending = await loadKey("pending_sync", null);
         const updateTime = Date.now();
         const stateToPush = pending || {
           presetKey: finalPresetKey,
+          customPresets: finalCustomPresets,
           notes: finalNotes,
           chat: finalChat,
           exlog: finalExlog,
           exercises: finalExercises,
-          isGuardia: finalIsGuardia,
           bodyComp: finalBodyComp,
           shoppingList: finalShoppingList,
           meals: finalMeals,
@@ -952,15 +1246,20 @@ export default function App(){
 
             // Actualizar estados React
             setPresetKey(cloudData.presetKey || "definicion");
+            if (cloudData.customPresets) {
+              setCustomPresets(cloudData.customPresets);
+            }
             setNotes(cloudData.notes || []);
             setChat(cloudData.chat || []);
             setExlog(cloudData.exlog || {});
             setExercises(cloudData.exercises || seedExercises());
-            setIsGuardia(cloudData.isGuardia || false);
             setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
             setShoppingList(cloudData.shoppingList || { categorias: [] });
             setMeals(cloudData.meals || DEFAULT_MEALS);
             setActiveSplitKey(cloudData.activeSplitKey || "A");
+            if (Array.isArray(cloudData.splits)) {
+              setSplits(cloudData.splits);
+            }
 
             setFoodlog(nextFoodlog);
             setWaterlog(nextWaterlog);
@@ -971,15 +1270,20 @@ export default function App(){
 
             // Guardar localmente
             await saveKey("profile", { presetKey: cloudData.presetKey || "definicion" });
+            if (cloudData.customPresets) {
+              await saveKey("custom_presets", cloudData.customPresets);
+            }
             await saveKey("notes", cloudData.notes || []);
             await saveKey("chat", cloudData.chat || []);
             await saveKey("exlog", cloudData.exlog || {});
             await saveKey("exercises", cloudData.exercises || seedExercises());
-            await saveKey("is_guardia", cloudData.isGuardia || false);
             await saveKey("body_comp", cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
             await saveKey("shopping_list", cloudData.shoppingList || { categorias: [] });
             await saveKey("meals", cloudData.meals || DEFAULT_MEALS);
             await saveKey("active_split_key", cloudData.activeSplitKey || "A");
+            if (Array.isArray(cloudData.splits)) {
+              await saveKey("training_splits", cloudData.splits);
+            }
             
             await saveKey("foodlog", nextFoodlog);
             await saveKey("waterlog", nextWaterlog);
@@ -1079,37 +1383,56 @@ export default function App(){
       nextWorkoutDurations = updates.workoutDurations;
     }
 
+    let nextCustomPresets = { ...customPresets };
+    if (updates.customPresets !== undefined) {
+      nextCustomPresets = updates.customPresets;
+    }
+
+    let nextExperiments = [...experiments];
+    if (updates.experiments !== undefined) {
+      nextExperiments = updates.experiments;
+    }
+
+    let nextSplits = [...splits];
+    if (updates.splits !== undefined) {
+      nextSplits = updates.splits;
+    }
+
     const current = {
       presetKey: updates.presetKey !== undefined ? updates.presetKey : presetKey,
+      customPresets: nextCustomPresets,
       notes: updates.notes !== undefined ? updates.notes : notes,
       chat: updates.chat !== undefined ? updates.chat : chat,
       exlog: updates.exlog !== undefined ? updates.exlog : exlog,
       exercises: updates.exercises !== undefined ? updates.exercises : exercises,
-      isGuardia: updates.isGuardia !== undefined ? updates.isGuardia : isGuardia,
       bodyComp: updates.bodyComp !== undefined ? updates.bodyComp : bodyComp,
       shoppingList: updates.shoppingList !== undefined ? updates.shoppingList : shoppingList,
       meals: updates.meals !== undefined ? updates.meals : meals,
       activeSplitKey: updates.activeSplitKey !== undefined ? updates.activeSplitKey : activeSplitKey,
+      splits: nextSplits,
       foodlog: nextFoodlog,
       waterlog: nextWaterlog,
       suppslog: nextSuppslog,
       metricslog: nextMetricslog,
       suppsInventory: nextSuppsInventory,
       workoutDurations: nextWorkoutDurations,
+      experiments: nextExperiments,
       updatedAt: updateTime
     };
 
     // Guardar local
     if (updates.presetKey !== undefined) await saveKey("profile", { presetKey: updates.presetKey });
+    if (updates.customPresets !== undefined) await saveKey("custom_presets", updates.customPresets);
     if (updates.notes !== undefined) await saveKey("notes", updates.notes);
     if (updates.chat !== undefined) await saveKey("chat", updates.chat);
     if (updates.exlog !== undefined) await saveKey("exlog", updates.exlog);
     if (updates.exercises !== undefined) await saveKey("exercises", updates.exercises);
-    if (updates.isGuardia !== undefined) await saveKey("is_guardia", updates.isGuardia);
     if (updates.bodyComp !== undefined) await saveKey("body_comp", updates.bodyComp);
     if (updates.shoppingList !== undefined) await saveKey("shopping_list", updates.shoppingList);
     if (updates.meals !== undefined) await saveKey("meals", updates.meals);
     if (updates.activeSplitKey !== undefined) await saveKey("active_split_key", updates.activeSplitKey);
+    if (updates.experiments !== undefined) await saveKey("experiments", updates.experiments);
+    if (updates.splits !== undefined) await saveKey("training_splits", updates.splits);
     
     await saveKey("foodlog", nextFoodlog);
     await saveKey("waterlog", nextWaterlog);
@@ -1125,6 +1448,10 @@ export default function App(){
     if (updates.metricslog !== undefined || updates.weight !== undefined || updates.bodyComp !== undefined) setMetricslog(nextMetricslog);
     if (updates.suppsInventory !== undefined) setSuppsInventory(nextSuppsInventory);
     if (updates.workoutDurations !== undefined) setWorkoutDurations(nextWorkoutDurations);
+    if (updates.customPresets !== undefined) setCustomPresets(nextCustomPresets);
+    if (updates.presetKey !== undefined) setPresetKey(updates.presetKey);
+    if (updates.experiments !== undefined) setExperiments(nextExperiments);
+    if (updates.splits !== undefined) setSplits(nextSplits);
 
     // Guardar nube
     if (cloudSync && syncCode && !syncCode.startsWith("bf-")) {
@@ -1145,18 +1472,28 @@ export default function App(){
           const uId = supabaseUser.id;
           
           // 1. Perfil
-          if (updates.presetKey !== undefined || updates.activeSplitKey !== undefined || updates.isGuardia !== undefined || updates.bodyComp !== undefined || updates.meals !== undefined || updates.shoppingList !== undefined) {
-            await supabase.from('profiles').upsert({
+          if (updates.presetKey !== undefined || updates.activeSplitKey !== undefined || updates.bodyComp !== undefined || updates.meals !== undefined || updates.shoppingList !== undefined || updates.splits !== undefined) {
+            const dataToUpsert = {
               id: uId,
               email: supabaseUser.email,
               preset_key: updates.presetKey !== undefined ? updates.presetKey : presetKey,
               active_split_key: updates.activeSplitKey !== undefined ? updates.activeSplitKey : activeSplitKey,
-              is_guardia: updates.isGuardia !== undefined ? updates.isGuardia : isGuardia,
               body_comp: updates.bodyComp !== undefined ? updates.bodyComp : bodyComp,
               meals: updates.meals !== undefined ? updates.meals : meals,
               shopping_list: updates.shoppingList !== undefined ? updates.shoppingList : shoppingList,
+              splits: updates.splits !== undefined ? updates.splits : splits,
               updated_at: new Date().toISOString()
-            });
+            };
+            try {
+              const { error } = await supabase.from('profiles').upsert(dataToUpsert);
+              if (error) {
+                delete dataToUpsert.splits;
+                await supabase.from('profiles').upsert(dataToUpsert);
+              }
+            } catch (err) {
+              delete dataToUpsert.splits;
+              await supabase.from('profiles').upsert(dataToUpsert);
+            }
           }
 
           // 2. Nutrición (Comidas, Agua, Suplementos)
@@ -1354,7 +1691,6 @@ export default function App(){
         email: uEmail,
         preset_key: presetKey,
         active_split_key: activeSplitKey,
-        is_guardia: isGuardia,
         body_comp: bodyComp,
         meals: meals,
         shopping_list: shoppingList,
@@ -1466,12 +1802,6 @@ export default function App(){
     saveState({ water: v });
   };
 
-  const toggleGuardia = () => {
-    const next = !isGuardia;
-    setIsGuardia(next);
-    saveState({ isGuardia: next });
-  };
-
   const saveGeminiKey = (k) => {
     setGeminiKey(k);
     saveKey("gemini_api_key", k);
@@ -1491,7 +1821,7 @@ export default function App(){
       setSyncStatus("Sincronizando...");
       const today = new Date().toISOString().slice(0,10);
       const updateTime = Date.now();
-      const current = { presetKey, log, notes, chat, exlog, exercises, water, supplements, isGuardia, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, updatedAt: updateTime };
+      const current = { presetKey, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, updatedAt: updateTime };
       try {
         await pushStateToCloud(syncCode, current);
         setSyncStatus("Sincronizado");
@@ -1532,7 +1862,7 @@ export default function App(){
         
         const today = new Date().toISOString().slice(0,10);
         const updateTime = Date.now();
-        const current = { presetKey, log, notes, chat, exlog, exercises, water, supplements, isGuardia, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, updatedAt: updateTime };
+        const current = { presetKey, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, updatedAt: updateTime };
         try {
           await pushStateToCloud(code, current);
           setSyncStatus("Sincronizado");
@@ -1578,11 +1908,13 @@ export default function App(){
       setExercises(cloudData.exercises || seedExercises());
       setWater(finalWater);
       setSupplements(finalSupplements);
-      setIsGuardia(cloudData.isGuardia || false);
       setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       setShoppingList(cloudData.shoppingList || { categorias: [] });
       setMeals(cloudData.meals || DEFAULT_MEALS);
       setActiveSplitKey(cloudData.activeSplitKey || "A");
+      if (Array.isArray(cloudData.splits)) {
+        setSplits(cloudData.splits);
+      }
       
       setFoodlog(cloudData.foodlog || {});
       setWaterlog(cloudData.waterlog || {});
@@ -1603,11 +1935,13 @@ export default function App(){
       await saveKey("exercises", cloudData.exercises || seedExercises());
       await saveKey(waterKey(), finalWater);
       await saveKey(suppsKey(), finalSupplements);
-      await saveKey("is_guardia", cloudData.isGuardia || false);
       await saveKey("body_comp", cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       await saveKey("shopping_list", cloudData.shoppingList || { categorias: [] });
       await saveKey("meals", cloudData.meals || DEFAULT_MEALS);
       await saveKey("active_split_key", cloudData.activeSplitKey || "A");
+      if (Array.isArray(cloudData.splits)) {
+        await saveKey("training_splits", cloudData.splits);
+      }
       
       await saveKey("foodlog", cloudData.foodlog || {});
       await saveKey("waterlog", cloudData.waterlog || {});
@@ -1647,11 +1981,13 @@ export default function App(){
       setExercises(cloudData.exercises || seedExercises());
       setWater(finalWater);
       setSupplements(finalSupplements);
-      setIsGuardia(cloudData.isGuardia || false);
       setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       setShoppingList(cloudData.shoppingList || { categorias: [] });
       setMeals(cloudData.meals || DEFAULT_MEALS);
       setActiveSplitKey(cloudData.activeSplitKey || "A");
+      if (Array.isArray(cloudData.splits)) {
+        setSplits(cloudData.splits);
+      }
       
       setFoodlog(cloudData.foodlog || {});
       setWaterlog(cloudData.waterlog || {});
@@ -1672,11 +2008,13 @@ export default function App(){
       await saveKey("exercises", cloudData.exercises || seedExercises());
       await saveKey(waterKey(), finalWater);
       await saveKey(suppsKey(), finalSupplements);
-      await saveKey("is_guardia", cloudData.isGuardia || false);
       await saveKey("body_comp", cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       await saveKey("shopping_list", cloudData.shoppingList || { categorias: [] });
       await saveKey("meals", cloudData.meals || DEFAULT_MEALS);
       await saveKey("active_split_key", cloudData.activeSplitKey || "A");
+      if (Array.isArray(cloudData.splits)) {
+        await saveKey("training_splits", cloudData.splits);
+      }
       
       await saveKey("foodlog", cloudData.foodlog || {});
       await saveKey("waterlog", cloudData.waterlog || {});
@@ -1695,13 +2033,127 @@ export default function App(){
     }
   };
 
+  // ════════════════════════════════════════════════════════
+  // ██ AI INTELLIGENCE ENGINE — 20 FEATURES ██
+  // ════════════════════════════════════════════════════════
+
+  // #8 + #6 + #9 + #1 + #7 + #14 — Pure JS (instant, no AI quota)
+  const runLocalAnalysis = (eLog, fLog, mLog, nts, tgt) => {
+    setOverloadSuggestions(calcProgressiveOverload(eLog));
+    setPlateauAlerts(detectPlateaus(eLog));
+    setMuscleImbalances(detectMuscleImbalances(eLog));
+    const trend = calcWeightTrend(mLog);
+    setWeightTrend(trend);
+    const tdee = calcTDEE(fLog, mLog);
+    setTdeeEstimate(tdee);
+    if (tdee && tgt) {
+      const latestM = Object.entries(mLog||{}).filter(([_,v])=>v?.weight).sort((a,b)=>b[0].localeCompare(a[0]))[0]?.[1];
+      if (latestM) setProjections(calcBodyProjection(parseFloat(latestM.weight), parseFloat(latestM.grasaPct)||25, tdee, tgt.kcal, 12));
+    }
+    if (trend && Math.abs(trend.kgPerWeek) < 0.1 && trend.dataPoints >= 7) {
+      setMacroAdjustSuggestion({ type:"stalled", message:`Tu peso lleva ${trend.dataPoints} registros sin moverse (${trend.kgPerWeek>=0?"+":""}${trend.kgPerWeek} kg/sem). Considera bajar -150 kcal.`, adjustment:-150 });
+    } else if (trend && Math.abs(trend.kgPerWeek) > 0.8 && trend.trend === "bajando") {
+      setMacroAdjustSuggestion({ type:"too_fast", message:`Perdiendo ${Math.abs(trend.kgPerWeek)} kg/sem — muy rápido. Sube +200 kcal para proteger el músculo.`, adjustment:200 });
+    } else { setMacroAdjustSuggestion(null); }
+    const fatigueCount = detectFatigueFromNotes(nts);
+    if (fatigueCount >= 2) {
+      setAiNotifications(prev => [{ id:"fatigue", type:"warning", icon:"⚡", title:fatigueCount>=3?"Posible Sobreentrenamiento":"Fatiga detectada", message:fatigueCount>=3?"3+ notas de fatiga. Reduce volumen 40% por 3-5 días y sube kcal a mantenimiento.":"2 notas de fatiga esta semana. Descansa bien esta noche.", urgency:fatigueCount>=3?"high":"medium" },...prev.filter(n=>n.id!=="fatigue")].slice(0,8));
+    }
+  };
+
+  // #16 Proactive Coach — time-aware messages
+  const runProactiveCoach = (fLog, eLog, tgt) => {
+    const now = new Date(), hour = now.getHours(), todayStr = now.toISOString().slice(0,10);
+    const todayLog = fLog[todayStr] || [];
+    const todayKcal = todayLog.reduce((s,e)=>s+(+e.kcal||0),0);
+    const todayProtein = todayLog.reduce((s,e)=>s+(+e.proteina||0),0);
+    const todayHasWorkout = Object.values(eLog||{}).some(sets=>(sets||[]).some(s=>s?.date?.slice(0,10)===todayStr));
+    let msg = null;
+    if (hour>=7&&hour<=9&&todayKcal<100) msg={icon:"🌅",text:`Buenos días! Objetivo: ${tgt?.kcal||2200} kcal · ${tgt?.p||180}g proteína. Registra tu desayuno.`};
+    else if (hour>=12&&hour<=13&&todayKcal<400) msg={icon:"🍽️",text:`Son las ${hour}:00h y llevas solo ${todayKcal} kcal. Come bien antes del entreno.`};
+    else if (hour>=17&&hour<=19&&!todayHasWorkout&&todayKcal>200) msg={icon:"💪",text:`¿Ya entrenaste? Llevas ${todayProtein}g de ${tgt?.p||180}g proteína objetivo.`};
+    else if (hour>=21&&todayProtein<(tgt?.p||180)*0.7) msg={icon:"🥛",text:`Cierre del día: ${todayProtein}g de ${tgt?.p||180}g proteína. Un batido antes de dormir te ayuda.`};
+    setProactiveMsg(msg);
+  };
+
+  // #19 Weekly Insight — AI correlation analysis (runs once per day)
+  const runWeeklyInsight = async (fLog, eLog, mLog, nts, tgt) => {
+    const lastRun = await loadKey("weekly_insight_date","");
+    const today = new Date().toISOString().slice(0,10);
+    if (lastRun===today) { const saved=await loadKey("weekly_insight",null); if(saved) setWeeklyInsight(saved); return; }
+    const stats = getWeeklyStats(fLog, eLog, mLog, nts);
+    if (stats.avgKcal===0&&stats.trainDays===0) return;
+    try {
+      const out = await callGemini([{role:"user",content:`Semana de Bruno: ${stats.trainDays} días entreno, ${stats.avgProtein}g proteína promedio (objetivo ${tgt?.p||180}g), ${stats.avgKcal} kcal (objetivo ${tgt?.kcal||2200}), cambio de peso: ${stats.weightChange!==null?stats.weightChange.toFixed(2)+"kg":"sin datos"}, notas fatiga: ${stats.fatigueCount}. Genera UN insight específico y accionable (máx 2 oraciones con datos reales).`}],"Coach fitness. Responde en español, máx 2 oraciones, datos específicos.",null);
+      const insight={text:out.trim(),date:today,stats};
+      setWeeklyInsight(insight);
+      await saveKey("weekly_insight",insight);
+      await saveKey("weekly_insight_date",today);
+    } catch(e){console.warn("Weekly insight:",e);}
+  };
+
+  // #20 Weekly Challenges
+  const generateWeeklyChallenges = async (fLog, tgt, eLog) => {
+    const thisMonday=(()=>{const d=new Date();d.setDate(d.getDate()-d.getDay()+1);return d.toISOString().slice(0,10);})();
+    const lastRun=await loadKey("challenges_date","");
+    if (lastRun===thisMonday){const saved=await loadKey("challenges",[]);if(saved.length>0){setChallenges(saved);return;}}
+    const pattern=analyzeMacroPattern(fLog);
+    const pt=tgt?.p||180;
+    const chlngs=[
+      {id:uid(),icon:"🥩",title:"Proteína diaria",desc:`Supera ${pt}g de proteína ${pattern&&pattern.avgP<pt*0.8?"cada":"al menos 5"} días esta semana`,metric:"protein_days",target:pattern&&pattern.avgP<pt*0.8?7:5,progress:0,completed:false},
+      {id:uid(),icon:"💧",title:"Hidratación perfecta",desc:"Registra 3L de agua al menos 5 días esta semana",metric:"water_5days",target:5,progress:0,completed:false},
+      {id:uid(),icon:"💪",title:"4 entrenos",desc:"Completa al menos 4 sesiones de entrenamiento esta semana",metric:"workout_sessions",target:4,progress:0,completed:false}
+    ];
+    setChallenges(chlngs);
+    await saveKey("challenges",chlngs);
+    await saveKey("challenges_date",thisMonday);
+  };
+
+  // #10 Smart Goal from PR
+  const addSmartGoalFromPR = (exName, prWeight) => {
+    const isCompound=["Sentadilla","Peso muerto","Press banca","Remo","Prensa"].some(c=>exName.includes(c));
+    const nextTarget=prWeight+(isCompound?5:2.5);
+    const newGoal={id:uid(),icon:"🏆",exercise:exName,title:`${exName}: ${nextTarget}kg`,desc:`Levanta ${nextTarget}kg en ${exName}`,currentPR:prWeight,targetPR:nextTarget,deadline:new Date(Date.now()+28*86400000).toISOString().slice(0,10),created:new Date().toISOString()};
+    setSmartGoals(prev=>{const updated=[newGoal,...prev.filter(g=>g.exercise!==exName)].slice(0,5);saveKey("smart_goals",updated);return updated;});
+    setAiNotifications(prev=>[{id:"goal_"+uid(),type:"success",icon:"🏆",title:"Nuevo Smart Goal",message:`PR de ${prWeight}kg en ${exName}. Próximo: ${nextTarget}kg en 4 semanas.`,urgency:"low"},...prev].slice(0,8));
+  };
+
+  // ── Central Analysis Dispatcher ──
+  const analyzeAndReconfigure = async (trigger, ctx={}) => {
+    if (analyzeBusy) return;
+    const eLog=ctx.currentExlog||exlog, fLog=ctx.currentFoodlog||foodlog, mLog=ctx.currentMetricslog||metricslog, nts=ctx.currentNotes||notes, tgt=ctx.currentTarget||target;
+    runLocalAnalysis(eLog,fLog,mLog,nts,tgt);
+    runProactiveCoach(fLog,eLog,tgt);
+    const aiTriggers=["weight_saved","weekly_check","app_load_weekly"];
+    if (!aiTriggers.includes(trigger)) return;
+    setAnalyzeBusy(true);
+    try {
+      if (["weekly_check","app_load_weekly"].includes(trigger)){
+        await runWeeklyInsight(fLog,eLog,mLog,nts,tgt);
+        await generateWeeklyChallenges(fLog,tgt,eLog);
+      }
+      if (trigger==="weight_saved"){
+        const trend=calcWeightTrend(mLog), tdee=calcTDEE(fLog,mLog);
+        if (trend&&trend.dataPoints>=5){
+          const tdeeMsg=tdee?` TDEE real: ~${tdee} kcal/día.`:"";
+          setAiNotifications(prev=>[{id:"weight_analysis",type:"info",icon:"⚖️",title:"Análisis de tendencia",message:`${trend.trend==="bajando"?"📉":trend.trend==="subiendo"?"📈":"➡️"} ${trend.trend} ${trend.kgPerWeek>=0?"+":""}${trend.kgPerWeek} kg/sem (${trend.dataPoints} registros).${tdeeMsg}`,urgency:"medium"},...prev.filter(n=>n.id!=="weight_analysis")].slice(0,8));
+        }
+      }
+    } catch(e){console.warn("analyzeAndReconfigure:",e);}
+    finally{setAnalyzeBusy(false);}
+  };
+
+  const updateChallengeProgress = (challengeId, newProgress, completed=false) => {
+    setChallenges(prev=>{const updated=prev.map(c=>c.id===challengeId?{...c,progress:newProgress,completed}:c);saveKey("challenges",updated);return updated;});
+  };
+
   const handleForcePush = async () => {
     if (!syncCode) return;
     setSyncStatus("Sincronizando...");
     const today = new Date().toISOString().slice(0,10);
     const updateTime = Date.now();
     const current = { 
-      presetKey, log, notes, chat, exlog, exercises, water, supplements, isGuardia, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, 
+      presetKey, customPresets, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, 
       foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations,
       updatedAt: updateTime 
     };
@@ -1721,9 +2173,21 @@ export default function App(){
     let updatedLog = [...log];
     let updatedNotes = [...notes];
     let updatedExlog = { ...exlog };
+    let nextPresets = { ...customPresets };
+    let nextMeals = [...meals];
+    let nextMetricslog = { ...metricslog };
+    let presetKeyToSet = presetKey;
+    let eventToSet = upcomingEvent;
+    let nextSplits = [...splits];
+    
     let hasLog = false;
     let hasNotes = false;
     let hasExlog = false;
+    let hasPresets = false;
+    let hasMeals = false;
+    let hasMetricslog = false;
+    let hasEvent = false;
+    let hasSplits = false;
 
     actions.forEach(act => {
       if (act.type === "ADD_FOOD" && act.data) {
@@ -1750,6 +2214,16 @@ export default function App(){
           };
           updatedNotes = [e, ...updatedNotes];
           hasNotes = true;
+          
+          const dStr = new Date().toISOString().slice(0, 10);
+          nextMetricslog[dStr] = {
+            ...(nextMetricslog[dStr] || {}),
+            weight: wVal,
+            musculo: (nextMetricslog[dStr] || {}).musculo || bodyComp.musculo,
+            grasaPct: (nextMetricslog[dStr] || {}).grasaPct || bodyComp.grasaPct,
+            visceral: (nextMetricslog[dStr] || {}).visceral || bodyComp.visceral
+          };
+          hasMetricslog = true;
         }
       } else if (act.type === "ADD_SET" && act.data) {
         const exName = act.data.exercise;
@@ -1769,6 +2243,62 @@ export default function App(){
           updatedExlog[exName] = [e, ...(updatedExlog[exName] || [])].slice(0, 60);
           hasExlog = true;
         }
+      } else if (act.type === "UPDATE_TARGET" && act.data) {
+        const newKcal = parseFloat(act.data.kcal);
+        const newP = parseFloat(act.data.proteina);
+        const newC = parseFloat(act.data.carbo);
+        const newF = parseFloat(act.data.grasa);
+        if (!isNaN(newKcal) && newKcal > 0) {
+          const targetKey = presetKeyToSet || "personalizado";
+          const existingPreset = nextPresets[targetKey] || { label: "Personalizado", kcal: 2000, p: 150, c: 200, f: 60 };
+          nextPresets = {
+            ...nextPresets,
+            [targetKey]: {
+              ...existingPreset,
+              kcal: newKcal,
+              p: !isNaN(newP) ? newP : Math.round(newKcal * 0.35 / 4),
+              c: !isNaN(newC) ? newC : Math.round(newKcal * 0.40 / 4),
+              f: !isNaN(newF) ? newF : Math.round(newKcal * 0.25 / 9)
+            }
+          };
+          hasPresets = true;
+        }
+        if (act.data.meals && Array.isArray(act.data.meals) && act.data.meals.length > 0) {
+          nextMeals = act.data.meals;
+          hasMeals = true;
+        }
+      } else if (act.type === "UPDATE_SPLITS" && act.data) {
+        if (act.data.splits && Array.isArray(act.data.splits) && act.data.splits.length > 0) {
+          nextSplits = act.data.splits;
+          hasSplits = true;
+        }
+      } else if (act.type === "CHANGE_PHASE" && act.data) {
+        const phase = act.data.phase;
+        const newKcal = parseFloat(act.data.kcal);
+        const newP = parseFloat(act.data.proteina);
+        const newC = parseFloat(act.data.carbo);
+        const newF = parseFloat(act.data.grasa);
+        if (phase && nextPresets[phase]) {
+          nextPresets = {
+            ...nextPresets,
+            [phase]: {
+              ...nextPresets[phase],
+              kcal: !isNaN(newKcal) ? newKcal : nextPresets[phase].kcal,
+              p: !isNaN(newP) ? newP : nextPresets[phase].p,
+              c: !isNaN(newC) ? newC : nextPresets[phase].c,
+              f: !isNaN(newF) ? newF : nextPresets[phase].f,
+            }
+          };
+          hasPresets = true;
+          presetKeyToSet = phase;
+        }
+      } else if (act.type === "SET_EVENT" && act.data) {
+        const name = act.data.eventName || "Evento";
+        const date = act.data.eventDate;
+        if (date) {
+          eventToSet = { name, date };
+          hasEvent = true;
+        }
       }
     });
 
@@ -1785,9 +2315,37 @@ export default function App(){
       setExlog(updatedExlog);
       updates.exlog = updatedExlog;
     }
+    if (hasPresets) {
+      setCustomPresets(nextPresets);
+      setPresetKey(presetKeyToSet);
+      updates.customPresets = nextPresets;
+      updates.presetKey = presetKeyToSet;
+    }
+    if (hasMeals) {
+      setMeals(nextMeals);
+      updates.meals = nextMeals;
+    }
+    if (hasMetricslog) {
+      setMetricslog(nextMetricslog);
+      updates.metricslog = nextMetricslog;
+    }
+    if (hasEvent) {
+      setUpcomingEvent(eventToSet);
+      saveKey("upcoming_event", eventToSet);
+    }
+    if (hasSplits) {
+      setSplits(nextSplits);
+      updates.splits = nextSplits;
+    }
     
-    if (hasLog || hasNotes || hasExlog) {
+    if (hasLog || hasNotes || hasExlog || hasPresets || hasMeals || hasMetricslog || hasEvent || hasSplits) {
       saveState(updates);
+    }
+
+    if (hasMetricslog) {
+      setTimeout(() => {
+        analyzeAndReconfigure("weight_saved", { currentMetricslog: nextMetricslog });
+      }, 300);
     }
   };
 
@@ -1910,7 +2468,7 @@ export default function App(){
     const todayKey = `dailyGreeting_${new Date().toISOString().slice(0, 10)}`;
     if (localStorage.getItem(todayKey)) return; // ya se envió hoy
     localStorage.setItem(todayKey, '1');
-    const activeSplit = SPLIT.find(s => s.key === activeSplitKey) || SPLIT[0];
+    const activeSplit = splits.find(s => s.key === activeSplitKey) || splits[0] || DEFAULT_SPLITS[0];
     await sendCoachMessage(`[Análisis automático de apertura] Dame un resumen rápido de mi estado actual: qué músculo me toca hoy según mi split (${activeSplit.name}), cómo voy con mi progresión de fuerza esta semana y si hay algo importante en mi historial que deba tener en cuenta hoy.`);
   };
 
@@ -1926,7 +2484,7 @@ export default function App(){
     await saveState({ chat: nextChat });
     
     try {
-      const activeSplit = SPLIT.find(s => s.key === activeSplitKey) || SPLIT[0];
+      const activeSplit = splits.find(s => s.key === activeSplitKey) || splits[0] || DEFAULT_SPLITS[0];
       const todayWorkout = getTodayWorkoutSummary();
 
       // Get latest metrics for prompt
@@ -1979,7 +2537,14 @@ export default function App(){
 
       const workoutHistory = buildWorkoutHistorySummary();
 
-      const sys = `Eres el coach nutricional y de fuerza de Bruno. ${getProfileStr(isGuardia, activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)}
+      // Get all exercise names from splits and custom exercises
+      const allExerciseNames = [...new Set([
+        ...splits.flatMap(s => s.ex || []),
+        ...Object.keys(exercises)
+      ])];
+      const exerciseNamesStr = allExerciseNames.join(", ");
+
+      const sys = `Eres el coach nutricional y de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)}
 Plan nutricional activo: ${target.kcal} kcal (${target.label}), P:${target.p}g / C:${target.c}g / G:${target.f}g.
 Métricas antropométricas y corporales: ${metricsSummary}
 Historial nutricional acumulado reciente: ${recentNutrition}
@@ -1994,13 +2559,22 @@ ${workoutHistory}
 --- FIN HISTORIAL ---
 
 Español, directo, técnico y motivador. Usa el historial para dar recomendaciones personalizadas y basadas en datos reales (PRs, progresión, volumen). Si detectás estancamiento o regresión en algún ejercicio, mencionalo proactivamente.
-REGLA DE CALCULADORA INVERSA: Si Bruno te pregunta qué cenar o comer para cerrar el día o cómo completar sus macros restantes (ej. 'me quedan 600 calorías y 50g de proteína...'), calcula con precisión matemática una combinación rápida de alimentos (ej. claras, huevo entero, gramos exactos de pechuga de pollo, scoop de whey) para cuadrar sus números de forma exacta.\nREGLA CRÍTICA DE PORCIONES E INGREDIENTES: Cuando recomiendes porciones, alimentos o comidas en el chat, debes ajustar estrictamente las porciones (detallando gramos exactos) al plan nutricional seleccionado por Bruno (${target.label}) y a las necesidades energéticas del split del día (${activeSplit.fuel}). No recomiendes las mismas porciones por defecto. Si está en "Volumen" o día de "Carbo alto", propón porciones abundantes de carbohidratos. Si está en "Definición" o día de "Carbo medio", sé sumamente estricto y reduce las porciones de carbohidratos, sugiriendo fuentes de proteína magra más saciantes.\nREGLA DE DATOS NUTRICIONALES DE REFERENCIA: Para calcular calorías y macronutrientes de los alimentos registrados (ADD_FOOD) o recomendados en el chat, debes basar tus cálculos estrictamente en bases de datos nutricionales oficiales y verificadas (como USDA FoodData Central o tablas locales de Latinoamérica/Chile). No inventes ni alucines valores; asegúrate de que todas las estimaciones por porción/gramaje sean científicamente coherentes con estas fuentes oficiales.
+REGLA DE CALCULADORA INVERSA: Si Bruno te pregunta qué cenar o comer para cerrar el día o cómo completar sus macros restantes (ej. 'me quedan 600 calorías y 50g de proteína...'), calcula con precisión matemática una combinación rápida de alimentos (ej. claras, huevo entero, gramos exactos de pechuga de pollo, scoop de whey) para cuadrar sus números de forma exacta.
+REGLA CRÍTICA DE PORCIONES E INGREDIENTES: Cuando recomiendes porciones, alimentos o comidas en el chat, debes ajustar estrictamente las porciones (detallando gramos exactos) al plan nutricional seleccionado por Bruno (${target.label}) y a las necesidades energéticas del split del día (${activeSplit.fuel}). No recomiendes las mismas porciones por defecto. Si está en "Volumen" o día de "Carbo alto", propón porciones abundantes de carbohidratos. Si está en "Definición" o día de "Carbo medio", sé sumamente estricto y reduce las porciones de carbohidratos, sugiriendo fuentes de proteína magra más saciantes.
+REGLA DE DATOS NUTRICIONALES DE REFERENCIA: Para calcular calorías y macronutrientes de los alimentos registrados (ADD_FOOD) o recomendados en el chat, debes basar tus cálculos estrictamente en bases de datos nutricionales oficiales y verificadas (como USDA FoodData Central o tablas locales de Latinoamérica/Chile). No inventes ni alucines valores; asegúrate de que todas las estimaciones por porción/gramaje sean científicamente coherentes con estas fuentes oficiales.
 
-Debes responder SIEMPRE en formato JSON cumpliendo con el esquema COACH_SCHEMA. Si Bruno te pide agregar o registrar comida (ADD_FOOD), peso (ADD_WEIGHT) o series de ejercicios (ADD_SET), incluye las acciones correspondientes en el arreglo 'actions'. Si es solo una conversación o duda normal, el arreglo 'actions' debe ser vacío.
-Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Aperturas, Curl inclinado, Curl martillo, Curl prono barra, Sentadilla, Prensa 45°, Sentadilla búlgara, Sentadilla ciclista Smith, Extensión cuádriceps, Press Arnold, Vuelos laterales, Vuelos posteriores polea, Dominadas / Jalón, Remo barra, Remo máquina, Pullover polea, Face pull, Press cerrado, Extensión polea, Extensión sobre cabeza, Peso muerto, Leg curl sentado, Puente glúteos, Estocada atrás Smith.`;
+Debes responder SIEMPRE en formato JSON cumpliendo con el esquema COACH_SCHEMA. Si Bruno te pide agregar o registrar comida (ADD_FOOD), peso (ADD_WEIGHT), series de ejercicios (ADD_SET) o cambiar su límite/objetivo de calorías o macros diarios (UPDATE_TARGET), o cambiar la rutina de splits/entrenamiento (UPDATE_SPLITS), incluye las acciones correspondientes en el arreglo 'actions'. Si es solo una conversación o duda normal, el arreglo 'actions' debe ser vacío.
+REGLAS DE ACCIÓN UPDATE_TARGET:
+* Si Bruno te pide cambiar sus calorías objetivo (ej. "súbeme las calorías a 2800" o "estoy definiendo muy lento, baja las calorías"), genera una acción con type "UPDATE_TARGET".
+* En 'data', proporciona: 'kcal' (número). Opcionalmente puedes definir 'proteina' (número), 'carbo' (número) y 'grasa' (número). Si Bruno no especifica macros, calcula una distribución balanceada hiperproteica (ej: 2.2g de proteína por kg de peso, 20-25% grasa, y el resto carbohidratos).
+* De manera opcional y recomendada, si cambias el límite de calorías, puedes incluir una nueva distribución sugerida de comidas en la propiedad 'meals' de 'data' que cumpla exactamente con este nuevo límite calórico (manteniendo el formato de slot, kcal y opts). Esto actualizará automáticamente su dieta de hoy.
+REGLAS DE ACCIÓN UPDATE_SPLITS:
+* Si Bruno te pide cambiar su plan/rutina de entrenamiento, agregar o quitar ejercicios de un split (ej. "saca curl de bíceps de la rutina de brazos" o "cambia el split de hoy a empuje e incluye press inclinado y aperturas"), genera una acción con type "UPDATE_SPLITS".
+* En 'data', proporciona: 'splits' (arreglo que contiene la estructura COMPLETA de todos los días de entrenamiento, cada uno con key, name, fuel y ex).
+      Ejercicios válidos para ADD_SET: ${exerciseNamesStr}.`;
       
       const out = await callGemini(nextChat.slice(-12), sys, COACH_SCHEMA);
-      const parsed = JSON.parse(out);
+      const parsed = cleanAndParseJSON(out);
       
       if (parsed.actions && parsed.actions.length > 0) {
         handleCoachActions(parsed.actions);
@@ -2083,6 +2657,7 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
 
     if (newPrs.length > 0) {
       setPrAlerts(newPrs);
+      newPrs.forEach(function(prStr) { var m = prStr.match(/^([^:]+).*?([0-9]+(?:\.[0-9]+)?)\s*kg/); if(m) addSmartGoalFromPR(m[1].trim(), parseFloat(m[2])); });
     }
 
     const updates = { exlog: updatedExlog };
@@ -2091,6 +2666,7 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
       setExercises(updatedExercises);
     }
     setExlog(updatedExlog);
+    setTimeout(function() { analyzeAndReconfigure("training_saved", { currentExlog: updatedExlog }); }, 300);
     saveState(updates);
   };
 
@@ -2149,7 +2725,6 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
             loaded={loaded} 
             water={water} 
             setWater={setWaterP} 
-            isGuardia={isGuardia}
             geminiKey={geminiKey}
             supplements={supplements}
             handleUpdateSupplements={(newSupps, newInv) => {
@@ -2162,6 +2737,21 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
             setSuppsInventory={(si) => saveState({ suppsInventory: si })}
             selectedDateStr={selectedDateStr}
             setSelectedDateStr={setSelectedDateStr}
+            proactiveMsg={proactiveMsg}
+            aiNotifications={aiNotifications}
+            setAiNotifications={setAiNotifications}
+            macroAdjustSuggestion={macroAdjustSuggestion}
+            setMacroAdjustSuggestion={setMacroAdjustSuggestion}
+            saveState={saveState}
+            customPresets={customPresets}
+            weeklyInsight={weeklyInsight}
+            smartGoals={smartGoals}
+            challenges={challenges}
+            updateChallengeProgress={updateChallengeProgress}
+            splits={splits}
+            upcomingEvent={upcomingEvent}
+            experiments={experiments}
+            setExperiments={setExperiments}
           />
         )}
         {view === "coach" && (
@@ -2170,7 +2760,6 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
             setChat={(c) => { setChat(c); saveState({ chat: c }); }} 
             target={target} 
             totals={totals} 
-            isGuardia={isGuardia}
             geminiKey={geminiKey}
             saveGeminiKey={saveGeminiKey}
             aiModel={aiModel}
@@ -2199,6 +2788,7 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
             syncLocalToSupabase={syncLocalToSupabase}
             changePreset={changePreset}
             presetKey={presetKey}
+            customPresets={customPresets}
           />
         )}
         {view === "entreno" && (
@@ -2207,7 +2797,6 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
             setExlog={(el) => { setExlog(el); saveState({ exlog: el }); }} 
             exercises={exercises} 
             setExercises={(ex) => { setExercises(ex); saveState({ exercises: ex }); }}
-            isGuardia={isGuardia}
             geminiKey={geminiKey}
             handleAnalyzeWorkout={handleAnalyzeWorkout}
             importWorkoutData={importWorkoutData}
@@ -2223,6 +2812,11 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
             setPrAlerts={setPrAlerts}
             checkNewPR={checkNewPR}
             activeMetrics={activeMetrics}
+            overloadSuggestions={overloadSuggestions}
+            plateauAlerts={plateauAlerts}
+            muscleImbalances={muscleImbalances}
+            splits={splits}
+            setSplits={(s) => saveState({ splits: s })}
           />
         )}
         {view === "reg" && (
@@ -2232,7 +2826,6 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
             target={target} 
             bodyComp={bodyComp} 
             setBodyComp={(bc) => { setBodyComp(bc); saveState({ bodyComp: bc }); }}
-            isGuardia={isGuardia}
             geminiKey={geminiKey}
             metricslog={metricslog}
             setMetricslog={(ml) => saveState({ metricslog: ml })}
@@ -2242,11 +2835,24 @@ Ejercicios válidos para ADD_SET: Press banca, Press inclinado mancuerna, Apertu
             foodlog={foodlog}
             waterlog={waterlog}
             exlog={exlog}
+            projections={projections}
+            tdeeEstimate={tdeeEstimate}
+            analyzeAndReconfigure={analyzeAndReconfigure}
+            experiments={experiments}
+            setExperiments={(exp) => saveState({ experiments: exp })}
           />
         )}
         {view === "plan" && (
           <Plan 
-            presetKey={presetKey} 
+            presetKey={presetKey}
+            setPresetKey={(k) => saveState({ presetKey: k })}
+            customPresets={customPresets}
+            setCustomPresets={(cp, switchToPersonal) => {
+              const updates = { customPresets: cp };
+              if (switchToPersonal) updates.presetKey = "personalizado";
+              saveState(updates);
+              if (switchToPersonal) setPresetKey("personalizado");
+            }}
             shoppingList={shoppingList} 
             setShoppingList={(sl) => { setShoppingList(sl); saveState({ shoppingList: sl }); }}
             geminiKey={geminiKey}
@@ -2377,8 +2983,10 @@ function Bar({icon:Ic, label, val, max, unit, color}){
 }
 
 function Hoy({
-  target, totals, log, setLog, loaded, water, setWater, isGuardia, geminiKey, supplements, handleUpdateSupplements,
-  activeSplitKey, suppsInventory, setSuppsInventory, selectedDateStr, setSelectedDateStr
+  target, totals, log, setLog, loaded, water, setWater, geminiKey, supplements, handleUpdateSupplements,
+  activeSplitKey, suppsInventory, setSuppsInventory, selectedDateStr, setSelectedDateStr,
+  proactiveMsg, aiNotifications, setAiNotifications, macroAdjustSuggestion, setMacroAdjustSuggestion, saveState, customPresets,
+  weeklyInsight, smartGoals, challenges, updateChallengeProgress, upcomingEvent, experiments, setExperiments, splits
 }){
   const [text, setText] = useState(""); 
   const [busy, setBusy] = useState(false); 
@@ -2525,7 +3133,7 @@ function Hoy({
     const d = text.trim();
     try{ 
       const out = await callGemini([{role:"user", content:d}], FOOD_SYS, FOOD_SCHEMA); 
-      pushEntry(JSON.parse(out), d); 
+      pushEntry(cleanAndParseJSON(out), d); 
       setText(""); 
     } catch(e){ 
       setErr("No pude estimar eso. Agrega cantidades (ej: '200g carne, 150g boniato')."); 
@@ -2555,7 +3163,7 @@ function Hoy({
           ]
         }
       ], FOOD_SYS, FOOD_SCHEMA);
-      pushEntry(JSON.parse(out), "Comida (Foto)"); 
+      pushEntry(cleanAndParseJSON(out), "Comida (Foto)"); 
     } catch(err){ 
       setErr("Error leyendo la foto. Asegura buena iluminación o digita el texto."); 
     } 
@@ -2586,7 +3194,7 @@ function Hoy({
   };
 
   const suggestDinner = () => {
-    const activeSplit = SPLIT.find(s => s.key === activeSplitKey) || SPLIT[0];
+    const activeSplit = (splits || DEFAULT_SPLITS).find(s => s.key === activeSplitKey) || (splits || DEFAULT_SPLITS)[0] || DEFAULT_SPLITS[0];
     const sys = `Eres el coach nutricional de Bruno. Plan: ${target.kcal} kcal (${target.label}), ${target.p}P/${target.c}C/${target.f}G. Split activo de hoy: Día ${activeSplit.key} (${activeSplit.name}), combustible de carbohidratos asignado: ${activeSplit.fuel}. Directo, breve, formato legible sin preámbulos.`;
     const user = `Hoy le quedan a Bruno: ${rem.kcal} kcal, ${rem.p} g proteína, ${rem.c} g carbo, ${rem.f} g grasa.
     Propón 2 opciones de cena rápida que cierren estos macros.
@@ -2595,7 +3203,7 @@ function Hoy({
   };
 
   const whatNow = (m) => {
-    const activeSplit = SPLIT.find(s => s.key === activeSplitKey) || SPLIT[0];
+    const activeSplit = (splits || DEFAULT_SPLITS).find(s => s.key === activeSplitKey) || (splits || DEFAULT_SPLITS)[0] || DEFAULT_SPLITS[0];
     const sys = `Eres el coach de nutrición de Bruno. Plan nutricional activo: ${target.kcal} kcal (${target.label}), ${target.p}P/${target.c}C/${target.f}G. Split activo de hoy: Día ${activeSplit.key} (${activeSplit.name}), combustible: ${activeSplit.fuel}. Directo y rápido.`;
     const user = `Bruno necesita una opción de comida rápida para el momento: ${m}. Le quedan ${rem.kcal} kcal, ${rem.p} g prot, ${rem.c} g carb y ${rem.f} g grasa.
     Da 1 o 2 opciones concretas detallando porciones y gramos exactos.
@@ -2636,6 +3244,295 @@ function Hoy({
         </span>
         <button onClick={handleNextDay} style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink, width:32, height:32, cursor:"pointer", display:"grid", placeItems:"center", fontWeight:"bold"}}>▶</button>
       </div>
+
+      {upcomingEvent && upcomingEvent.date && (() => {
+        const days = Math.ceil((new Date(upcomingEvent.date) - new Date()) / 86400000);
+        if (days < 0) return null;
+        return (
+          <div style={{
+            background: `linear-gradient(135deg, ${C.rose}11, ${C.rose}22)`,
+            border: `1.5px solid ${C.rose}`,
+            borderRadius: 14,
+            padding: "12px 16px",
+            marginBottom: 12,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            animation: "pop 0.3s ease"
+          }}>
+            <div style={{display:"flex", alignItems:"center", gap:10}}>
+              <span style={{fontSize:20}}>⏳</span>
+              <div>
+                <div style={{fontSize:13.5, fontWeight:800, color:C.ink}}>{upcomingEvent.name}</div>
+                <div style={{fontSize:11, color:C.muted}}>Planificación activa hacia el evento</div>
+              </div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:20, fontWeight:900, color:C.rose}}>{days}</div>
+              <div style={{fontSize:9.5, color:C.muted, textTransform:"uppercase", fontWeight:700}}>días rest.</div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {proactiveMsg && (
+        <div style={{
+          background: `linear-gradient(135deg, ${C.lime}11, ${C.lime}22)`,
+          border: `1.5px solid ${C.lime}`,
+          borderRadius: 14,
+          padding: "12px 16px",
+          marginBottom: 12,
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 10,
+          animation: "pop 0.3s ease"
+        }}>
+          <span style={{fontSize:20}}>{proactiveMsg.icon || "💡"}</span>
+          <div style={{flex:1}}>
+            <div style={{fontSize:11, fontWeight:800, color:C.lime, textTransform:"uppercase", letterSpacing:".05em", marginBottom:2}}>Coach Proactivo</div>
+            <div style={{fontSize:13, color:C.ink, lineHeight:1.45}}>{proactiveMsg.text}</div>
+          </div>
+        </div>
+      )}
+
+      {macroAdjustSuggestion && (
+        <div style={{
+          background: `linear-gradient(135deg, ${C.cyan}11, ${C.cyan}22)`,
+          border: `1.5px solid ${C.cyan}`,
+          borderRadius: 14,
+          padding: "12px 16px",
+          marginBottom: 12,
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+          animation: "pop 0.3s ease"
+        }}>
+          <div style={{display:"flex", alignItems:"flex-start", gap:10}}>
+            <span style={{fontSize:20}}>🔄</span>
+            <div style={{flex:1}}>
+              <div style={{fontSize:11, fontWeight:800, color:C.cyan, textTransform:"uppercase", letterSpacing:".05em", marginBottom:2}}>Ajuste de Calorías Recomendado</div>
+              <div style={{fontSize:13, color:C.ink, lineHeight:1.45}}>{macroAdjustSuggestion.message}</div>
+            </div>
+          </div>
+          <div style={{display:"flex", gap:8, justifyContent:"flex-end"}}>
+            <button 
+              onClick={() => {
+                const nextKcal = target.kcal + macroAdjustSuggestion.adjustment;
+                const newPresets = {
+                  ...customPresets,
+                  personalizado: {
+                    ...customPresets.personalizado,
+                    kcal: nextKcal,
+                    p: Math.round(nextKcal * 0.35 / 4),
+                    c: Math.round(nextKcal * 0.40 / 4),
+                    f: Math.round(nextKcal * 0.25 / 9)
+                  }
+                };
+                saveState({ customPresets: newPresets, presetKey: "personalizado" });
+                setMacroAdjustSuggestion(null);
+              }}
+              style={{
+                padding:"6px 12px",
+                background:C.cyan,
+                color:"#04212b",
+                fontWeight:800,
+                fontSize:11.5,
+                borderRadius:8,
+                border:"none",
+                cursor:"pointer"
+              }}
+            >
+              Aplicar {macroAdjustSuggestion.adjustment > 0 ? "+" : ""}{macroAdjustSuggestion.adjustment} kcal
+            </button>
+            <button 
+              onClick={() => setMacroAdjustSuggestion(null)}
+              style={{
+                padding:"6px 12px",
+                background:"transparent",
+                border:`1px solid ${C.line}`,
+                color:C.muted,
+                fontWeight:700,
+                fontSize:11.5,
+                borderRadius:8,
+                cursor:"pointer"
+              }}
+            >
+              Descartar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {aiNotifications && aiNotifications.length > 0 && (
+        <div style={{display:"flex", flexDirection:"column", gap:8, marginBottom:12}}>
+          {aiNotifications.map(n => (
+            <div key={n.id} style={{
+              background: C.panel,
+              border: `1px solid ${n.type === "warning" ? C.rose : n.type === "success" ? C.lime : C.line}`,
+              borderLeft: `4px solid ${n.type === "warning" ? C.rose : n.type === "success" ? C.lime : C.cyan}`,
+              borderRadius: 12,
+              padding: "10px 14px",
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 10,
+              position: "relative",
+              animation: "pop 0.2s ease"
+            }}>
+              <span style={{fontSize:16}}>{n.icon || "🔔"}</span>
+              <div style={{flex:1, paddingRight:20}}>
+                <div style={{fontSize:12, fontWeight:800, color: n.type === "warning" ? C.rose : n.type === "success" ? C.lime : C.cyan}}>{n.title}</div>
+                <div style={{fontSize:12.5, color:C.ink, marginTop:2, lineHeight:1.4}}>{n.message}</div>
+              </div>
+              <button 
+                onClick={() => setAiNotifications(prev => prev.filter(x => x.id !== n.id))}
+                style={{
+                  position:"absolute",
+                  right:8,
+                  top:8,
+                  background:"none",
+                  border:"none",
+                  color:C.muted,
+                  cursor:"pointer",
+                  fontSize:14,
+                  display:"grid",
+                  placeItems:"center"
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {weeklyInsight && (
+        <div style={{
+          background: C.panel,
+          border: `1.5px solid ${C.line}`,
+          borderLeft: `4px solid ${C.cyan}`,
+          borderRadius: 14,
+          padding: "13px 15px",
+          marginBottom: 12,
+          animation: "pop 0.3s ease"
+        }}>
+          <div style={{fontSize:11, fontWeight:800, color:C.cyan, textTransform:"uppercase", letterSpacing:".05em", display:"flex", alignItems:"center", gap:6, marginBottom:4}}>
+            <span>📊 Insight de la Semana</span>
+          </div>
+          <div style={{fontSize:13.5, color:C.ink, lineHeight:1.5}}>{weeklyInsight.text}</div>
+        </div>
+      )}
+
+      {smartGoals && smartGoals.length > 0 && (
+        <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"13px 15px", marginBottom:12}}>
+          <div style={{fontSize:11.5, fontWeight:800, color:C.lime, textTransform:"uppercase", letterSpacing:".05em", display:"flex", alignItems:"center", gap:6, marginBottom:10}}>
+            <span>🏆 Objetivos de Fuerza Inteligentes</span>
+          </div>
+          <div style={{display:"flex", flexDirection:"column", gap:8}}>
+            {smartGoals.map(g => (
+              <div key={g.id} style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:10}}>
+                <div style={{display:"flex", justifyContent:"space-between", fontSize:12.5, fontWeight:700, color:C.ink, marginBottom:4}}>
+                  <span>{g.exercise}</span>
+                  <span style={{color:C.lime}}>{g.targetPR} kg</span>
+                </div>
+                <div style={{fontSize:11, color:C.muted, marginBottom:6}}>Meta: superar PR de {g.currentPR}kg antes de {fdate(g.deadline)}</div>
+                <div style={{height:6, background:C.bg, borderRadius:3, overflow:"hidden"}}>
+                  <div style={{height:"100%", width:"80%", background:C.lime, borderRadius:3}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {challenges && challenges.length > 0 && (
+        <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"13px 15px", marginBottom:12}}>
+          <div style={{fontSize:11.5, fontWeight:800, color:C.cyan, textTransform:"uppercase", letterSpacing:".05em", display:"flex", alignItems:"center", gap:6, marginBottom:10}}>
+            <span>🎮 Desafíos Gamificados Semanales</span>
+          </div>
+          <div style={{display:"flex", flexDirection:"column", gap:8}}>
+            {challenges.map(c => {
+              const pct = Math.min(100, (c.progress / c.target) * 100);
+              return (
+                <div key={c.id} style={{
+                  background:C.panel2, 
+                  border:`1px solid ${c.completed ? C.lime : C.line}`, 
+                  borderRadius:10, 
+                  padding:10,
+                  opacity: c.completed ? 0.7 : 1,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10
+                }}>
+                  <span style={{fontSize:18}}>{c.icon || "🎯"}</span>
+                  <div style={{flex:1}}>
+                    <div style={{display:"flex", justifyContent:"space-between", fontSize:12.5, fontWeight:700, color: c.completed ? C.lime : C.ink}}>
+                      <span>{c.title}</span>
+                      <span>{c.progress} / {c.target}</span>
+                    </div>
+                    <div style={{fontSize:11, color:C.muted, marginBottom:6}}>{c.desc}</div>
+                    <div style={{height:5, background:C.bg, borderRadius:2.5, overflow:"hidden"}}>
+                      <div style={{height:"100%", width:`${pct}%`, background: c.completed ? C.lime : C.cyan, borderRadius:2.5}}/>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      const nextProg = c.completed ? 0 : c.target;
+                      updateChallengeProgress(c.id, nextProg, !c.completed);
+                    }}
+                    style={{
+                      background:"none",
+                      border:"none",
+                      cursor:"pointer",
+                      padding:4,
+                      color: c.completed ? C.lime : C.muted
+                    }}
+                  >
+                    {c.completed ? "☑" : "☐"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {experiments && experiments.length > 0 && experiments.filter(e => e.status === "active").map(e => (
+        <div key={e.id} style={{
+          background: C.panel,
+          border: `1.5px solid ${C.amber}`,
+          borderRadius: 16,
+          padding: "13px 15px",
+          marginBottom: 12,
+          animation: "pop 0.3s ease"
+        }}>
+          <div style={{fontSize:11, fontWeight:800, color:C.amber, textTransform:"uppercase", letterSpacing:".05em", display:"flex", alignItems:"center", gap:6, marginBottom:6}}>
+            <span>🧪 Experimento A/B Activo</span>
+          </div>
+          <div style={{fontSize:14, fontWeight:700, color:C.ink, marginBottom:4}}>{e.title}</div>
+          <div style={{fontSize:12.5, color:C.muted, lineHeight:1.45, marginBottom:8}}>{e.desc}</div>
+          <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:11, borderTop:`1px solid ${C.line}`, paddingTop:6}}>
+            <span style={{color:C.muted}}>Variable: <b style={{color:C.ink}}>{e.variable}</b></span>
+            <button 
+              onClick={() => {
+                const updated = experiments.map(x => x.id === e.id ? { ...x, status: "completed", results: "Estancamiento roto con éxito" } : x);
+                setExperiments(updated);
+              }}
+              style={{
+                background:"rgba(255,177,61,.12)",
+                border:`1px solid ${C.amber}`,
+                color:C.amber,
+                fontSize:10.5,
+                fontWeight:800,
+                padding:"4px 8px",
+                borderRadius:6,
+                cursor:"pointer"
+              }}
+            >
+              Completar
+            </button>
+          </div>
+        </div>
+      ))}
 
       {/* Tarjetas de macros */}
       <Bar icon={Flame} label="Calorías" val={totals.kcal} max={target.kcal} unit="kcal" color={C.lime}/>
@@ -2854,7 +3751,7 @@ function Hoy({
       </div>
       {showMoments && (
         <div className="pop" style={{display:"flex", gap:7, flexWrap:"wrap", marginBottom:7}}>
-          {["Pre-entreno", "Post-entreno", "Desayuno rápido", "Snack de guardia"].map(m => (
+          {["Pre-entreno", "Post-entreno", "Desayuno rápido", "Snack saludable"].map(m => (
             <button key={m} onClick={() => whatNow(m)} style={{...chip(false), flex:"1 1 45%", fontSize:11.5, padding:"8px 6px"}}>
               {m}
             </button>
@@ -2997,12 +3894,12 @@ function Hoy({
 
 /* ===== TAB COACH & CONFIGURACIÓN ===== */
 function Coach({
-  chat, setChat, target, totals, isGuardia, geminiKey, saveGeminiKey,
+  chat, setChat, target, totals, geminiKey, saveGeminiKey,
   cloudSync, syncCode, syncStatus, handleToggleCloudSync, handleCreateSyncCode, handleLinkDevice, handleForcePull, handleForcePush,
   handleCoachActions, sendCoachMessage, chatBusy, sendDailyGreetingIfNeeded,
   supabaseUrl, supabaseAnonKey, supabaseUser, sbSyncing, sbError,
   saveSbConfig, handleSbLogin, handleSbRegister, handleSbLogout, syncLocalToSupabase,
-  changePreset, presetKey, aiModel, saveAiModel
+  changePreset, presetKey, aiModel, saveAiModel, customPresets
 }){
   // Simple markdown renderer for Coach responses
   const renderMarkdown = (text) => {
@@ -3155,7 +4052,7 @@ function Coach({
               <Target size={14} color={C.rose}/> Objetivo Principal
             </span>
             <div style={{display:"flex", gap:6, marginTop:4}}>
-              {Object.keys(PRESETS).map(k => (
+              {Object.keys(customPresets).map(k => (
                 <button 
                   key={k} 
                   onClick={() => changePreset(k)} 
@@ -3171,7 +4068,7 @@ function Coach({
                     color: presetKey === k ? C.rose : C.muted
                   }}
                 >
-                  {PRESETS[k].label}
+                  {customPresets[k].label}
                 </button>
               ))}
             </div>
@@ -3496,9 +4393,9 @@ function Coach({
         {chat.length === 0 ? (
           <div style={{textAlign:"center", color:C.muted, fontSize:13, padding:"30px 14px"}}>
             <MessageSquare size={26} color={C.lime} style={{marginBottom:10}}/>
-            <p>Pregúntale a tu coach sobre tus macros, guardias o entrenamientos.</p>
+            <p>Pregúntale a tu coach sobre tus macros, dieta o entrenamientos.</p>
             <div style={{display:"flex", flexDirection:"column", gap:8, marginTop:16}}>
-              {["¿Cómo ajusto mis macros tras una guardia de 24h?", "¿Qué snacks proteicos me recomiendas para quirófano?", "Me siento fatigado, ¿debería saltar el entreno hoy?"].map(q => (
+              {["¿Cómo ajusto mis macros de hoy?", "¿Qué snacks proteicos saludables me recomiendas?", "Me siento fatigado, ¿debería saltar el entreno hoy?"].map(q => (
                 <button key={q} onClick={() => setText(q)} style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:10, padding:"9px 12px", color:C.ink, fontSize:12.5, cursor:"pointer", textAlign:"left"}}>
                   {q}
                 </button>
@@ -3564,9 +4461,10 @@ function Coach({
 
 /* ===== TAB ENTRENAMIENTO ===== */
 function Entreno({
-  exlog, setExlog, exercises, setExercises, isGuardia, geminiKey, handleAnalyzeWorkout, importWorkoutData,
+  exlog, setExlog, exercises, setExercises, geminiKey, handleAnalyzeWorkout, importWorkoutData,
   activeSplitKey, setActiveSplitKey, selectedDateStr, setSelectedDateStr, calMonth, setCalMonth,
-  workoutDurations, setWorkoutDurations, prAlerts, setPrAlerts, checkNewPR, activeMetrics
+  workoutDurations, setWorkoutDurations, prAlerts, setPrAlerts, checkNewPR, activeMetrics,
+  overloadSuggestions, plateauAlerts, muscleImbalances, splits, setSplits
 }){
   const sel = activeSplitKey;
   const setSel = setActiveSplitKey;
@@ -3578,6 +4476,13 @@ function Entreno({
   const [editSetObj, setEditSetObj] = useState(null);
   const [editExObj, setEditExObj] = useState(null);
   const [exTab, setExTab] = useState("texto"); // 'texto' or 'nuevo'
+
+  // --- Splits Manual Editor States ---
+  const [showSplitsEditor, setShowSplitsEditor] = useState(false);
+  const [editSplitsData, setEditSplitsData] = useState([]);
+  const [editingSplitIdx, setEditingSplitIdx] = useState(0);
+  const [newExText, setNewExText] = useState("");
+  const [confirmRemoveEx, setConfirmRemoveEx] = useState(null); // null or exercise name
   
   // States for text importer
   const [importText, setImportText] = useState("");
@@ -3651,7 +4556,7 @@ function Entreno({
     return { totalVol, density, dur };
   };
 
-  const dayObj = SPLIT.find(d => d.key === sel) || {name: "Día " + sel, fuel: ""};
+  const dayObj = (splits || DEFAULT_SPLITS).find(d => d.key === sel) || (splits || DEFAULT_SPLITS)[0] || DEFAULT_SPLITS[0];
   const dayExs = (exercises || {})[sel] || [];
   const dayMuscles = [...new Set(dayExs.flatMap(e => e.musculos || []))];
   const last = (n) => { const a = (exlog || {})[n]; return a && a.length ? a[0] : null; };
@@ -3711,7 +4616,7 @@ function Entreno({
     setImportErr("");
     try {
       const out = await callGemini([{ role: "user", content: importText.trim() }], WORKOUT_PARSER_SYS, WORKOUT_PARSER_SCHEMA);
-      const parsed = JSON.parse(out);
+      const parsed = cleanAndParseJSON(out);
       if (!parsed.exercises || parsed.exercises.length === 0) {
         throw new Error("No se detectaron ejercicios.");
       }
@@ -3792,13 +4697,89 @@ function Entreno({
   const delExercise = (n) => { 
     const updatedExercises = { ...exercises };
     Object.keys(updatedExercises).forEach(k => {
-      updatedExercises[k] = updatedExercises[k].filter(e => e.name !== n);
+      updatedExercises[k] = (updatedExercises[k] || []).filter(e => e.name !== n);
     });
     setExercises(updatedExercises);
+
+    const nextSplits = (splits || DEFAULT_SPLITS).map(s => {
+      return {
+        ...s,
+        ex: (s.ex || []).filter(name => name !== n)
+      };
+    });
+    setSplits(nextSplits);
 
     const updatedExlog = { ...exlog };
     delete updatedExlog[n];
     setExlog(updatedExlog);
+  };
+
+  // --- Splits Manual Actions & Helpers ---
+  const startEditSplits = () => {
+    setEditSplitsData((splits || DEFAULT_SPLITS).map(s => ({ ...s, ex: [...(s.ex || [])] })));
+    setEditingSplitIdx(0);
+    setNewExText("");
+    setShowSplitsEditor(true);
+  };
+
+  const saveSplitsAndSyncExercises = (nextSplits) => {
+    const nextExercises = { ...exercises };
+    nextSplits.forEach(s => {
+      const existingForDay = exercises[s.key] || [];
+      nextExercises[s.key] = (s.ex || []).map(name => {
+        const existingObj = existingForDay.find(e => e.name.toLowerCase() === name.toLowerCase()) || 
+                            Object.values(exercises).flat().find(e => e.name.toLowerCase() === name.toLowerCase());
+        if (existingObj) {
+          return { ...existingObj, name };
+        } else {
+          return {
+            name,
+            tecnico: "",
+            musculos: MUSCLES[name] || []
+          };
+        }
+      });
+    });
+    
+    const splitKeys = nextSplits.map(s => s.key);
+    Object.keys(nextExercises).forEach(k => {
+      if (!splitKeys.includes(k)) {
+        delete nextExercises[k];
+      }
+    });
+
+    if (!splitKeys.includes(activeSplitKey)) {
+      setActiveSplitKey(splitKeys[0] || "A");
+    }
+
+    setExercises(nextExercises);
+    setSplits(nextSplits);
+    setShowSplitsEditor(false);
+  };
+
+  const removeExerciseFromSplit = (exName) => {
+    const updatedExercises = { ...exercises };
+    if (updatedExercises[sel]) {
+      updatedExercises[sel] = updatedExercises[sel].filter(e => e.name !== exName);
+    }
+    setExercises(updatedExercises);
+    
+    const nextSplits = (splits || DEFAULT_SPLITS).map(s => {
+      if (s.key === sel) {
+        return {
+          ...s,
+          ex: s.ex.filter(name => name !== exName)
+        };
+      }
+      return s;
+    });
+    setSplits(nextSplits);
+    setConfirmRemoveEx(null);
+  };
+
+  const removeExerciseGlobally = (exName) => {
+    delExercise(exName);
+    setConfirmRemoveEx(null);
   };
 
   const handleUpdateExercise = (oldName, newName, newTecnico, newMusculosList) => {
@@ -3866,7 +4847,7 @@ function Entreno({
           },
           required: ["tecnico", "musculos"]
         };
-        const o = JSON.parse(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
+        const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
         setExercises({...exercises, [sel]: [...dayExs, {name: addText.trim(), tecnico: o.tecnico || "", musculos: o.musculos || []}]});
       } else {
         const sys = "El usuario describe un ejercicio físico. Identifícalo y devuelve un JSON. Ejemplo:\n" +
@@ -3884,7 +4865,7 @@ function Entreno({
           },
           required: ["nombre", "tecnico", "musculos"]
         };
-        const o = JSON.parse(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
+        const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
         setExercises({...exercises, [sel]: [...dayExs, {name: o.nombre || addText.trim(), tecnico: o.tecnico || "", musculos: o.musculos || []}]});
       }
       setAddText(""); 
@@ -3899,7 +4880,7 @@ function Entreno({
     setProgBusy(ex.name);
     const hist = (exlog[ex.name] || []).slice(0, 8).map(s => `${fdate(s.date)}: ${s.w}kg x ${s.reps}`).join(" | ") || "Sin registros previos";
     try{ 
-      const sys = `Eres el entrenador personal de Bruno. ${getProfileStr(isGuardia, activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Entrega recomendaciones concretas de sobrecarga progresiva y técnica de ejecución. Corto y directo.`;
+      const sys = `Eres el entrenador personal de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Entrega recomendaciones concretas de sobrecarga progresiva y técnica de ejecución. Corto y directo.`;
       const out = await callGemini([{role:"user", content:`Ejercicio: ${ex.name}. Músculos: ${(ex.musculos || []).join(", ") || "?"}. Historial reciente (nuevo a viejo): ${hist}. Analiza el rendimiento y da pautas de carga/repeticiones para el próximo entrenamiento.`}], sys);
       setProg(p => ({...p, [ex.name]: out})); 
     } catch(e){ 
@@ -3916,7 +4897,7 @@ function Entreno({
       return a ? `${ex.name}: ${a}` : `${ex.name}: sin marcas`; 
     }).join(" | ");
     try{ 
-      const sys = `Eres el entrenador de fuerza de Bruno. ${getProfileStr(isGuardia, activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Orden del entrenamiento: mantener el orden asignado del split. Respuestas estructuradas y breves.`;
+      const sys = `Eres el entrenador de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Orden del entrenamiento: mantener el orden asignado del split. Respuestas estructuradas y breves.`;
       const out = await callGemini([{role:"user", content:`Día del Split ${sel}: ${dayObj.name}. Músculos: ${dayMuscles.join(", ")}. Historial: ${hist}. Planifica las series, pesos de calentamiento, y series de trabajo sugeridas hoy.`}], sys);
       setDaySug(out); 
       saveKey("last_day_sug", out);
@@ -3930,8 +4911,8 @@ function Entreno({
     setWkBusy(true); 
     setWk("");
     try{ 
-      const sys = `Eres el entrenador deportivo de Bruno. ${getProfileStr(isGuardia, activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Organiza la semana de Bruno de forma realista para sus guardias hospitalarias.`;
-      const out = await callGemini([{role:"user", content:"Organiza una distribución semanal de 7 días para sus 4 entrenamientos + descansos. Incluye consejos de qué hacer si le cae una guardia pediátrica de emergencia."}], sys);
+      const sys = `Eres el entrenador deportivo de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Organiza la semana de Bruno de forma realista.`;
+      const out = await callGemini([{role:"user", content:"Organiza una distribución semanal de 7 días para sus 4 entrenamientos + descansos. Incluye consejos prácticos para optimizar la recuperación y adaptar el entrenamiento ante imprevistos cotidianos."}], sys);
       setWk(out); 
       saveKey("last_wk_sug", out);
     } catch(e){ 
@@ -3952,6 +4933,31 @@ function Entreno({
   return (
     <div className="pop">
       <div className="disp" style={{fontSize:24, color:C.lime, marginBottom:10}}>ENTRENAMIENTO · SPLIT</div>
+
+      {muscleImbalances && muscleImbalances.length > 0 && (
+        <div style={{
+          background: "rgba(255,107,138,.08)",
+          border: `1.5px solid ${C.rose}`,
+          borderRadius: 14,
+          padding: "12px 16px",
+          marginBottom: 12,
+          display: "flex",
+          flexDirection: "column",
+          gap: 6
+        }}>
+          <div style={{fontSize:13, fontWeight:800, color:C.rose, display:"flex", alignItems:"center", gap:6}}>
+            <span>⚠️ Desequilibrio Muscular Detectado</span>
+          </div>
+          <div style={{fontSize:12, color:C.ink, lineHeight:1.45}}>
+            Tu volumen de entrenamiento reciente muestra asimetrías importantes:
+          </div>
+          <ul style={{margin:0, paddingLeft:16, fontSize:12, color:C.muted}}>
+            {muscleImbalances.map((imb, idx) => (
+              <li key={idx} style={{marginBottom:2}}>{imb}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Mapa de Calor de Volumen Semanal */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"14px 16px", marginBottom:12}}>
@@ -4210,11 +5216,57 @@ function Entreno({
                       <div key={exName} style={{background:C.panel2, border:`1px solid ${isOpen ? C.lime : C.line}`, borderRadius:13, marginBottom:4, overflow:"hidden", position:"relative"}}>
                         <div style={{display:"flex", alignItems:"center"}}>
                           <button 
-                            onClick={() => { setOpen(isOpen ? null : "session-" + exName); setW(""); setReps(""); }} 
+                            onClick={() => {
+                              const nextOpen = isOpen ? null : "session-" + exName;
+                              setOpen(nextOpen);
+                              if (nextOpen) {
+                                const sug = overloadSuggestions && overloadSuggestions[exName];
+                                const lastWeight = l ? l.w : "";
+                                setW(sug ? String(sug.suggested) : String(lastWeight));
+                                setReps(l ? String(l.reps) : "");
+                              } else {
+                                setW("");
+                                setReps("");
+                              }
+                            }} 
                             style={{flex:1, background:"none", border:"none", cursor:"pointer", padding:"12px 14.5px 12px 14px", display:"flex", alignItems:"center", gap:10, color:C.ink, textAlign:"left"}}
                           >
                             <div style={{flex:1, paddingRight:32}}>
-                              <div style={{fontSize:13.5, fontWeight:600}}>{exName}</div>
+                              <div style={{display:"flex", alignItems:"center", gap:6, flexWrap:"wrap"}}>
+                                <div style={{fontSize:13.5, fontWeight:600}}>{exName}</div>
+                                {overloadSuggestions && overloadSuggestions[exName] && (
+                                  <span style={{
+                                    fontSize:10, 
+                                    fontWeight:700, 
+                                    background:"rgba(205,255,74,0.12)", 
+                                    color:C.lime, 
+                                    border:`1px solid rgba(205,255,74,0.3)`, 
+                                    borderRadius:6, 
+                                    padding:"2px 6px",
+                                    display:"inline-flex",
+                                    alignItems:"center",
+                                    gap:3
+                                  }}>
+                                    💡 Sugerido: {overloadSuggestions[exName].suggested} kg
+                                  </span>
+                                )}
+                                {plateauAlerts && plateauAlerts.some(p => p.exercise === exName) && (
+                                  <span style={{
+                                    fontSize:10, 
+                                    fontWeight:700, 
+                                    background:"rgba(255,177,61,0.12)", 
+                                    color:C.amber, 
+                                    border:`1px solid rgba(255,177,61,0.3)`, 
+                                    borderRadius:6, 
+                                    padding:"2px 6px",
+                                    display:"inline-flex",
+                                    alignItems:"center",
+                                    gap:3
+                                  }}>
+                                    ⚠️ Estancamiento
+                                  </span>
+                                )}
+                              </div>
                               {globalEx.tecnico && <div style={{fontSize:11, color:C.muted, fontStyle:"italic"}}>{globalEx.tecnico}</div>}
                               {l ? (
                                 <div style={{fontSize:11.5, color:C.cyan, marginTop:2}}>última: {l.w} kg × {l.reps} · {fdate(l.date)}</div>
@@ -4400,8 +5452,8 @@ function Entreno({
       })()}
 
       {/* Selector del Split */}
-      <div style={{display:"flex", gap:6, marginBottom:14}}>
-        {SPLIT.map(d => (
+      <div style={{display:"flex", gap:6, marginBottom:14, alignItems:"center", flexWrap:"wrap", width:"100%"}}>
+        {(splits || DEFAULT_SPLITS).map(d => (
           <button 
             key={d.key} 
             onClick={() => { setSel(d.key); setDaySug(""); setOpen(null); setAdding(false); }} 
@@ -4420,6 +5472,27 @@ function Entreno({
             {d.key}
           </button>
         ))}
+        <button
+          onClick={startEditSplits}
+          style={{
+            marginLeft:"auto",
+            padding:"6px 12px",
+            height:36,
+            borderRadius:10,
+            background: C.panel2,
+            border: `1px solid ${C.line}`,
+            color: C.lime,
+            fontSize:11.5,
+            fontWeight:800,
+            cursor:"pointer",
+            display:"flex",
+            alignItems:"center",
+            gap:4
+          }}
+        >
+          <Settings size={12}/>
+          <span>Editar Splits</span>
+        </button>
       </div>
 
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
@@ -4447,11 +5520,57 @@ function Entreno({
           <div key={ex.name} style={{background:C.panel, border:`1px solid ${isOpen ? C.lime : C.line}`, borderRadius:13, marginBottom:9, overflow:"hidden", position:"relative"}}>
             <div style={{display:"flex", alignItems:"center"}}>
               <button 
-                onClick={() => { setOpen(isOpen ? null : ex.name); setW(""); setReps(""); }} 
+                onClick={() => {
+                  const nextOpen = isOpen ? null : ex.name;
+                  setOpen(nextOpen);
+                  if (nextOpen) {
+                    const sug = overloadSuggestions && overloadSuggestions[ex.name];
+                    const lastWeight = l ? l.w : "";
+                    setW(sug ? String(sug.suggested) : String(lastWeight));
+                    setReps(l ? String(l.reps) : "");
+                  } else {
+                    setW("");
+                    setReps("");
+                  }
+                }} 
                 style={{flex:1, background:"none", border:"none", cursor:"pointer", padding:"12px 14.5px 12px 14px", display:"flex", alignItems:"center", gap:10, color:C.ink, textAlign:"left"}}
               >
                 <div style={{flex:1, paddingRight:32}}>
-                  <div style={{fontSize:13.5, fontWeight:600}}>{ex.name}</div>
+                  <div style={{display:"flex", alignItems:"center", gap:6, flexWrap:"wrap"}}>
+                    <div style={{fontSize:13.5, fontWeight:600}}>{ex.name}</div>
+                    {overloadSuggestions && overloadSuggestions[ex.name] && (
+                      <span style={{
+                        fontSize:10, 
+                        fontWeight:700, 
+                        background:"rgba(205,255,74,0.12)", 
+                        color:C.lime, 
+                        border:`1px solid rgba(205,255,74,0.3)`, 
+                        borderRadius:6, 
+                        padding:"2px 6px",
+                        display:"inline-flex",
+                        alignItems:"center",
+                        gap:3
+                      }}>
+                        💡 Sugerido: {overloadSuggestions[ex.name].suggested} kg
+                      </span>
+                    )}
+                    {plateauAlerts && plateauAlerts.some(p => p.exercise === ex.name) && (
+                      <span style={{
+                        fontSize:10, 
+                        fontWeight:700, 
+                        background:"rgba(255,177,61,0.12)", 
+                        color:C.amber, 
+                        border:`1px solid rgba(255,177,61,0.3)`, 
+                        borderRadius:6, 
+                        padding:"2px 6px",
+                        display:"inline-flex",
+                        alignItems:"center",
+                        gap:3
+                      }}>
+                        ⚠️ Estancamiento
+                      </span>
+                    )}
+                  </div>
                   {ex.tecnico && <div style={{fontSize:11, color:C.muted, fontStyle:"italic"}}>{ex.tecnico}</div>}
                   {l ? (
                     <div style={{fontSize:11.5, color:C.cyan, marginTop:2}}>última: {l.w} kg × {l.reps} · {fdate(l.date)}</div>
@@ -4607,7 +5726,7 @@ function Entreno({
                   >
                     {progBusy === ex.name ? <><Loader2 size={13} style={{animation:"spin 1s linear infinite"}}/>Analizando…</> : <><Sparkles size={13}/>Recomendación de carga</>}
                   </button>
-                  <button onClick={() => delExercise(ex.name)} style={{padding:"9px 12px", borderRadius:9, border:`1px solid ${C.line}`, background:"none", color:C.muted, cursor:"pointer", fontSize:12.5}}>Quitar</button>
+                  <button onClick={() => setConfirmRemoveEx(ex.name)} style={{padding:"9px 12px", borderRadius:9, border:`1px solid ${C.line}`, background:"none", color:C.muted, cursor:"pointer", fontSize:12.5}}>Quitar</button>
                 </div>
                 {prog[ex.name] && <AIPanel title="Consejo de Progresión" busy={false} text={prog[ex.name]} color={C.cyan} onClose={() => setProg(p => ({...p, [ex.name]: ""}))}/>}
               </div>
@@ -4864,7 +5983,7 @@ function Entreno({
         disabled={wkBusy} 
         style={{width:"100%", marginTop:10, padding:"11px", borderRadius:12, border:`1px solid ${C.line}`, cursor:"pointer", background:C.panel, color:C.lime, fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:8}}
       >
-        {wkBusy ? <><Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>Planificando…</> : <><CalendarDays size={16}/>Distribución semanal de guardias</>}
+        {wkBusy ? <><Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>Planificando…</> : <><CalendarDays size={16}/>Planificación semanal (Distribución)</>}
       </button>
       <AIPanel title="Organización Semanal" busy={wkBusy} text={wk} color={C.cyan} onClose={() => { setWk(""); saveKey("last_wk_sug", ""); }}/>
 
@@ -5003,6 +6122,294 @@ function Entreno({
               Cancelar
             </button>
           </div>
+      {confirmRemoveEx !== null && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+          background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)",
+          display: "grid", placeItems: "center", zIndex: 9999, padding: 20
+        }}>
+          <div style={{
+            background: C.panel, border: `1px solid ${C.line}`, borderRadius: 16,
+            padding: 20, width: "100%", maxWidth: 360, display: "flex",
+            flexDirection: "column", gap: 14, boxShadow: "0 10px 30px rgba(0,0,0,0.5)"
+          }}>
+            <div style={{fontSize: 16, fontWeight: 800, color: C.ink, textAlign: "center"}}>
+              Quitar Ejercicio
+            </div>
+            <div style={{fontSize: 12.5, color: C.muted, textAlign: "center"}}>
+              ¿Cómo deseas quitar <strong>{confirmRemoveEx}</strong>?
+            </div>
+            <div style={{display: "flex", flexDirection: "column", gap: 8, marginTop: 4}}>
+              <button 
+                onClick={() => removeExerciseFromSplit(confirmRemoveEx)}
+                style={{
+                  background: C.panel2, border: `1px solid ${C.line}`, color: C.lime,
+                  fontWeight: 800, padding: 12, borderRadius: 12, cursor: "pointer",
+                  textAlign: "center"
+                }}
+              >
+                Quitar de este split únicamente
+              </button>
+              <button 
+                onClick={() => removeExerciseGlobally(confirmRemoveEx)}
+                style={{
+                  background: "rgba(255, 61, 113, 0.12)", border: `1px solid ${C.rose}44`, color: C.rose,
+                  fontWeight: 800, padding: 12, borderRadius: 12, cursor: "pointer",
+                  textAlign: "center"
+                }}
+              >
+                Eliminar por completo de la app (Borra historial)
+              </button>
+              <button 
+                onClick={() => setConfirmRemoveEx(null)}
+                style={{
+                  background: "none", border: "none", color: C.muted,
+                  fontWeight: 700, padding: 10, cursor: "pointer"
+                }}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSplitsEditor && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+          background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)",
+          display: "grid", placeItems: "center", zIndex: 9998, padding: 16
+        }}>
+          <div style={{
+            background: C.panel, border: `1px solid ${C.line}`, borderRadius: 16,
+            padding: 20, width: "100%", maxWidth: 460, display: "flex",
+            flexDirection: "column", gap: 14, maxHeight: "calc(100vh - 32px)",
+            boxShadow: "0 10px 30px rgba(0,0,0,0.6)"
+          }}>
+            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+              <span style={{fontSize:14, fontWeight:900, color:C.lime, letterSpacing:".05em"}}>
+                ADMINISTRACIÓN DE SPLITS
+              </span>
+              <button 
+                onClick={() => setShowSplitsEditor(false)}
+                style={{background:"none", border:"none", color:C.muted, cursor:"pointer", padding:4}}
+              >
+                <X size={20}/>
+              </button>
+            </div>
+
+            <div style={{display:"flex", gap:6, overflowX:"auto", paddingBottom:4, borderBottom:`1px solid ${C.line}`}}>
+              {editSplitsData.map((s, idx) => (
+                <button
+                  key={s.key}
+                  onClick={() => setEditingSplitIdx(idx)}
+                  style={{
+                    padding:"6px 12px", borderRadius:8,
+                    background: editingSplitIdx === idx ? `${C.lime}22` : C.panel2,
+                    border: `1px solid ${editingSplitIdx === idx ? C.lime : C.line}`,
+                    color: editingSplitIdx === idx ? C.lime : C.muted,
+                    fontSize:12, fontWeight:800, cursor:"pointer"
+                  }}
+                >
+                  Día {s.key}
+                </button>
+              ))}
+              <button
+                onClick={() => {
+                  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+                  const existingKeys = editSplitsData.map(s => s.key);
+                  let nextKey = "A";
+                  for (let i = 0; i < alphabet.length; i++) {
+                    if (!existingKeys.includes(alphabet[i])) { nextKey = alphabet[i]; break; }
+                  }
+                  const newDay = { key: nextKey, name: "Nuevo Split " + nextKey, fuel: "Carbo medio", ex: [] };
+                  const nextSplits = [...editSplitsData, newDay];
+                  setEditSplitsData(nextSplits);
+                  setEditingSplitIdx(nextSplits.length - 1);
+                }}
+                style={{
+                  padding:"6px 10px", borderRadius:8, background:"none",
+                  border:`1px dashed ${C.line}`, color:C.lime,
+                  fontSize:12, fontWeight:800, cursor:"pointer",
+                  display:"flex", alignItems:"center", gap:2
+                }}
+              >
+                <Plus size={12}/> Nuevo
+              </button>
+            </div>
+
+            {editSplitsData[editingSplitIdx] && (
+              <div style={{display:"flex", flexDirection:"column", gap:12, overflowY:"auto", flex:1, paddingRight:4}}>
+                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:10}}>
+                  <div>
+                    <label style={{fontSize:11, color:C.muted, fontWeight:700, display:"block", marginBottom:4}}>Nombre del Split</label>
+                    <input 
+                      type="text" 
+                      value={editSplitsData[editingSplitIdx].name}
+                      onChange={e => {
+                        const next = [...editSplitsData];
+                        next[editingSplitIdx].name = e.target.value;
+                        setEditSplitsData(next);
+                      }}
+                      style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px", fontSize:13, color:C.ink, outline:"none"}}
+                    />
+                  </div>
+                  <div>
+                    <label style={{fontSize:11, color:C.muted, fontWeight:700, display:"block", marginBottom:4}}>Combustible / Carbos</label>
+                    <select
+                      value={editSplitsData[editingSplitIdx].fuel}
+                      onChange={e => {
+                        const next = [...editSplitsData];
+                        next[editingSplitIdx].fuel = e.target.value;
+                        setEditSplitsData(next);
+                      }}
+                      style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px", fontSize:13, color:C.ink, outline:"none"}}
+                    >
+                      <option value="Carbo alto">Carbo alto</option>
+                      <option value="Carbo medio-alto">Carbo medio-alto</option>
+                      <option value="Carbo medio">Carbo medio</option>
+                      <option value="Carbo bajo">Carbo bajo</option>
+                      <option value="Cero Carbos">Cero Carbos</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{fontSize:11, color:C.muted, fontWeight:700, display:"block", marginBottom:6}}>Ejercicios ({editSplitsData[editingSplitIdx].ex.length})</label>
+                  <div style={{display:"flex", flexDirection:"column", gap:6, maxHeight:180, overflowY:"auto", marginBottom:10}}>
+                    {editSplitsData[editingSplitIdx].ex.map((name, exIdx) => (
+                      <div key={exIdx} style={{display:"flex", alignItems:"center", justifyContent:"space-between", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 10px"}}>
+                        <span style={{fontSize:12.5, color:C.ink, fontWeight:600}}>{name}</span>
+                        <div style={{display:"flex", alignItems:"center", gap:4}}>
+                          <button 
+                            disabled={exIdx === 0}
+                            onClick={() => {
+                              const day = { ...editSplitsData[editingSplitIdx] };
+                              const nextEx = [...day.ex];
+                              const temp = nextEx[exIdx];
+                              nextEx[exIdx] = nextEx[exIdx - 1];
+                              nextEx[exIdx - 1] = temp;
+                              day.ex = nextEx;
+                              const nextSplits = [...editSplitsData];
+                              nextSplits[editingSplitIdx] = day;
+                              setEditSplitsData(nextSplits);
+                            }}
+                            style={{background:"none", border:"none", color: exIdx === 0 ? C.line : C.muted, cursor: exIdx === 0 ? "default" : "pointer"}}
+                          >
+                            ▲
+                          </button>
+                          <button 
+                            disabled={exIdx === editSplitsData[editingSplitIdx].ex.length - 1}
+                            onClick={() => {
+                              const day = { ...editSplitsData[editingSplitIdx] };
+                              const nextEx = [...day.ex];
+                              const temp = nextEx[exIdx];
+                              nextEx[exIdx] = nextEx[exIdx + 1];
+                              nextEx[exIdx + 1] = temp;
+                              day.ex = nextEx;
+                              const nextSplits = [...editSplitsData];
+                              nextSplits[editingSplitIdx] = day;
+                              setEditSplitsData(nextSplits);
+                            }}
+                            style={{background:"none", border:"none", color: exIdx === editSplitsData[editingSplitIdx].ex.length - 1 ? C.line : C.muted, cursor: exIdx === editSplitsData[editingSplitIdx].ex.length - 1 ? "default" : "pointer"}}
+                          >
+                            ▼
+                          </button>
+                          <button 
+                            onClick={() => {
+                              const day = { ...editSplitsData[editingSplitIdx] };
+                              day.ex = day.ex.filter((_, i) => i !== exIdx);
+                              const nextSplits = [...editSplitsData];
+                              nextSplits[editingSplitIdx] = day;
+                              setEditSplitsData(nextSplits);
+                            }}
+                            style={{background:"none", border:"none", color:C.rose, cursor:"pointer", padding:2}}
+                          >
+                            <X size={14}/>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {editSplitsData[editingSplitIdx].ex.length === 0 && (
+                      <div style={{fontSize:12, color:C.muted, textAlign:"center", padding:"10px 0"}}>Sin ejercicios asignados a este split.</div>
+                    )}
+                  </div>
+
+                  <div style={{display:"flex", gap:6}}>
+                    <input 
+                      type="text" 
+                      value={newExText}
+                      onChange={e => setNewExText(e.target.value)}
+                      placeholder="Nombre de ejercicio a añadir..."
+                      style={{flex:1, background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px", fontSize:12.5, color:C.ink, outline:"none"}}
+                      onKeyDown={e => { 
+                        if (e.key === "Enter") { 
+                          e.preventDefault(); 
+                          const day = { ...editSplitsData[editingSplitIdx] }; 
+                          if (newExText.trim() && !day.ex.includes(newExText.trim())) { 
+                            day.ex = [...day.ex, newExText.trim()]; 
+                            const nextSplits = [...editSplitsData]; 
+                            nextSplits[editingSplitIdx] = day; 
+                            setEditSplitsData(nextSplits); 
+                            setNewExText(""); 
+                          } 
+                        } 
+                      }}
+                    />
+                    <button 
+                      onClick={() => {
+                        const day = { ...editSplitsData[editingSplitIdx] };
+                        if (newExText.trim() && !day.ex.includes(newExText.trim())) {
+                          day.ex = [...day.ex, newExText.trim()];
+                          const nextSplits = [...editSplitsData];
+                          nextSplits[editingSplitIdx] = day;
+                          setEditSplitsData(nextSplits);
+                          setNewExText("");
+                        }
+                      }}
+                      style={{padding:"0 14px", background:C.lime, color:"#1a2400", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+                    >
+                      Añadir
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{marginTop:"auto", paddingTop:10, borderTop:`1px solid ${C.line}`, display:"flex", justifyContent:"space-between"}}>
+                  <button
+                    onClick={() => {
+                      if (editSplitsData.length <= 1) { alert("Debes tener al menos un split."); return; }
+                      if (window.confirm(`¿Seguro que deseas eliminar por completo el Split ${editSplitsData[editingSplitIdx].key}?`)) {
+                        const nextSplits = editSplitsData.filter((_, i) => i !== editingSplitIdx);
+                        setEditSplitsData(nextSplits);
+                        setEditingSplitIdx(Math.max(0, editingSplitIdx - 1));
+                      }
+                    }}
+                    style={{
+                      background:"none", border:`1px solid ${C.rose}44`, color:C.rose,
+                      borderRadius:8, padding:"6px 12px", fontSize:11.5, fontWeight:700, cursor:"pointer"
+                    }}
+                  >
+                    Eliminar este Día de Split
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div style={{display:"flex", gap:8, borderTop:`1px solid ${C.line}`, paddingTop:12}}>
+              <button 
+                onClick={() => setShowSplitsEditor(false)}
+                style={{flex:1, padding:"10px", background:"none", border:`1px solid ${C.line}`, color:C.muted, borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+              >
+                Cancelar
+              </button>
+              <button 
+                onClick={() => saveSplitsAndSyncExercises(editSplitsData)}
+                style={{flex:1, padding:"10px", background:C.lime, color:"#1a2400", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+              >
+                Guardar Todo
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -5010,11 +6417,11 @@ function Entreno({
 }
 
 /* ===== TAB REGISTRO / PESO / COMPOSICIÓN CORPORAL ===== */
-/* ===== TAB REGISTRO / PESO / COMPOSICIÓN CORPORAL ===== */
 function Registro({
-  notes, setNotes, target, bodyComp, setBodyComp, isGuardia, geminiKey,
+  notes, setNotes, target, bodyComp, setBodyComp, geminiKey,
   metricslog, setMetricslog, selectedDateStr, saveWeight, activeMetrics,
-  foodlog, waterlog, exlog
+  foodlog, waterlog, exlog,
+  projections, tdeeEstimate, analyzeAndReconfigure, experiments, setExperiments
 }){
   const [type, setType] = useState("peso");
   const [statsPeriod, setStatsPeriod] = useState(7); // 7 or 30 days
@@ -5324,7 +6731,7 @@ function Registro({
         }
       ], sys, schema);
       
-      const o = JSON.parse(out);
+      const o = cleanAndParseJSON(out);
       
       const nextComp = { musculo: o.musculo, grasaPct: o.grasaPct, visceral: o.visceral || activeMetrics.visceral || 9 };
       setBodyComp(nextComp);
@@ -5667,7 +7074,7 @@ function Registro({
       : "Sin registros nutricionales recientes.";
 
     try{ 
-      const sys = `Eres el coach de Bruno. ${getProfileStr(isGuardia, metricsToUse.weight, metricsToUse.musculo, metricsToUse.grasaPct, metricsToUse.visceral)} Déficit de grasa progresivo, manteniendo masa muscular magra. Corto y al grano.`;
+      const sys = `Eres el coach de Bruno. ${getProfileStr(metricsToUse.weight, metricsToUse.musculo, metricsToUse.grasaPct, metricsToUse.visceral)} Déficit de grasa progresivo, manteniendo masa muscular magra. Corto y al grano.`;
       const out = await callGemini([{role:"user", content:`Historial de peso de Bruno: ${series}. Composición actual: Músculo ${metricsToUse.musculo}kg, Grasa ${metricsToUse.grasaPct}%, Visceral Grado ${metricsToUse.visceral}. ${nutAvgText} Analiza la tendencia y da sugerencias calóricas.`}], sys);
       setTrend(out); 
       saveKey("last_trend", out);
@@ -5791,6 +7198,77 @@ function Registro({
         <div style={{display:"flex", justifyContent:"space-between", fontSize:9, color:C.muted, marginTop:2, padding:`0 ${pad}px`}}>
           <span>{fdate(data[0].date)}</span>
           <span>{fdate(data[data.length - 1].date)}</span>
+        </div>
+      </div>
+    );
+  };
+
+  const renderProjectionChart = () => {
+    if (!projections || projections.length === 0) {
+      return (
+        <div style={{textAlign:"center", color:C.muted, fontSize:12, padding:"24px 0", background:C.panel2, border:`1px dashed ${C.line}`, borderRadius:12}}>
+          No hay datos de proyección disponibles. Registra tu peso e ingesta calórica habitual.
+        </div>
+      );
+    }
+    
+    const W = 320, H = 160, pad = 24;
+    const weights = projections.map(p => p.peso);
+    const fats = projections.map(p => p.grasaPct);
+    
+    const minW = Math.min(...weights) - 2;
+    const maxW = Math.max(...weights) + 2;
+    const rangeW = (maxW - minW) || 1;
+    
+    const minF = Math.min(...fats) - 2;
+    const maxF = Math.max(...fats) + 2;
+    const rangeF = (maxF - minF) || 1;
+    
+    const X = wk => pad + (wk / 12) * (W - 2 * pad);
+    const Y_W = val => H - pad - ((val - minW) / rangeW) * (H - 2 * pad);
+    const Y_F = val => H - pad - ((val - minF) / rangeF) * (H - 2 * pad);
+    
+    const weightLine = projections.map(p => `${X(p.semana).toFixed(1)},${Y_W(p.peso).toFixed(1)}`).join(" ");
+    const fatLine = projections.map(p => `${X(p.semana).toFixed(1)},${Y_F(p.grasaPct).toFixed(1)}`).join(" ");
+    
+    return (
+      <div style={{margin:"12px 0 6px"}}>
+        <div style={{display:"flex", gap:14, fontSize:11, color:C.muted, marginBottom:8, justifyContent:"center"}}>
+          <span style={{display:"flex", alignItems:"center", gap:4}}>
+            <span style={{width:8, height:8, borderRadius:"50%", background:C.cyan}}/> Peso Proyectado (kg)
+          </span>
+          <span style={{display:"flex", alignItems:"center", gap:4}}>
+            <span style={{width:8, height:8, borderRadius:"50%", background:C.rose}}/> Grasa Proyectada (%)
+          </span>
+        </div>
+        
+        <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%", height:H, display:"block"}}>
+          {[0, 3, 6, 9, 12].map((wk) => {
+            const xPos = X(wk);
+            return (
+              <g key={wk}>
+                <line x1={xPos} y1={pad} x2={xPos} y2={H - pad} stroke={C.line} strokeWidth="0.8" strokeDasharray="3,3"/>
+                <text x={xPos} y={H - pad + 10} fill={C.muted} fontSize="8" textAnchor="middle">Sem {wk}</text>
+              </g>
+            );
+          })}
+          
+          <polyline points={weightLine} fill="none" stroke={C.cyan} strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round"/>
+          <polyline points={fatLine} fill="none" stroke={C.rose} strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round"/>
+          
+          <circle cx={X(0)} cy={Y_W(projections[0].peso)} r="3.2" fill={C.cyan}/>
+          <circle cx={X(0)} cy={Y_F(projections[0].grasaPct)} r="3.2" fill={C.rose}/>
+          <circle cx={X(12)} cy={Y_W(projections[12].peso)} r="3.2" fill={C.cyan}/>
+          <circle cx={X(12)} cy={Y_F(projections[12].grasaPct)} r="3.2" fill={C.rose}/>
+        </svg>
+        
+        <div style={{marginTop:12, padding:"8px 10px", background:C.panel2, borderRadius:10, border:`1px solid ${C.line}`, fontSize:11.5, color:C.ink, display:"flex", justifyContent:"space-between"}}>
+          <div>
+            <span style={{color:C.muted}}>Inicio:</span> <b>{projections[0]?.peso} kg</b> · <span style={{color:C.rose}}>{projections[0]?.grasaPct}%</span>
+          </div>
+          <div>
+            <span style={{color:C.muted}}>Semana 12:</span> <b style={{color:C.lime}}>{projections[12]?.peso} kg</b> · <span style={{color:C.rose}}>{projections[12]?.grasaPct}%</span>
+          </div>
         </div>
       </div>
     );
@@ -6067,7 +7545,7 @@ function Registro({
             onChange={e => setText(e.target.value)} 
             rows={2} 
             className="ph" 
-            placeholder={type === "entreno" ? "Subí press militar en polea..." : type === "sensacion" ? "Fatigado por la guardia pero bien alimentado..." : "Nota general..."} 
+            placeholder={type === "entreno" ? "Subí press militar en polea..." : type === "sensacion" ? "Fatigado hoy pero bien alimentado..." : "Nota general..."} 
             style={{width:"100%", resize:"none", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none"}}
           />
         )}
@@ -6267,6 +7745,21 @@ function Registro({
         </div>
 
         <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10}}>
+          <div style={{background:C.panel2, borderRadius:12, padding:12, border:`1px solid ${C.line}`, gridColumn:"span 2"}}>
+            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+              <div>
+                <div style={{fontSize:10.5, color:C.muted}}>Metabolismo Estimado (TDEE Real)</div>
+                <div style={{fontSize:16, fontWeight:800, color:C.cyan, marginTop:3}}>
+                  {tdeeEstimate ? `${tdeeEstimate} kcal/día` : "Calculando... (mín. 3 semanas de datos)"}
+                </div>
+              </div>
+              <Activity size={16} color={C.cyan} />
+            </div>
+            <div style={{fontSize:9.5, color:C.muted, marginTop:4, lineHeight:1.3}}>
+              Calculado en base a tu ingesta histórica y variaciones de peso reales.
+            </div>
+          </div>
+
           <div style={{background:C.panel2, borderRadius:12, padding:10, border:`1px solid ${C.line}`}}>
             <div style={{fontSize:10.5, color:C.muted}}>Calorías Promedio</div>
             <div style={{fontSize:15, fontWeight:800, color:C.lime, marginTop:3}}>
@@ -6314,6 +7807,11 @@ function Registro({
           <Chart entries={chartW} color={C.cyan} height={140}/>
         </div>
       )}
+
+      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 16px 12px", marginBottom:12}}>
+        <div style={{fontSize:12.5, fontWeight:800, marginBottom:2}}>Proyección Corporal a 12 Semanas (IA)</div>
+        {renderProjectionChart()}
+      </div>
 
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
         <div style={{fontSize:12.5, fontWeight:800, marginBottom:2}}>Historial Nutricional Acumulado</div>
@@ -6371,8 +7869,162 @@ function Registro({
 }
 
 /* ===== TAB PLAN / DIETA Y LISTA DE COMPRAS ===== */
-function Plan({presetKey, shoppingList, setShoppingList, geminiKey, meals, setMeals}){
-  const target = PRESETS[presetKey];
+function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppingList, setShoppingList, geminiKey, meals, setMeals}){
+  const target = customPresets[presetKey] || customPresets.personalizado || DEFAULT_PRESETS.personalizado;
+  // Local state for macro editor — avoids async-lag with controlled inputs
+  const [editVals, setEditVals] = React.useState({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
+  const [editDirty, setEditDirty] = React.useState(false);
+  // Sync editVals when target changes (e.g. user switches preset)
+  React.useEffect(() => {
+    setEditVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
+    setEditDirty(false);
+  }, [presetKey, target.kcal, target.p, target.c, target.f]);
+
+  const updateMacroAndAdjustMeals = (type, numVal) => {
+    const oldTarget = { ...target };
+    const nextVals = { kcal: target.kcal, p: target.p, c: target.c, f: target.f };
+    nextVals[type] = numVal;
+    
+    let factor = 1;
+    if (type === "kcal") {
+      factor = numVal / oldTarget.kcal;
+      nextVals.p = Math.round(oldTarget.p * factor);
+      nextVals.c = Math.round(oldTarget.c * factor);
+      nextVals.f = Math.round(oldTarget.f * factor);
+    } else {
+      const newKcal = nextVals.p * 4 + nextVals.c * 4 + nextVals.f * 9;
+      nextVals.kcal = newKcal;
+      factor = newKcal / oldTarget.kcal;
+    }
+    
+    if (factor > 0 && factor !== 1) {
+      const nextMeals = meals.map(meal => {
+        let newKcalStr = meal.kcal;
+        const kcalMatch = meal.kcal.match(/(\d+)/);
+        if (kcalMatch) {
+          const val = parseInt(kcalMatch[1]);
+          const scaledVal = Math.round(val * factor);
+          newKcalStr = meal.kcal.replace(/\d+/, scaledVal);
+        }
+        
+        const nextOpts = meal.opts.map(opt => {
+          return opt.replace(/(\d+(\.\d+)?)\s*(g|ml|scoop|scoops|huevo|huevos|clara|claras|rebanada|rebanadas|tostada|tostadas|unidades|unidad)\b/gi, (match, numStr, decimal, unitWord) => {
+            const val = parseFloat(numStr);
+            const scaled = Math.round(val * factor * 10) / 10;
+            const formatted = Number.isInteger(scaled) ? scaled.toString() : scaled.toFixed(1);
+            return `${formatted} ${unitWord}`;
+          });
+        });
+        
+        return {
+          ...meal,
+          kcal: newKcalStr,
+          opts: nextOpts
+        };
+      });
+      setMeals(nextMeals);
+    }
+    
+    const newPresets = {
+      ...customPresets,
+      [presetKey]: {
+        ...customPresets[presetKey],
+        ...nextVals
+      }
+    };
+    setCustomPresets(newPresets, false);
+    setEditVals(nextVals);
+  };
+
+  const handleLongPress = (type, currentVal) => {
+    let promptMsg = "";
+    if (type === "kcal") promptMsg = "Ingresa el nuevo objetivo de Calorías Diarias (kcal):";
+    else if (type === "p") promptMsg = "Ingresa el nuevo objetivo de Proteína (g):";
+    else if (type === "c") promptMsg = "Ingresa el nuevo objetivo de Carbohidratos (g):";
+    else if (type === "f") promptMsg = "Ingresa el nuevo objetivo de Grasas (g):";
+    
+    const newVal = prompt(promptMsg, currentVal);
+    if (newVal === null) return;
+    
+    const numVal = parseInt(newVal);
+    if (isNaN(numVal) || numVal <= 0) {
+      alert("Por favor ingresa un número válido mayor a 0.");
+      return;
+    }
+    
+    updateMacroAndAdjustMeals(type, numVal);
+  };
+
+  const bindLongPress = (type, currentVal) => {
+    let timer = null;
+    const start = (e) => {
+      timer = setTimeout(() => {
+        handleLongPress(type, currentVal);
+      }, 700);
+    };
+    const clear = () => {
+      if (timer) clearTimeout(timer);
+    };
+    return {
+      onMouseDown: start,
+      onMouseUp: clear,
+      onMouseLeave: clear,
+      onTouchStart: start,
+      onTouchEnd: clear
+    };
+  };
+
+  const commitMacros = () => {
+    const oldTarget = { ...target };
+    const nextVals = { ...editVals };
+    
+    let factor = 1;
+    if (nextVals.kcal !== oldTarget.kcal) {
+      factor = nextVals.kcal / oldTarget.kcal;
+    } else if (nextVals.p !== oldTarget.p || nextVals.c !== oldTarget.c || nextVals.f !== oldTarget.f) {
+      const newKcal = nextVals.p * 4 + nextVals.c * 4 + nextVals.f * 9;
+      nextVals.kcal = newKcal;
+      factor = newKcal / oldTarget.kcal;
+    }
+    
+    if (factor > 0 && factor !== 1) {
+      const nextMeals = meals.map(meal => {
+        let newKcalStr = meal.kcal;
+        const kcalMatch = meal.kcal.match(/(\d+)/);
+        if (kcalMatch) {
+          const val = parseInt(kcalMatch[1]);
+          const scaledVal = Math.round(val * factor);
+          newKcalStr = meal.kcal.replace(/\d+/, scaledVal);
+        }
+        
+        const nextOpts = meal.opts.map(opt => {
+          return opt.replace(/(\d+(\.\d+)?)\s*(g|ml|scoop|scoops|huevo|huevos|clara|claras|rebanada|rebanadas|tostada|tostadas|unidades|unidad)\b/gi, (match, numStr, decimal, unitWord) => {
+            const val = parseFloat(numStr);
+            const scaled = Math.round(val * factor * 10) / 10;
+            const formatted = Number.isInteger(scaled) ? scaled.toString() : scaled.toFixed(1);
+            return `${formatted} ${unitWord}`;
+          });
+        });
+        
+        return {
+          ...meal,
+          kcal: newKcalStr,
+          opts: nextOpts
+        };
+      });
+      setMeals(nextMeals);
+    }
+    
+    const newPresets = {
+      ...customPresets,
+      [presetKey]: {
+        ...customPresets[presetKey],
+        ...nextVals
+      }
+    };
+    setCustomPresets(newPresets, false);
+    setEditDirty(false);
+  };
   const [shopBusy, setShopBusy] = useState(false);
   const [shopErr, setShopErr] = useState("");
 
@@ -6387,9 +8039,9 @@ function Plan({presetKey, shoppingList, setShoppingList, geminiKey, meals, setMe
     setAiMealsBusy(true);
     setMealsAiErr("");
     try {
-      const prompt = `Plan de comidas actual: ${JSON.stringify(meals)}. Objetivo de hoy: ${target.label} (${target.kcal} kcal, ${target.p}g P, ${target.c}g C, ${target.f}g G). Perfil de Bruno: hombre, 34 años, 180 cm, 93.9 kg, residente de cirugía pediátrica con guardias de 24h. Solicitud de cambio del usuario: "${mealsPrompt.trim()}". Genera la distribución de comidas adaptada respetando su perfil y el esquema requerido.`;
+      const prompt = `Plan de comidas actual: ${JSON.stringify(meals)}. Objetivo de hoy: ${target.label} (${target.kcal} kcal, ${target.p}g P, ${target.c}g C, ${target.f}g G). Perfil de Bruno: hombre, 34 años, 180 cm, 93.9 kg. Solicitud de cambio del usuario: "${mealsPrompt.trim()}". Genera la distribución de comidas adaptada respetando su perfil y el esquema requerido.`;
       const out = await callGemini([{ role: "user", content: prompt }], MEALS_SYS, MEALS_SCHEMA);
-      const parsed = JSON.parse(out);
+      const parsed = cleanAndParseJSON(out);
       if (!parsed.meals || parsed.meals.length === 0) {
         throw new Error("No se pudo generar la distribución de comidas.");
       }
@@ -6414,11 +8066,70 @@ function Plan({presetKey, shoppingList, setShoppingList, geminiKey, meals, setMe
     setPreviewMeals(null);
   };
 
+  // --- Manual Meals Editor States & Actions ---
+  const [editingMealIdx, setEditingMealIdx] = React.useState(null); // null, or index, or "new"
+  const [editMealData, setEditMealData] = React.useState({ slot: "", kcal: "", opts: [""] });
+
+  const startEditMeal = (idx) => {
+    setEditingMealIdx(idx);
+    setEditMealData({
+      slot: meals[idx].slot,
+      kcal: meals[idx].kcal,
+      opts: meals[idx].opts && meals[idx].opts.length > 0 ? [...meals[idx].opts] : [""]
+    });
+  };
+
+  const startAddMeal = () => {
+    setEditingMealIdx("new");
+    setEditMealData({ slot: "", kcal: "", opts: [""] });
+  };
+
+  const saveMeal = () => {
+    if (!editMealData.slot.trim()) return;
+    const cleanedOpts = editMealData.opts.map(o => o.trim()).filter(Boolean);
+    const updatedMeal = {
+      slot: editMealData.slot.trim(),
+      kcal: editMealData.kcal.trim() || "~200 kcal",
+      opts: cleanedOpts.length > 0 ? cleanedOpts : ["Comida personalizada"]
+    };
+    let nextMeals = [...meals];
+    if (editingMealIdx === "new") {
+      nextMeals.push(updatedMeal);
+    } else {
+      nextMeals[editingMealIdx] = updatedMeal;
+    }
+    setMeals(nextMeals);
+    setEditingMealIdx(null);
+  };
+
+  const deleteMeal = (idx) => {
+    if (window.confirm("¿Seguro que deseas eliminar esta comida de la distribución?")) {
+      const nextMeals = meals.filter((_, i) => i !== idx);
+      setMeals(nextMeals);
+      setEditingMealIdx(null);
+    }
+  };
+
+  const updateOptionText = (oIdx, val) => {
+    const nextOpts = [...editMealData.opts];
+    nextOpts[oIdx] = val;
+    setEditMealData(prev => ({ ...prev, opts: nextOpts }));
+  };
+
+  const addOptionField = () => {
+    setEditMealData(prev => ({ ...prev, opts: [...prev.opts, ""] }));
+  };
+
+  const removeOptionField = (oIdx) => {
+    const nextOpts = editMealData.opts.filter((_, i) => i !== oIdx);
+    setEditMealData(prev => ({ ...prev, opts: nextOpts.length > 0 ? nextOpts : [""] }));
+  };
+
   const generateShoppingList = async() => {
     setShopBusy(true);
     setShopErr("");
 
-    const prompt = `Genera una lista de compras semanal recomendada para Bruno (residente de cirugía pediátrica con guardias de 24h). Bruno está en el preset: ${target.label} (${target.kcal} kcal, ${target.p}g P, ${target.c}g C, ${target.f}g G). Prioriza proteínas de preparación rápida, snacks de bolsillo, verduras y frutas fáciles de transportar al hospital. Devuelve un formato JSON estructurado.`;
+    const prompt = `Genera una lista de compras semanal recomendada para Bruno. Bruno está en el preset: ${target.label} (${target.kcal} kcal, ${target.p}g P, ${target.c}g C, ${target.f}g G). Prioriza proteínas, verduras, frutas y alimentos saludables. Devuelve un formato JSON estructurado.`;
     const sys = "Eres un nutricionista experto. Devuelve un JSON estructurado con el formato requerido. Ejemplo:\n" +
                 "{\n" +
                 "  \"categorias\": [\n" +
@@ -6449,7 +8160,7 @@ function Plan({presetKey, shoppingList, setShoppingList, geminiKey, meals, setMe
 
     try {
       const out = await callGemini([{ role: "user", content: prompt }], sys, schema);
-      const parsed = JSON.parse(out);
+      const parsed = cleanAndParseJSON(out);
       setShoppingList(parsed);
     } catch(e) {
       setShopErr("Error al generar la lista. Intenta de nuevo.");
@@ -6468,30 +8179,133 @@ function Plan({presetKey, shoppingList, setShoppingList, geminiKey, meals, setMe
     setShoppingList(nextList);
   };
 
+  // Preset selector labels
+  const PRESET_LABELS = Object.entries(customPresets).map(([k, v]) => ({ key: k, label: v.label || k }));
+
   return (
     <div className="pop">
+      {/* Selector de objetivo */}
+      <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:14, flexWrap:"wrap"}}>
+        {PRESET_LABELS.map(({key, label}) => (
+          <button
+            key={key}
+            onClick={() => setPresetKey(key)}
+            style={{
+              padding:"6px 14px", borderRadius:20, border: presetKey===key ? `1.5px solid ${C.lime}` : `1px solid ${C.line}`,
+              background: presetKey===key ? `${C.lime}22` : C.panel2, color: presetKey===key ? C.lime : C.muted,
+              fontSize:11, fontWeight:700, cursor:"pointer", textTransform:"uppercase", letterSpacing:".05em",
+              transition:"all .2s"
+            }}
+          >{label}</button>
+        ))}
+      </div>
       <div className="disp" style={{fontSize:24, color:C.lime, marginBottom:10}}>TU PLAN: {target.label.toUpperCase()}</div>
       
       {/* Objetivos de macros */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"16px 18px", marginBottom:14}}>
         <div style={{fontSize:11, color:C.muted, fontWeight:700, letterSpacing:".1em", textTransform:"uppercase", marginBottom:10}}>Objetivos de Nutrición</div>
         <div style={{display:"grid", gridTemplateColumns:"repeat(2, 1fr)", gap:12}}>
-          <div style={{background:C.panel2, borderRadius:12, padding:12, border:`1px solid ${C.line}`}}>
+          <div 
+            {...bindLongPress("kcal", target.kcal)}
+            onContextMenu={e => e.preventDefault()}
+            style={{background:C.panel2, borderRadius:12, padding:12, border:`1px solid ${C.line}`, cursor:"pointer", userSelect:"none"}}
+            title="Mantén presionado para cambiar objetivo"
+          >
             <div style={{fontSize:12, color:C.muted}}>Calorías Diarias</div>
             <div className="disp" style={{fontSize:28, color:C.lime, marginTop:4}}>{target.kcal} <span style={{fontSize:12, fontFamily:"'Manrope'", fontWeight:500, color:C.muted}}>kcal</span></div>
+            <div style={{fontSize:9, color:C.muted, marginTop:4}}>Mantén pulsado para editar</div>
           </div>
-          <div style={{background:C.panel2, borderRadius:12, padding:12, border:`1px solid ${C.line}`}}>
+          <div 
+            {...bindLongPress("p", target.p)}
+            onContextMenu={e => e.preventDefault()}
+            style={{background:C.panel2, borderRadius:12, padding:12, border:`1px solid ${C.line}`, cursor:"pointer", userSelect:"none"}}
+            title="Mantén presionado para cambiar objetivo"
+          >
             <div style={{fontSize:12, color:C.cyan}}>Proteína (Objetivo)</div>
             <div className="disp" style={{fontSize:28, color:C.cyan, marginTop:4}}>{target.p} <span style={{fontSize:12, fontFamily:"'Manrope'", fontWeight:500, color:C.muted}}>g</span></div>
+            <div style={{fontSize:9, color:C.muted, marginTop:4}}>Mantén pulsado para editar</div>
           </div>
-          <div style={{background:C.panel2, borderRadius:12, padding:12, border:`1px solid ${C.line}`}}>
+          <div 
+            {...bindLongPress("c", target.c)}
+            onContextMenu={e => e.preventDefault()}
+            style={{background:C.panel2, borderRadius:12, padding:12, border:`1px solid ${C.line}`, cursor:"pointer", userSelect:"none"}}
+            title="Mantén presionado para cambiar objetivo"
+          >
             <div style={{fontSize:12, color:C.lime}}>Carbohidratos</div>
             <div className="disp" style={{fontSize:28, color:C.lime, marginTop:4}}>{target.c} <span style={{fontSize:12, fontFamily:"'Manrope'", fontWeight:500, color:C.muted}}>g</span></div>
+            <div style={{fontSize:9, color:C.muted, marginTop:4}}>Mantén pulsado para editar</div>
           </div>
-          <div style={{background:C.panel2, borderRadius:12, padding:12, border:`1px solid ${C.line}`}}>
+          <div 
+            {...bindLongPress("f", target.f)}
+            onContextMenu={e => e.preventDefault()}
+            style={{background:C.panel2, borderRadius:12, padding:12, border:`1px solid ${C.line}`, cursor:"pointer", userSelect:"none"}}
+            title="Mantén presionado para cambiar objetivo"
+          >
             <div style={{fontSize:12, color:C.amber}}>Grasas</div>
             <div className="disp" style={{fontSize:28, color:C.amber, marginTop:4}}>{target.f} <span style={{fontSize:12, fontFamily:"'Manrope'", fontWeight:500, color:C.muted}}>g</span></div>
+            <div style={{fontSize:9, color:C.muted, marginTop:4}}>Mantén pulsado para editar</div>
           </div>
+        </div>
+        {/* Editor de macros — visible siempre, guarda como 'Personalizado' */}
+        <div style={{marginTop:14, paddingTop:14, borderTop:`1px solid ${C.line}`, display:"flex", flexDirection:"column", gap:10}}>
+          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+            <div style={{fontSize:11.5, fontWeight:800, color:C.lime, textTransform:"uppercase", letterSpacing:".05em"}}>Ajustar Macros</div>
+            {editDirty && (
+              <button
+                onClick={commitMacros}
+                style={{
+                  padding:"5px 14px", background:C.lime, color:C.bg, border:"none",
+                  borderRadius:20, fontSize:11, fontWeight:800, cursor:"pointer",
+                  textTransform:"uppercase", letterSpacing:".05em"
+                }}
+              >✓ Guardar</button>
+            )}
+          </div>
+          <div style={{display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:8}}>
+            <div>
+              <label style={{fontSize:10, color:C.muted, display:"block", marginBottom:4, fontWeight:700}}>Kcal</label>
+              <input
+                type="number"
+                value={editVals.kcal}
+                onChange={e => { setEditVals(v => ({...v, kcal: parseInt(e.target.value)||0})); setEditDirty(true); }}
+                onBlur={commitMacros}
+                style={{width:"100%", background:C.bg, border:`1.5px solid ${editDirty?C.lime:C.line}`, borderRadius:8, padding:"6px 4px", fontSize:12, color:C.ink, textAlign:"center", fontWeight:600, outline:"none"}}
+              />
+            </div>
+            <div>
+              <label style={{fontSize:10, color:C.cyan, display:"block", marginBottom:4, fontWeight:700}}>Prot (g)</label>
+              <input
+                type="number"
+                value={editVals.p}
+                onChange={e => { setEditVals(v => ({...v, p: parseInt(e.target.value)||0})); setEditDirty(true); }}
+                onBlur={commitMacros}
+                style={{width:"100%", background:C.bg, border:`1.5px solid ${editDirty?C.cyan:C.line}`, borderRadius:8, padding:"6px 4px", fontSize:12, color:C.ink, textAlign:"center", fontWeight:600, outline:"none"}}
+              />
+            </div>
+            <div>
+              <label style={{fontSize:10, color:C.lime, display:"block", marginBottom:4, fontWeight:700}}>Carb (g)</label>
+              <input
+                type="number"
+                value={editVals.c}
+                onChange={e => { setEditVals(v => ({...v, c: parseInt(e.target.value)||0})); setEditDirty(true); }}
+                onBlur={commitMacros}
+                style={{width:"100%", background:C.bg, border:`1.5px solid ${editDirty?C.lime:C.line}`, borderRadius:8, padding:"6px 4px", fontSize:12, color:C.ink, textAlign:"center", fontWeight:600, outline:"none"}}
+              />
+            </div>
+            <div>
+              <label style={{fontSize:10, color:C.amber, display:"block", marginBottom:4, fontWeight:700}}>Grasa (g)</label>
+              <input
+                type="number"
+                value={editVals.f}
+                onChange={e => { setEditVals(v => ({...v, f: parseInt(e.target.value)||0})); setEditDirty(true); }}
+                onBlur={commitMacros}
+                style={{width:"100%", background:C.bg, border:`1.5px solid ${editDirty?C.amber:C.line}`, borderRadius:8, padding:"6px 4px", fontSize:12, color:C.ink, textAlign:"center", fontWeight:600, outline:"none"}}
+              />
+            </div>
+          </div>
+          {editDirty && (
+            <div style={{fontSize:10, color:C.muted, textAlign:"center"}}>Se guardará como "Personalizado" — Tab fuera del campo o presiona Guardar</div>
+          )}
         </div>
       </div>
 
@@ -6560,33 +8374,54 @@ function Plan({presetKey, shoppingList, setShoppingList, geminiKey, meals, setMe
 
       {/* Sugerencias de Comidas */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"16px 18px", marginBottom:14}}>
-        <div style={{display:"flex", justifyTarget:"space-between", justifyContent:"space-between", alignItems:"center", marginBottom:12}}>
+        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12, flexWrap:"wrap", gap:6}}>
           <span style={{fontSize:11, color:C.muted, fontWeight:700, letterSpacing:".1em", textTransform:"uppercase"}}>
             Distribución de Comidas Sugerida
           </span>
-          <button 
-            onClick={() => {
-              setShowMealsAiPanel(!showMealsAiPanel);
-              setMealsAiErr("");
-              setPreviewMeals(null);
-            }}
-            style={{
-              padding:"4px 10px",
-              borderRadius:6,
-              background: showMealsAiPanel ? "rgba(205,255,74,.12)" : C.panel2,
-              border: `1px solid ${showMealsAiPanel ? C.lime : C.line}`,
-              color: showMealsAiPanel ? C.lime : C.muted,
-              fontSize:11,
-              fontWeight:800,
-              cursor:"pointer",
-              display:"flex",
-              alignItems:"center",
-              gap:4
-            }}
-          >
-            <Sparkles size={11}/>
-            <span>{showMealsAiPanel ? "Cerrar" : "Ajustar con IA"}</span>
-          </button>
+          <div style={{display:"flex", gap:6}}>
+            <button
+              onClick={startAddMeal}
+              style={{
+                padding:"4px 10px",
+                borderRadius:6,
+                background: C.panel2,
+                border: `1px solid ${C.line}`,
+                color: C.lime,
+                fontSize:11,
+                fontWeight:800,
+                cursor:"pointer",
+                display:"flex",
+                alignItems:"center",
+                gap:4
+              }}
+            >
+              <Plus size={11}/>
+              <span>Añadir Comida</span>
+            </button>
+            <button 
+              onClick={() => {
+                setShowMealsAiPanel(!showMealsAiPanel);
+                setMealsAiErr("");
+                setPreviewMeals(null);
+              }}
+              style={{
+                padding:"4px 10px",
+                borderRadius:6,
+                background: showMealsAiPanel ? "rgba(205,255,74,.12)" : C.panel2,
+                border: `1px solid ${showMealsAiPanel ? C.lime : C.line}`,
+                color: showMealsAiPanel ? C.lime : C.muted,
+                fontSize:11,
+                fontWeight:800,
+                cursor:"pointer",
+                display:"flex",
+                alignItems:"center",
+                gap:4
+              }}
+            >
+              <Sparkles size={11}/>
+              <span>{showMealsAiPanel ? "Cerrar" : "Ajustar con IA"}</span>
+            </button>
+          </div>
         </div>
 
         {showMealsAiPanel && (
@@ -6633,7 +8468,21 @@ function Plan({presetKey, shoppingList, setShoppingList, geminiKey, meals, setMe
         {(previewMeals || meals).map((meal, idx) => (
           <div key={idx} style={{background:C.panel2, border:`1px solid ${previewMeals ? C.cyan : C.line}`, borderRadius:12, padding:12, marginBottom:8}}>
             <div style={{display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:6}}>
-              <span style={{fontSize:14, fontWeight:700, color:C.lime}}>{meal.slot}</span>
+              <div style={{display:"flex", alignItems:"center", gap:8}}>
+                <span style={{fontSize:14, fontWeight:700, color:C.lime}}>{meal.slot}</span>
+                {!previewMeals && (
+                  <button 
+                    onClick={() => startEditMeal(idx)}
+                    style={{
+                      background: "none", border: "none", color: C.muted, cursor: "pointer", 
+                      padding: 2, display: "flex", alignItems: "center", transition: "color 0.2s"
+                    }}
+                    title="Editar comida"
+                  >
+                    <NotebookPen size={12}/>
+                  </button>
+                )}
+              </div>
               <span style={{fontSize:12, color:C.muted, fontVariantNumeric:"tabular-nums"}}>{meal.kcal}</span>
             </div>
             <ul style={{margin:0, paddingLeft:16, fontSize:13, color:"#dde0cf", lineHeight:1.45}}>
@@ -6657,6 +8506,113 @@ function Plan({presetKey, shoppingList, setShoppingList, geminiKey, meals, setMe
           ))}
         </div>
       </div>
+
+      {/* Modal de edición de comida */}
+      {editingMealIdx !== null && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, width: "100%", height: "100%",
+          background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center",
+          justifyContent: "center", zIndex: 9999, padding: 16
+        }}>
+          <div style={{
+            background: C.panel, border: `1px solid ${C.line}`, borderRadius: 16,
+            padding: 20, width: "100%", maxWidth: 420, display: "flex",
+            flexDirection: "column", gap: 14, boxShadow: "0 10px 30px rgba(0,0,0,0.5)"
+          }}>
+            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+              <span style={{fontSize:14, fontWeight:900, color:C.lime}}>
+                {editingMealIdx === "new" ? "AÑADIR COMIDA" : "EDITAR COMIDA"}
+              </span>
+              <button 
+                onClick={() => setEditingMealIdx(null)}
+                style={{background:"none", border:"none", color:C.muted, cursor: "pointer", padding:4}}
+              >
+                <X size={20}/>
+              </button>
+            </div>
+
+            <div style={{display:"flex", flexDirection:"column", gap:10}}>
+              <div>
+                <label style={{fontSize:11, color:C.muted, fontWeight:700, display:"block", marginBottom:4}}>Nombre del Momento (ej. Desayuno)</label>
+                <input 
+                  type="text" 
+                  value={editMealData.slot}
+                  onChange={e => setEditMealData(prev => ({ ...prev, slot: e.target.value }))}
+                  placeholder="ej. Merienda"
+                  style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px 10px", fontSize:13, color:C.ink, outline:"none"}}
+                />
+              </div>
+
+              <div>
+                <label style={{fontSize:11, color:C.muted, fontWeight:700, display:"block", marginBottom:4}}>Estimación de Calorías (ej. ~300 kcal)</label>
+                <input 
+                  type="text" 
+                  value={editMealData.kcal}
+                  onChange={e => setEditMealData(prev => ({ ...prev, kcal: e.target.value }))}
+                  placeholder="ej. ~300 kcal"
+                  style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px 10px", fontSize:13, color:C.ink, outline:"none"}}
+                />
+              </div>
+
+              <div>
+                <label style={{fontSize:11, color:C.muted, fontWeight:700, display:"block", marginBottom:4}}>Opciones de Alimentos</label>
+                <div style={{display:"flex", flexDirection:"column", gap:6, maxHeight:200, overflowY:"auto", paddingRight:4}}>
+                  {editMealData.opts.map((opt, oIdx) => (
+                    <div key={oIdx} style={{display:"flex", gap:6}}>
+                      <input 
+                        type="text" 
+                        value={opt}
+                        onChange={e => updateOptionText(oIdx, e.target.value)}
+                        placeholder="Opción de comida o combinación"
+                        style={{flex:1, background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 10px", fontSize:12.5, color:C.ink, outline:"none"}}
+                      />
+                      <button 
+                        onClick={() => removeOptionField(oIdx)}
+                        style={{background:"rgba(255,107,138,0.1)", border:"none", borderRadius:8, color:C.rose, cursor:"pointer", padding:"0 10px", display:"flex", alignItems:"center"}}
+                      >
+                        <Trash2 size={13}/>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <button 
+                  onClick={addOptionField}
+                  style={{
+                    marginTop:8, background:"none", border:`1px dashed ${C.line}`, borderRadius:8,
+                    color:C.lime, fontSize:11.5, fontWeight:700, padding:"6px 12px", cursor:"pointer",
+                    display:"flex", alignItems:"center", gap:4, width:"100%", justifyContent:"center"
+                  }}
+                >
+                  <Plus size={12}/> Añadir Opción Alternativa
+                </button>
+              </div>
+            </div>
+
+            <div style={{display:"flex", gap:8, marginTop:6}}>
+              {editingMealIdx !== "new" && (
+                <button 
+                  onClick={() => deleteMeal(editingMealIdx)}
+                  style={{
+                    padding:"8px 14px", background:"rgba(255,107,138,0.15)", color:C.rose, border:`1px solid ${C.rose}44`,
+                    borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"
+                  }}
+                >
+                  Eliminar
+                </button>
+              )}
+              <button 
+                onClick={saveMeal}
+                style={{
+                  flex:1, padding:"8px 14px", background:C.lime, color:"#1a2400", border:"none",
+                  borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"
+                }}
+              >
+                Guardar Cambios
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

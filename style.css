@@ -10,9 +10,6 @@
   --color-cyan: #4ad6ff;
   --color-amber: #ffb13d;
   --color-rose: #ff6b8a;
-  --color-guardia: #00f0ff;
-  --color-guardia-bg: rgba(0, 240, 255, 0.08);
-  --color-guardia-border: rgba(0, 240, 255, 0.35);
   
   --font-display: 'Bebas Neue', sans-serif;
   --font-sans: 'Manrope', system-ui, sans-serif;
@@ -21,7 +18,6 @@
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.6);
   --shadow-glow-lime: 0 0 15px rgba(205, 255, 74, 0.25);
   --shadow-glow-cyan: 0 0 15px rgba(74, 214, 255, 0.25);
-  --shadow-glow-guardia: 0 0 20px rgba(0, 240, 255, 0.4);
 }
 
 /* Base resets */
@@ -80,10 +76,7 @@ body {
   100% { box-shadow: 0 0 10px rgba(0, 240, 255, 0.2); }
 }
 
-@keyframes pulseText {
-  0%, 100% { opacity: 0.8; }
-  50% { opacity: 1; color: var(--color-guardia); }
-}
+
 
 .pop {
   animation: pop 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -125,32 +118,7 @@ button:active {
   transform: scale(0.97);
 }
 
-/* ===== ENTORNO DEL MODO GUARDIA (GUARDIA MODE) ===== */
-.guardia-banner {
-  background: linear-gradient(90deg, #004b57, #062a13);
-  border-bottom: 1px solid var(--color-guardia-border);
-  padding: 8px 16px;
-  text-align: center;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-  color: var(--color-guardia);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  animation: pulseText 3s infinite ease-in-out;
-  position: sticky;
-  top: 0;
-  z-index: 100;
-}
 
-.guardia-card-active {
-  background: var(--color-guardia-bg) !important;
-  border: 1px solid var(--color-guardia-border) !important;
-  animation: pulseGlow 4s infinite ease-in-out;
-}
 
 /* ===== GRÁFICO SVG ===== */
 .chart-container {
