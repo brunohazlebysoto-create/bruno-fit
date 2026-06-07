@@ -6123,6 +6123,7 @@ function Entreno({
               Cancelar
             </button>
           </div>
+        )}
       {confirmRemoveEx !== null && (
         <div style={{
           position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
