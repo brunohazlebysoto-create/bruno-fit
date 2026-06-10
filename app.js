@@ -636,6 +636,41 @@ const ANALYSIS_SCHEMA = {
   }, required:["insights"]
 };
 
+const TRAINER_AGENT_SCHEMA = {
+  type:"OBJECT", properties:{
+    trainingPhase:{ type:"OBJECT", properties:{
+      name:{ type:"STRING" },
+      description:{ type:"STRING" },
+      weekNumber:{ type:"NUMBER" }
+    }, required:["name","description"] },
+    deloadRecommendation:{ type:"OBJECT", properties:{
+      recommended:{ type:"STRING" },
+      targetVolumePct:{ type:"NUMBER" },
+      durationDays:{ type:"NUMBER" },
+      rationale:{ type:"STRING" }
+    }, required:["recommended","rationale"] },
+    exerciseVariations:{ type:"ARRAY", items:{ type:"OBJECT", properties:{
+      exercise:{ type:"STRING" },
+      currentIssue:{ type:"STRING" },
+      variation:{ type:"STRING" },
+      reason:{ type:"STRING" },
+      priority:{ type:"STRING" }
+    }, required:["exercise","variation","reason","priority"] } },
+    muscleAlerts:{ type:"ARRAY", items:{ type:"OBJECT", properties:{
+      muscle:{ type:"STRING" },
+      status:{ type:"STRING" },
+      currentSets:{ type:"NUMBER" },
+      recommendation:{ type:"STRING" }
+    }, required:["muscle","status","recommendation"] } },
+    performanceSummary:{ type:"OBJECT", properties:{
+      narrative:{ type:"STRING" },
+      topStrengths:{ type:"ARRAY", items:{ type:"STRING" } },
+      topConcerns:{ type:"ARRAY", items:{ type:"STRING" } },
+      nextWeekFocus:{ type:"STRING" }
+    }, required:["narrative","nextWeekFocus"] }
+  }, required:["trainingPhase","deloadRecommendation","exerciseVariations","muscleAlerts","performanceSummary"]
+};
+
 // ── Funciones estadísticas ──
 function linearRegression(ys) {
   if (!ys || ys.length < 2) return { slope: 0, intercept: ys?.[0] || 0 };
@@ -792,6 +827,101 @@ function getWeeklyStats(foodlog, exlog, metricslog, notes) {
   return { trainDays: trainDays.length, avgProtein: Math.round(avgProtein), avgKcal: Math.round(avgKcal), weightChange, fatigueCount };
 }
 
+// ── Agente Entrenador: funciones puras ──
+
+function calcWeeklyTrainingLoad(exlog) {
+  const weeks = [];
+  for (let i = 7; i >= 0; i--) {
+    const mondayOfWeek = new Date();
+    mondayOfWeek.setDate(mondayOfWeek.getDate() - ((mondayOfWeek.getDay()+6)%7) - i*7);
+    mondayOfWeek.setHours(0,0,0,0);
+    const sundayOfWeek = new Date(mondayOfWeek);
+    sundayOfWeek.setDate(mondayOfWeek.getDate() + 6);
+    sundayOfWeek.setHours(23,59,59,999);
+    const weekStart = mondayOfWeek.getTime();
+    const weekEnd = sundayOfWeek.getTime();
+    let totalSets = 0, totalVol = 0;
+    Object.values(exlog||{}).forEach(sets=>{
+      (sets||[]).forEach(s=>{
+        if (!s?.date || s?.type === "warmup") return;
+        const t = new Date(s.date).getTime();
+        if (t >= weekStart && t <= weekEnd) {
+          totalSets++;
+          totalVol += (parseFloat(s.w)||0) * (parseInt(s.reps)||0);
+        }
+      });
+    });
+    const weekNum = (() => {
+      const d = new Date(mondayOfWeek);
+      d.setHours(0,0,0,0);
+      d.setDate(d.getDate()+3-(d.getDay()+6)%7);
+      const week1 = new Date(d.getFullYear(),0,4);
+      return 1+Math.round(((d-week1)/86400000-3+(week1.getDay()+6)%7)/7);
+    })();
+    weeks.push({ weekLabel:`Sem ${weekNum}`, totalSets, totalVol: Math.round(totalVol) });
+  }
+  return weeks;
+}
+
+function detectDeloadNeed(exlog, notes, _metricslog) {
+  const weeks = calcWeeklyTrainingLoad(exlog);
+  const fatigueScore = detectFatigueFromNotes(notes);
+  let weeksSinceDeload = 8;
+  for (let i = weeks.length - 1; i >= 4; i--) {
+    const prev4avg = weeks.slice(i-4, i).reduce((s,w)=>s+w.totalSets,0)/4;
+    if (prev4avg > 0 && weeks[i].totalSets < prev4avg * 0.6) {
+      weeksSinceDeload = weeks.length - 1 - i;
+      break;
+    }
+  }
+  const allSets = weeks.map(w=>w.totalSets).filter(s=>s>0);
+  const medianSets = allSets.length ? allSets.sort((a,b)=>a-b)[Math.floor(allSets.length/2)] : 0;
+  let consecutiveHighWeeks = 0;
+  for (let i = weeks.length - 1; i >= 0; i--) {
+    if (weeks[i].totalSets > medianSets * 1.15) consecutiveHighWeeks++;
+    else break;
+  }
+  let urgency = 'none';
+  if (weeksSinceDeload >= 7 || fatigueScore >= 3 || consecutiveHighWeeks >= 5) urgency = 'high';
+  else if (weeksSinceDeload >= 6 || (consecutiveHighWeeks >= 3 && fatigueScore >= 1)) urgency = 'medium';
+  else if (weeksSinceDeload >= 4 || consecutiveHighWeeks >= 3) urgency = 'low';
+  const reasons = [];
+  if (weeksSinceDeload >= 4) reasons.push(`${weeksSinceDeload} sem sin deload`);
+  if (consecutiveHighWeeks >= 3) reasons.push(`${consecutiveHighWeeks} sem de carga alta consecutivas`);
+  if (fatigueScore >= 2) reasons.push(`${fatigueScore} notas de fatiga`);
+  return { recommended: urgency !== 'none', urgency, reason: reasons.join(' + ') || 'Carga moderada', weeksSinceDeload };
+}
+
+const MUSCLE_ALIASES = {
+  "Deltoide ant.":"Deltoides","Deltoide lat.":"Deltoides","Deltoide post.":"Deltoides",
+  "Core":"Core","Pantorrilla":"Pantorrillas"
+};
+function calcMuscleVolumeBalance(exlog, exercises) {
+  const primaryMuscles = ["Pectoral","Espalda","Cuádriceps","Isquios","Deltoides","Bíceps","Tríceps","Glúteos","Antebrazo","Core","Pantorrillas"];
+  const counts = {};
+  primaryMuscles.forEach(m=>{ counts[m] = 0; });
+  const cutoff28 = Date.now() - 28*86400000;
+  Object.entries(exlog||{}).forEach(([exName, sets])=>{
+    const muscleList = (exercises&&exercises[exName]?.musculos) || MUSCLES[exName] || [];
+    const recentSets = (sets||[]).filter(s=>s?.date && new Date(s.date).getTime()>cutoff28 && s?.type!=="warmup");
+    muscleList.forEach(rawM=>{
+      const m = MUSCLE_ALIASES[rawM] || rawM;
+      if (m in counts) counts[m] += recentSets.length;
+    });
+  });
+  const result = {};
+  primaryMuscles.forEach(m=>{
+    const setsPerWeek = Math.round((counts[m]/4)*10)/10;
+    let status, recommendation;
+    if (setsPerWeek === 0) { status="neglected"; recommendation="Sin trabajo en 4 sem — añade ≥2 series/sem"; }
+    else if (setsPerWeek < 8) { status="low"; recommendation=`Solo ${setsPerWeek} ser/sem — objetivo mínimo 8`; }
+    else if (setsPerWeek <= 20) { status="optimal"; recommendation="Volumen en rango óptimo"; }
+    else { status="high"; recommendation="Posible sobrevolumen — considera reducir"; }
+    result[m] = { setsPerWeek, status, recommendation };
+  });
+  return result;
+}
+
 export default function App(){
   const [view, setView] = useState(() => {
     return localStorage.getItem("onboarding_shown") ? "hoy" : "onboarding";
@@ -833,7 +963,10 @@ export default function App(){
   const [aiNotifications, setAiNotifications] = useState([]); // In-app AI notifications
   const [macroAdjustSuggestion, setMacroAdjustSuggestion] = useState(null); // #1 - Macro adjustment
   const [weightTrend, setWeightTrend] = useState(null); // Weight trend data
-  
+  const [showTrainerAgent, setShowTrainerAgent] = useState(false);
+  const [trainerAgentData, setTrainerAgentData] = useState(null);
+  const [trainerAgentBusy, setTrainerAgentBusy] = useState(false);
+
   // Elevated Calendar States & Helpers
   const [calMonth, setCalMonth] = useState(() => new Date());
   
@@ -2358,6 +2491,31 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     setChallenges(prev=>{const updated=prev.map(c=>c.id===challengeId?{...c,progress:newProgress,completed}:c);saveKey("challenges",updated);return updated;});
   };
 
+  const runTrainerAgentAnalysis = async () => {
+    if (trainerAgentBusy) return;
+    setTrainerAgentBusy(true);
+    const weeklyLoad = calcWeeklyTrainingLoad(exlog);
+    const deloadCheck = detectDeloadNeed(exlog, notes, metricslog);
+    const muscleVol = calcMuscleVolumeBalance(exlog, exercises);
+    const localData = { weeklyLoad, deloadCheck, muscleVol };
+    const loadSummary = weeklyLoad.map(w=>`${w.weekLabel}: ${w.totalSets} ser, ${w.totalVol}kg vol`).join(' | ');
+    const plateauList = (plateauAlerts||[]).map(p=>`${p.exercise} (${p.weight}kg, ${p.weeks} sem)`).join(', ') || 'ninguno';
+    const muscleList = Object.entries(muscleVol).map(([m,d])=>`${m}: ${d.setsPerWeek} ser/sem [${d.status}]`).join(', ');
+    const overloadList = Object.entries(overloadSuggestions||{}).slice(0,5).map(([ex,s])=>`${ex}: ${s.currentMax}kg→${s.suggested}kg`).join(', ') || 'sin sugerencias';
+    const imbalanceList = (muscleImbalances||[]).join(' | ') || 'ninguno';
+    const sys = `Eres el Agente Entrenador de BrunoFit — especialista en periodización de fuerza e hipertrofia. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Analiza los datos objetivos y genera recomendaciones precisas y accionables. Usa terminología técnica en español. Basa TODOS los números en los datos provistos. Responde SOLO en JSON que cumpla el esquema.`;
+    const userMsg = `ANÁLISIS DE ENTRENAMIENTO — ÚLTIMAS 8 SEMANAS:\nCarga semanal: ${loadSummary}\nEstancamientos: ${plateauList}\nBalance muscular: ${muscleList}\nSobrecarga sugerida: ${overloadList}\nDesequilibrios push/pull: ${imbalanceList}\nDeload: ${deloadCheck.recommended?`RECOMENDADO — ${deloadCheck.reason} (urgencia: ${deloadCheck.urgency})`:'no necesario aún'}\nSemanas sin deload: ${deloadCheck.weeksSinceDeload}\nSplits: ${(splits||[]).map(s=>`${s.key}: ${s.name}`).join(' | ')}`;
+    try {
+      const raw = await callGemini([{role:"user",content:userMsg}], sys, TRAINER_AGENT_SCHEMA);
+      const parsed = cleanAndParseJSON(raw);
+      setTrainerAgentData({...(parsed||{}), _local: localData});
+    } catch(e) {
+      setTrainerAgentData({ _error: aiErr(e), _local: localData });
+    } finally {
+      setTrainerAgentBusy(false);
+    }
+  };
+
   const handleForcePush = async () => {
     if (!syncCode) return;
     setSyncStatus("Sincronizando...");
@@ -2976,7 +3134,13 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
           {view === "entreno" && (
             <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
               <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Rutina de Hoy</div>
-              <Dumbbell size={20} color={C.muted}/>
+              <button
+                onClick={() => setShowTrainerAgent(true)}
+                className="btn-active-scale"
+                style={{background:"rgba(205,255,74,0.08)", border:`1px solid rgba(205,255,74,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.lime, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
+              >
+                <Sparkles size={13}/><span>Agente</span>
+              </button>
             </div>
           )}
           {view === "reg" && (
@@ -3193,6 +3357,23 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
           />
         )}
       </div>
+
+      {showTrainerAgent && (
+        <TrainerAgent
+          onClose={() => setShowTrainerAgent(false)}
+          data={trainerAgentData}
+          busy={trainerAgentBusy}
+          onRunAnalysis={runTrainerAgentAnalysis}
+          exlog={exlog}
+          exercises={exercises}
+          notes={notes}
+          metricslog={metricslog}
+          splits={splits}
+          plateauAlerts={plateauAlerts}
+          overloadSuggestions={overloadSuggestions}
+          muscleImbalances={muscleImbalances}
+        />
+      )}
 
       {prAlerts.length > 0 && (
         <div style={{
@@ -6517,6 +6698,226 @@ function Perfil({
         )}
       </div>
 
+    </div>
+  );
+}
+
+/* ===== AGENTE ENTRENADOR ===== */
+function TrainerAgent({ onClose, data, busy, onRunAnalysis, exlog, exercises, notes, metricslog, splits, plateauAlerts, overloadSuggestions, muscleImbalances }) {
+  const local = data?._local || null;
+
+  const muscleVol = React.useMemo(() => {
+    if (local?.muscleVol) return local.muscleVol;
+    return calcMuscleVolumeBalance(exlog, exercises);
+  }, [local, exlog, exercises]);
+
+  const weeklyLoad = local?.weeklyLoad || calcWeeklyTrainingLoad(exlog);
+  const deloadCheck = local?.deloadCheck || detectDeloadNeed(exlog, notes, metricslog);
+
+  const STATUS_COLORS = {
+    neglected: { bg:"rgba(244,63,94,0.12)", border:"rgba(244,63,94,0.3)", text:"#f43f5e" },
+    low:       { bg:"rgba(251,191,36,0.12)", border:"rgba(251,191,36,0.3)", text:"#fbbf24" },
+    optimal:   { bg:"rgba(205,255,74,0.1)",  border:"rgba(205,255,74,0.25)", text:"#cdff4a" },
+    high:      { bg:"rgba(74,214,255,0.1)",  border:"rgba(74,214,255,0.25)", text:"#4ad6ff" },
+  };
+  const URGENCY_COLORS = {
+    low:    { border:"rgba(251,191,36,0.4)", text:"#fbbf24", bg:"rgba(251,191,36,0.08)" },
+    medium: { border:"rgba(244,63,94,0.3)",  text:"#fb923c", bg:"rgba(251,146,60,0.08)" },
+    high:   { border:"rgba(244,63,94,0.5)",  text:"#f43f5e", bg:"rgba(244,63,94,0.1)" },
+  };
+  const PHASE_COLORS = { "Acumulación":"#cdff4a", "Intensificación":"#4ad6ff", "Deload":"#fbbf24", "Pico":"#f43f5e" };
+
+  const maxSets = Math.max(...weeklyLoad.map(w=>w.totalSets), 1);
+
+  return (
+    <div className="trainer-agent-sheet" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="trainer-agent-panel">
+
+        {/* Header */}
+        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", paddingBottom:10, borderBottom:`1px solid rgba(205,255,74,0.1)`}}>
+          <div style={{display:"flex", alignItems:"center", gap:8}}>
+            <div style={{width:30, height:30, borderRadius:8, background:"rgba(205,255,74,0.1)", display:"flex", alignItems:"center", justifyContent:"center"}}>
+              <Sparkles size={15} color="#cdff4a"/>
+            </div>
+            <span className="disp" style={{fontSize:20, color:"#cdff4a", letterSpacing:".04em"}}>AGENTE ENTRENADOR</span>
+          </div>
+          <button onClick={onClose} style={{background:"none", border:"none", color:"#9aa088", cursor:"pointer", padding:4}}><X size={20}/></button>
+        </div>
+
+        {/* Phase Indicator */}
+        <div className="pop" style={{padding:"12px 14px", display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+          {data?.trainingPhase ? (
+            <>
+              <div>
+                <div style={{fontSize:10, color:"#9aa088", fontWeight:700, letterSpacing:".08em", marginBottom:3}}>FASE ACTUAL</div>
+                <div className="disp" style={{fontSize:26, color: PHASE_COLORS[data.trainingPhase.name] || "#cdff4a", lineHeight:1}}>{data.trainingPhase.name?.toUpperCase()}</div>
+                <div style={{fontSize:11, color:"#9aa088", marginTop:3}}>{data.trainingPhase.description}</div>
+              </div>
+              {data.trainingPhase.weekNumber && (
+                <div style={{textAlign:"center", background:"rgba(205,255,74,0.08)", border:"1px solid rgba(205,255,74,0.15)", borderRadius:10, padding:"8px 12px"}}>
+                  <div className="disp" style={{fontSize:28, color:"#cdff4a"}}>{data.trainingPhase.weekNumber}</div>
+                  <div style={{fontSize:9, color:"#9aa088", fontWeight:700}}>SEM CICLO</div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{color:"#9aa088", fontSize:12}}>
+              <Sparkles size={13} style={{verticalAlign:"middle", marginRight:5}}/>
+              Ejecuta el análisis IA para ver tu fase de entrenamiento
+            </div>
+          )}
+        </div>
+
+        {/* Muscle Volume Balance Grid */}
+        <div>
+          <div style={{fontSize:10, fontWeight:700, color:"#9aa088", letterSpacing:".08em", marginBottom:2}}>BALANCE MUSCULAR · series/sem</div>
+          <div className="volume-balance-grid">
+            {Object.entries(muscleVol).map(([muscle, d]) => {
+              const sc = STATUS_COLORS[d.status];
+              return (
+                <div key={muscle} title={d.recommendation} style={{background:sc.bg, border:`1px solid ${sc.border}`, borderRadius:8, padding:"7px 8px"}}>
+                  <div style={{fontSize:9, fontWeight:700, color:"#9aa088", marginBottom:2, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{muscle.toUpperCase()}</div>
+                  <div style={{fontSize:18, fontWeight:900, color:sc.text, lineHeight:1}}>{d.setsPerWeek}</div>
+                  <div style={{fontSize:8, color:sc.text, marginTop:1, opacity:.8}}>{d.status === "neglected" ? "sin trabajo" : d.status === "low" ? "bajo" : d.status === "high" ? "alto" : "óptimo"}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Weekly Load Chart */}
+        <div>
+          <div style={{fontSize:10, fontWeight:700, color:"#9aa088", letterSpacing:".08em", marginBottom:8}}>CARGA SEMANAL (series)</div>
+          <div style={{display:"flex", alignItems:"flex-end", gap:4, height:64}}>
+            {weeklyLoad.map((w, i) => {
+              const isLast = i === weeklyLoad.length - 1;
+              const heightPct = maxSets > 0 ? (w.totalSets / maxSets) * 100 : 0;
+              return (
+                <div key={i} style={{flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:3, height:"100%", justifyContent:"flex-end"}}>
+                  <div style={{width:"100%", height:`${heightPct}%`, minHeight: w.totalSets > 0 ? 4 : 0, background: isLast ? "#cdff4a" : "rgba(205,255,74,0.25)", borderRadius:"3px 3px 0 0", transition:"height .3s"}}/>
+                  <div style={{fontSize:8, color: isLast ? "#cdff4a" : "#9aa088", fontWeight: isLast ? 700 : 400, whiteSpace:"nowrap"}}>{w.weekLabel.replace("Sem ","W")}</div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{display:"flex", justifyContent:"space-between", marginTop:4}}>
+            <span style={{fontSize:9, color:"#9aa088"}}>8 semanas atrás</span>
+            <span style={{fontSize:9, color:"#cdff4a", fontWeight:700}}>Esta semana: {weeklyLoad[weeklyLoad.length-1]?.totalSets || 0} series</span>
+          </div>
+        </div>
+
+        {/* Deload Card */}
+        {deloadCheck.recommended && (() => {
+          const uc = URGENCY_COLORS[deloadCheck.urgency] || URGENCY_COLORS.low;
+          const aiDeload = data?.deloadRecommendation;
+          return (
+            <div style={{background:uc.bg, border:`1px solid ${uc.border}`, borderRadius:12, padding:"12px 14px"}}>
+              <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6}}>
+                <div style={{display:"flex", alignItems:"center", gap:6}}>
+                  <Activity size={14} color={uc.text}/>
+                  <span style={{fontSize:11, fontWeight:800, color:uc.text, letterSpacing:".06em"}}>
+                    {deloadCheck.urgency === "high" ? "DELOAD URGENTE" : deloadCheck.urgency === "medium" ? "DELOAD RECOMENDADO" : "DELOAD PRÓXIMAMENTE"}
+                  </span>
+                </div>
+                <div style={{background:uc.border, borderRadius:6, padding:"2px 8px"}}>
+                  <span className="disp" style={{fontSize:18, color:uc.text}}>{deloadCheck.weeksSinceDeload}w</span>
+                </div>
+              </div>
+              <div style={{fontSize:12, color:"#f3f4ea", marginBottom: aiDeload ? 8 : 0}}>{deloadCheck.reason}</div>
+              {aiDeload && (
+                <div style={{display:"flex", gap:8, marginTop:6}}>
+                  {aiDeload.targetVolumePct && <div style={{fontSize:11, color:"#9aa088"}}>↓ Volumen al <strong style={{color:uc.text}}>{aiDeload.targetVolumePct}%</strong></div>}
+                  {aiDeload.durationDays && <div style={{fontSize:11, color:"#9aa088"}}>· <strong style={{color:uc.text}}>{aiDeload.durationDays} días</strong></div>}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Muscle Alerts from AI */}
+        {data?.muscleAlerts?.length > 0 && (
+          <div>
+            <div style={{fontSize:10, fontWeight:700, color:"#9aa088", letterSpacing:".08em", marginBottom:8}}>ALERTAS MUSCULARES</div>
+            <div style={{display:"flex", flexDirection:"column", gap:6}}>
+              {data.muscleAlerts.slice(0,4).map((alert, i) => {
+                const sc = STATUS_COLORS[alert.status] || STATUS_COLORS.low;
+                return (
+                  <div key={i} style={{background:sc.bg, border:`1px solid ${sc.border}`, borderRadius:9, padding:"8px 12px", display:"flex", alignItems:"center", gap:10}}>
+                    <div style={{width:6, height:6, borderRadius:"50%", background:sc.text, flexShrink:0}}/>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:12, fontWeight:700, color:sc.text}}>{alert.muscle}</div>
+                      <div style={{fontSize:11, color:"#9aa088"}}>{alert.recommendation}</div>
+                    </div>
+                    {alert.currentSets != null && <div style={{fontSize:10, color:sc.text, fontWeight:700, whiteSpace:"nowrap"}}>{alert.currentSets} ser/sem</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Exercise Variations */}
+        {data?.exerciseVariations?.length > 0 && (
+          <div>
+            <div style={{fontSize:10, fontWeight:700, color:"#9aa088", letterSpacing:".08em", marginBottom:8}}>VARIACIONES SUGERIDAS</div>
+            <div style={{display:"flex", flexDirection:"column", gap:8}}>
+              {data.exerciseVariations.slice(0,4).map((v, i) => {
+                const prioColor = v.priority==="alta" ? "#f43f5e" : v.priority==="media" ? "#fbbf24" : "#9aa088";
+                return (
+                  <div key={i} className="pop" style={{padding:"10px 12px"}}>
+                    <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:4}}>
+                      <div style={{fontSize:12, fontWeight:700, color:"#f3f4ea"}}>
+                        {v.exercise} <span style={{color:"#9aa088", fontSize:11}}>→</span> <span style={{color:"#cdff4a"}}>{v.variation}</span>
+                      </div>
+                      <div style={{fontSize:9, background:`rgba(${prioColor.startsWith("#f43f")?'244,63,94':prioColor.startsWith("#fbb")?'251,191,36':'154,160,136'},0.15)`, color:prioColor, borderRadius:5, padding:"2px 6px", fontWeight:700, whiteSpace:"nowrap"}}>{v.priority?.toUpperCase()}</div>
+                    </div>
+                    <div style={{fontSize:11, color:"#9aa088"}}>{v.reason}</div>
+                    {v.currentIssue && <div style={{fontSize:10, color:"#4ad6ff", marginTop:3, fontStyle:"italic"}}>{v.currentIssue}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Performance Summary */}
+        {data?.performanceSummary && (
+          <div style={{borderLeft:"3px solid #4ad6ff", background:"rgba(74,214,255,0.05)", borderRadius:"0 10px 10px 0", padding:"12px 14px"}}>
+            <div style={{fontSize:10, fontWeight:700, color:"#4ad6ff", letterSpacing:".08em", marginBottom:8}}>RESUMEN DE RENDIMIENTO</div>
+            <div style={{fontSize:12, color:"#f3f4ea", lineHeight:1.6, marginBottom:8}}>{data.performanceSummary.narrative}</div>
+            {data.performanceSummary.topStrengths?.length > 0 && (
+              <div style={{marginBottom:6}}>
+                {data.performanceSummary.topStrengths.map((s,i)=><div key={i} style={{fontSize:11, color:"#cdff4a", marginBottom:2}}>✓ {s}</div>)}
+              </div>
+            )}
+            {data.performanceSummary.topConcerns?.length > 0 && (
+              <div style={{marginBottom:8}}>
+                {data.performanceSummary.topConcerns.map((c,i)=><div key={i} style={{fontSize:11, color:"#fbbf24", marginBottom:2}}>▲ {c}</div>)}
+              </div>
+            )}
+            {data.performanceSummary.nextWeekFocus && (
+              <div style={{background:"rgba(205,255,74,0.08)", border:"1px solid rgba(205,255,74,0.2)", borderRadius:8, padding:"8px 10px", fontSize:12, color:"#cdff4a", fontWeight:600}}>
+                🎯 {data.performanceSummary.nextWeekFocus}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Error */}
+        {data?._error && (
+          <div style={{fontSize:12, color:"#f43f5e", background:"rgba(244,63,94,0.08)", border:"1px solid rgba(244,63,94,0.2)", borderRadius:9, padding:"10px 12px"}}>{data._error}</div>
+        )}
+
+        {/* AI CTA */}
+        <button
+          onClick={onRunAnalysis}
+          disabled={busy}
+          style={{width:"100%", padding:"14px 0", borderRadius:12, border:"none", cursor: busy ? "not-allowed" : "pointer", background: busy ? "rgba(205,255,74,0.1)" : "linear-gradient(90deg,#4ad6ff,#cdff4a)", color: busy ? "#9aa088" : "#0c0e0b", fontWeight:900, fontSize:14, display:"flex", alignItems:"center", justifyContent:"center", gap:8, letterSpacing:".03em", opacity: busy ? 0.7 : 1, transition:"opacity .2s"}}
+        >
+          {busy ? <><Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/>Analizando...</> : <><Sparkles size={16}/>{data && !data._error ? "Actualizar Análisis" : "Analizar con IA"}</>}
+        </button>
+
+      </div>
     </div>
   );
 }
