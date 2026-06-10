@@ -214,31 +214,105 @@ const MEALS_SCHEMA = {
   required: ["meals"]
 };
 
-/* ===== ACCESO A STORAGE CON FALLBACK ===== */
-async function loadKey(key,def){ 
-  try{ 
-    if(window.storage && typeof window.storage.get === 'function') {
-      const r = await window.storage.get(key,false); 
-      return r ? JSON.parse(r.value) : def; 
-    } else {
-      const r = localStorage.getItem(key);
-      return r ? JSON.parse(r) : def;
-    }
-  }catch(e){ 
-    return def; 
-  } 
+/* ===== ACCESO A STORAGE CON FALLBACK (INDEXEDDB + LOCALSTORAGE RESPALDO) ===== */
+const DB_NAME = "BrunoFitDataStore";
+const STORE_NAME = "app_state";
+
+function getDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+    };
+    request.onsuccess = (e) => resolve(e.target.result);
+    request.onerror = (e) => reject(e.target.error);
+  });
 }
 
-async function saveKey(key,val){ 
-  try{ 
-    if(window.storage && typeof window.storage.set === 'function') {
-      await window.storage.set(key,JSON.stringify(val),false); 
-    } else {
-      localStorage.setItem(key, JSON.stringify(val));
+async function idbGet(key) {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbSet(key, val) {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.put(val, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function loadKey(key, def) {
+  try {
+    if (window.storage && typeof window.storage.get === 'function') {
+      const r = await window.storage.get(key, false); 
+      return r ? JSON.parse(r.value) : def; 
     }
-  }catch(e){ 
-    console.error(e); 
-  } 
+    
+    // Intentar IndexedDB como almacén principal
+    try {
+      const val = await idbGet(key);
+      if (val !== undefined && val !== null) {
+        return val;
+      }
+    } catch (dbErr) {
+      console.warn("Error en IndexedDB, usando localStorage:", dbErr);
+    }
+    
+    // Respaldo y migración desde LocalStorage
+    const r = localStorage.getItem(key);
+    if (r) {
+      const parsed = JSON.parse(r);
+      // Migrar en segundo plano a IndexedDB
+      try {
+        await idbSet(key, parsed);
+      } catch (e) {}
+      return parsed;
+    }
+    return def;
+  } catch (e) {
+    return def;
+  }
+}
+
+async function saveKey(key, val) {
+  try {
+    if (window.storage && typeof window.storage.set === 'function') {
+      await window.storage.set(key, JSON.stringify(val), false); 
+      return;
+    }
+    
+    // Guardar en IndexedDB
+    try {
+      await idbSet(key, val);
+    } catch (dbErr) {
+      console.warn("IndexedDB falló al guardar, usando localStorage:", dbErr);
+    }
+    
+    // Guardar en LocalStorage como respaldo (si cabe en el límite de 5MB)
+    try {
+      localStorage.setItem(key, JSON.stringify(val));
+    } catch (lsErr) {
+      // Ignorar errores de cuota si logramos guardar en IndexedDB
+      if (lsErr.name !== 'QuotaExceededError') {
+        console.error("LocalStorage save failed:", lsErr);
+      }
+    }
+  } catch (e) {
+    console.error("saveKey falló:", e);
+  }
 }
 
 /* ===== SUPABASE CLIENT INITIALIZATION ===== */
@@ -636,6 +710,43 @@ const ANALYSIS_SCHEMA = {
   }, required:["insights"]
 };
 
+const TRAINER_AGENT_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    trainingPhase: { type: "OBJECT", properties: {
+      name: { type: "STRING" },        // "Acumulación" | "Intensificación" | "Deload" | "Pico"
+      description: { type: "STRING" },
+      weekNumber: { type: "NUMBER" }
+    }, required: ["name", "description"] },
+    deloadRecommendation: { type: "OBJECT", properties: {
+      recommended: { type: "STRING" }, // "si" | "no" | "pronto"
+      targetVolumePct: { type: "NUMBER" },
+      durationDays: { type: "NUMBER" },
+      rationale: { type: "STRING" }
+    }, required: ["recommended", "rationale"] },
+    exerciseVariations: { type: "ARRAY", items: { type: "OBJECT", properties: {
+      exercise: { type: "STRING" },
+      currentIssue: { type: "STRING" }, // "estancamiento" | "sobrevolumen" | "técnica"
+      variation: { type: "STRING" },
+      reason: { type: "STRING" },
+      priority: { type: "STRING" }     // "alta" | "media" | "baja"
+    }, required: ["exercise", "variation", "reason", "priority"] } },
+    muscleAlerts: { type: "ARRAY", items: { type: "OBJECT", properties: {
+      muscle: { type: "STRING" },
+      status: { type: "STRING" },
+      currentSets: { type: "NUMBER" },
+      recommendation: { type: "STRING" }
+    }, required: ["muscle", "status", "recommendation"] } },
+    performanceSummary: { type: "OBJECT", properties: {
+      narrative: { type: "STRING" },
+      topStrengths: { type: "ARRAY", items: { type: "STRING" } },
+      topConcerns: { type: "ARRAY", items: { type: "STRING" } },
+      nextWeekFocus: { type: "STRING" }
+    }, required: ["narrative", "nextWeekFocus"] }
+  },
+  required: ["trainingPhase", "deloadRecommendation", "exerciseVariations", "muscleAlerts", "performanceSummary"]
+};
+
 // ── Funciones estadísticas ──
 function linearRegression(ys) {
   if (!ys || ys.length < 2) return { slope: 0, intercept: ys?.[0] || 0 };
@@ -792,6 +903,198 @@ function getWeeklyStats(foodlog, exlog, metricslog, notes) {
   return { trainDays: trainDays.length, avgProtein: Math.round(avgProtein), avgKcal: Math.round(avgKcal), weightChange, fatigueCount };
 }
 
+function calcWeeklyTrainingLoad(exlog) {
+  const weekData = {};
+  Object.values(exlog || {}).forEach(sets => {
+    (sets || []).forEach(s => {
+      if (!s || !s.date || s.type === "warmup") return;
+      const d = new Date(s.date);
+      if (isNaN(d.getTime())) return;
+      const dayOffset = (d.getDay() + 6) % 7;
+      const monday = new Date(d);
+      monday.setHours(0, 0, 0, 0);
+      monday.setDate(monday.getDate() - dayOffset);
+      const timeStr = monday.toISOString().slice(0, 10);
+      if (!weekData[timeStr]) {
+        weekData[timeStr] = { date: monday, totalSets: 0, totalVol: 0 };
+      }
+      const weight = parseFloat(s.w) || 0;
+      const reps = parseInt(s.reps) || 0;
+      weekData[timeStr].totalSets += 1;
+      weekData[timeStr].totalVol += weight * reps;
+    });
+  });
+
+  const weeks = [];
+  const today = new Date();
+  const dayOffset = (today.getDay() + 6) % 7;
+  const currentMonday = new Date(today);
+  currentMonday.setHours(0, 0, 0, 0);
+  currentMonday.setDate(currentMonday.getDate() - dayOffset);
+
+  for (let i = 7; i >= 0; i--) {
+    const monday = new Date(currentMonday);
+    monday.setDate(monday.getDate() - i * 7);
+    const dateStr = monday.toISOString().slice(0, 10);
+    const firstDayOfYear = new Date(monday.getFullYear(), 0, 1);
+    const pastDaysOfYear = (monday - firstDayOfYear) / 86400000;
+    const weekNum = Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7);
+    const matched = weekData[dateStr] || { totalSets: 0, totalVol: 0 };
+    weeks.push({
+      weekLabel: `Sem ${weekNum}`,
+      totalSets: matched.totalSets,
+      totalVol: matched.totalVol,
+      dateStr
+    });
+  }
+  return weeks;
+}
+
+function detectDeloadNeed(exlog, notes, metricslog) {
+  const weekData = {};
+  Object.values(exlog || {}).forEach(sets => {
+    (sets || []).forEach(s => {
+      if (!s || !s.date || s.type === "warmup") return;
+      const d = new Date(s.date);
+      if (isNaN(d.getTime())) return;
+      const dayOffset = (d.getDay() + 6) % 7;
+      const monday = new Date(d);
+      monday.setHours(0, 0, 0, 0);
+      monday.setDate(monday.getDate() - dayOffset);
+      const timeStr = monday.toISOString().slice(0, 10);
+      if (!weekData[timeStr]) {
+        weekData[timeStr] = { totalSets: 0 };
+      }
+      weekData[timeStr].totalSets += 1;
+    });
+  });
+
+  const today = new Date();
+  const dayOffset = (today.getDay() + 6) % 7;
+  const currentMonday = new Date(today);
+  currentMonday.setHours(0, 0, 0, 0);
+  currentMonday.setDate(currentMonday.getDate() - dayOffset);
+
+  const twelveWeeks = [];
+  for (let i = 11; i >= 0; i--) {
+    const monday = new Date(currentMonday);
+    monday.setDate(monday.getDate() - i * 7);
+    const dateStr = monday.toISOString().slice(0, 10);
+    const matched = weekData[dateStr] || { totalSets: 0 };
+    twelveWeeks.push({ dateStr, totalSets: matched.totalSets });
+  }
+
+  let weeksSinceDeload = 8;
+  for (let i = 11; i >= 4; i--) {
+    const currentSets = twelveWeeks[i].totalSets;
+    const prev4 = [twelveWeeks[i-4].totalSets, twelveWeeks[i-3].totalSets, twelveWeeks[i-2].totalSets, twelveWeeks[i-1].totalSets];
+    const avgPrev4 = prev4.reduce((s,v)=>s+v, 0) / 4;
+    if (avgPrev4 > 10 && currentSets < avgPrev4 * 0.6) {
+      weeksSinceDeload = 11 - i;
+      break;
+    }
+  }
+
+  const allSets = twelveWeeks.map(w => w.totalSets).sort((a,b)=>a-b);
+  const medianSets = allSets[Math.floor(allSets.length / 2)] || 0;
+
+  let consecutiveHighWeeks = 0;
+  for (let i = 11; i >= 4; i--) {
+    if (medianSets > 0 && twelveWeeks[i].totalSets > medianSets * 1.15) {
+      consecutiveHighWeeks++;
+    } else {
+      break;
+    }
+  }
+
+  const fatigueScore = detectFatigueFromNotes(notes);
+
+  let urgency = 'none';
+  let recommended = false;
+
+  if (weeksSinceDeload >= 7 || fatigueScore >= 3 || consecutiveHighWeeks >= 5) {
+    urgency = 'high';
+    recommended = true;
+  } else if (weeksSinceDeload === 6 || (consecutiveHighWeeks >= 3 && fatigueScore >= 1)) {
+    urgency = 'medium';
+    recommended = true;
+  } else if (weeksSinceDeload === 4 || weeksSinceDeload === 5 || consecutiveHighWeeks === 3) {
+    urgency = 'low';
+    recommended = false;
+  }
+
+  const reasons = [];
+  if (weeksSinceDeload >= 6) reasons.push(`${weeksSinceDeload} sem sin deload`);
+  if (fatigueScore > 0) reasons.push(`${fatigueScore} nota${fatigueScore > 1 ? 's' : ''} de fatiga`);
+  if (consecutiveHighWeeks >= 3) reasons.push(`${consecutiveHighWeeks} sem de alta carga`);
+  const reason = reasons.length > 0 ? reasons.join(" + ") : "Parámetros normales";
+
+  return { recommended, urgency, reason, weeksSinceDeload };
+}
+
+function calcMuscleVolumeBalance(exlog, exercises) {
+  const muscleSets = {};
+  const ALL_PRIMARY_MUSCLES = [
+    "Pectoral", "Espalda", "Cuádriceps", "Isquios", "Glúteos", "Bíceps", "Tríceps", "Deltoides", "Antebrazo"
+  ];
+  ALL_PRIMARY_MUSCLES.forEach(m => { muscleSets[m] = 0; });
+
+  const twentyEightDaysAgo = new Date(Date.now() - 28 * 86400000);
+
+  Object.entries(exlog || {}).forEach(([exName, sets]) => {
+    if (!sets || sets.length === 0) return;
+    let exerciseMuscles = MUSCLES[exName];
+    if (!exerciseMuscles && exercises) {
+      for (const list of Object.values(exercises)) {
+        const found = list.find(e => e && e.name === exName);
+        if (found && found.musculos) {
+          exerciseMuscles = found.musculos;
+          break;
+        }
+      }
+    }
+    if (!exerciseMuscles) exerciseMuscles = [];
+
+    const validRecentSetsCount = (sets || []).filter(s => {
+      if (!s || !s.date || s.type === "warmup") return false;
+      const d = new Date(s.date);
+      return !isNaN(d.getTime()) && d >= twentyEightDaysAgo;
+    }).length;
+
+    if (validRecentSetsCount > 0) {
+      exerciseMuscles.forEach(m => {
+        const norm = m === "Deltoide ant." ? "Deltoides" : m;
+        if (ALL_PRIMARY_MUSCLES.includes(norm)) {
+          muscleSets[norm] += validRecentSetsCount;
+        }
+      });
+    }
+  });
+
+  const result = {};
+  ALL_PRIMARY_MUSCLES.forEach(m => {
+    const totalSets = muscleSets[m];
+    const setsPerWeek = totalSets / 4;
+    let status = "neglected";
+    let recommendation = "";
+    if (setsPerWeek === 0) {
+      status = "neglected";
+      recommendation = "Agregar ejercicios para activar este grupo.";
+    } else if (setsPerWeek < 8) {
+      status = "low";
+      recommendation = "Volumen bajo. Añadir 2-4 series semanales si quieres enfocar hipertrofia.";
+    } else if (setsPerWeek <= 20) {
+      status = "optimal";
+      recommendation = "Volumen óptimo. Mantener carga de trabajo actual.";
+    } else {
+      status = "high";
+      recommendation = "Volumen muy alto. Monitorear fatiga y considerar reducción.";
+    }
+    result[m] = { sets: totalSets, setsPerWeek, status, recommendation };
+  });
+  return result;
+}
+
 export default function App(){
   const [view, setView] = useState(() => {
     return localStorage.getItem("onboarding_shown") ? "hoy" : "onboarding";
@@ -824,6 +1127,9 @@ export default function App(){
   const [projections, setProjections] = useState([]); // #15 - 12-week projection
   const [tdeeEstimate, setTdeeEstimate] = useState(null); // #12 - Real TDEE
   const [upcomingEvent, setUpcomingEvent] = useState(null); // #13 - Event planning
+  const [showTrainerAgent, setShowTrainerAgent] = useState(false);
+  const [trainerAgentData, setTrainerAgentData] = useState(null);   // cache sesión, no persistir
+  const [trainerAgentBusy, setTrainerAgentBusy] = useState(false);
   const [experiments, setExperiments] = useState([]); // #18 - A/B experiments
   const [overloadSuggestions, setOverloadSuggestions] = useState({}); // #8 - Progressive overload
   const [plateauAlerts, setPlateauAlerts] = useState([]); // #6 - Plateau detection
@@ -2362,6 +2668,93 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     finally{setAnalyzeBusy(false);}
   };
 
+  const runTrainerAgentAnalysis = async () => {
+    if (trainerAgentBusy) return;
+    setTrainerAgentBusy(true);
+    try {
+      const weeklyLoad = calcWeeklyTrainingLoad(exlog);
+      const deloadCheck = detectDeloadNeed(exlog, notes, metricslog);
+      const muscleVol = calcMuscleVolumeBalance(exlog, exercises);
+
+      const profileStr = getProfileStr(
+        metricslog[selectedDateStr]?.weight || (notes.find(n => n.type === "peso")?.weight) || 93.9,
+        bodyComp.musculo,
+        bodyComp.grasaPct,
+        bodyComp.visceral
+      );
+
+      const localImbalances = detectMuscleImbalances(exlog);
+      const localPlateaus = detectPlateaus(exlog);
+      const localOverload = calcProgressiveOverload(exlog);
+
+      const promptText = `Perfil de Bruno: ${profileStr}
+Preset nutricional activo: ${presetKey}
+Distribución de entrenamiento: Día del split activo: ${activeSplitKey}
+
+DATOS HISTÓRICOS Y CÁLCULOS LOCALES:
+1. Carga de entrenamiento semanal (últimas 8 semanas):
+${weeklyLoad.map(w => `- ${w.weekLabel}: ${w.totalSets} series, Volumen total: ${w.totalVol} kg`).join("\n")}
+
+2. Diagnóstico de Deload / Descarga:
+- Recomendado: ${deloadCheck.recommended ? "Sí" : "No"}
+- Urgencia: ${deloadCheck.urgency}
+- Razón: ${deloadCheck.reason}
+- Semanas sin deload: ${deloadCheck.weeksSinceDeload}
+
+3. Balance de Volumen Muscular (series/semana):
+${Object.entries(muscleVol).map(([m, data]) => `- ${m}: ${data.setsPerWeek} series/sem (Estado: ${data.status})`).join("\n")}
+
+4. Estancamientos (Plateaus) detectados:
+${localPlateaus.length > 0 ? localPlateaus.map(p => `- ${p.exercise}: estancado en ${p.weight}kg por ${p.weeks} semanas`).join("\n") : "- Ninguno"}
+
+5. Desbalances de volumen (Push vs Pull / Cuádriceps vs Isquios):
+${localImbalances.length > 0 ? localImbalances.map(i => `- ${i}`).join("\n") : "- Ninguno"}
+
+6. Sugerencias de sobrecarga progresiva:
+${Object.entries(localOverload).map(([ex, data]) => `- ${ex}: sugerido subir de ${data.currentMax}kg a ${data.suggested}kg (${data.reason})`).join("\n")}
+
+INSTRUCCIONES PARA LA IA:
+Analiza estos datos de rendimiento y genera:
+1. La fase de entrenamiento en la que se encuentra (Acumulación, Intensificación, Deload, Pico) con una breve descripción y el número de semana.
+2. Una recomendación de deload (si/no/pronto), porcentaje del volumen al que bajar, duración en días y justificación.
+3. Variaciones sugeridas de ejercicios específicos (especialmente para los estancados o con volumen excesivo).
+4. Alertas de balance de volumen muscular.
+5. Resumen de rendimiento (narrativa de fortalezas, preocupaciones y el enfoque de la próxima semana).
+
+Responde estrictamente en formato JSON que cumpla con el esquema requerido.`;
+
+      const sysInstruction = `Eres un entrenador de fuerza e hipertrofia de élite. Analizas los datos de rendimiento de Bruno y proporcionas un análisis de periodización, sugerencias de variaciones y recomendaciones de descarga estructuradas. Tu tono es directo, profesional, motivador y basado en evidencia científica. Responde únicamente en formato JSON.`;
+
+      const out = await callGemini([{ role: "user", content: promptText }], sysInstruction, TRAINER_AGENT_SCHEMA);
+      const parsed = cleanAndParseJSON(out);
+      
+      const mergedData = {
+        ...parsed,
+        _local: {
+          weeklyLoad,
+          deloadCheck,
+          muscleVol
+        }
+      };
+      setTrainerAgentData(mergedData);
+    } catch (err) {
+      console.error("Error al ejecutar el agente entrenador:", err);
+      const weeklyLoad = calcWeeklyTrainingLoad(exlog);
+      const deloadCheck = detectDeloadNeed(exlog, notes, metricslog);
+      const muscleVol = calcMuscleVolumeBalance(exlog, exercises);
+      setTrainerAgentData({
+        trainingPhase: { name: "Cargando...", description: "Análisis no disponible", weekNumber: 1 },
+        deloadRecommendation: { recommended: deloadCheck.recommended ? "si" : "no", targetVolumePct: 60, durationDays: 7, rationale: deloadCheck.reason },
+        exerciseVariations: [],
+        muscleAlerts: [],
+        performanceSummary: { narrative: "Hubo un error al contactar al servidor de análisis IA, pero tus datos locales están disponibles abajo.", topStrengths: [], topConcerns: [], nextWeekFocus: "Reintentar análisis más tarde." },
+        _local: { weeklyLoad, deloadCheck, muscleVol }
+      });
+    } finally {
+      setTrainerAgentBusy(false);
+    }
+  };
+
   const updateChallengeProgress = (challengeId, newProgress, completed=false) => {
     setChallenges(prev=>{const updated=prev.map(c=>c.id===challengeId?{...c,progress:newProgress,completed}:c);saveKey("challenges",updated);return updated;});
   };
@@ -2982,9 +3375,29 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
             </div>
           )}
           {view === "entreno" && (
-            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", width:"100%"}}>
               <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Rutina de Hoy</div>
-              <Dumbbell size={20} color={C.muted}/>
+              <button
+                onClick={() => setShowTrainerAgent(true)}
+                className="btn-active-scale"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  background: C.panel,
+                  border: `1.5px solid ${C.lime}`,
+                  borderRadius: 12,
+                  padding: "6px 12px",
+                  color: C.lime,
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  boxShadow: "0 0 8px rgba(205,255,74,0.15)"
+                }}
+              >
+                <Sparkles size={13}/>
+                <span>Agente</span>
+              </button>
             </div>
           )}
           {view === "reg" && (
@@ -3240,6 +3653,24 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
             ))}
           </div>
         </div>
+      )}
+
+      {showTrainerAgent && (
+        <TrainerAgent
+          show={showTrainerAgent}
+          onClose={() => setShowTrainerAgent(false)}
+          data={trainerAgentData}
+          busy={trainerAgentBusy}
+          onRunAnalysis={runTrainerAgentAnalysis}
+          exlog={exlog}
+          exercises={exercises}
+          notes={notes}
+          metricslog={metricslog}
+          splits={splits}
+          plateauAlerts={plateauAlerts}
+          overloadSuggestions={overloadSuggestions}
+          muscleImbalances={muscleImbalances}
+        />
       )}
 
       {showNutritionModal && (
@@ -5329,9 +5760,37 @@ function Hoy({
                     </div>
                   )}
                   {suggForm.data.img && !suggForm.aiPhotoLoading && (
-                    <div style={{position:"absolute", bottom:8, right:8, background:"rgba(0,0,0,0.65)", color:C.ink, fontSize:10.5, fontWeight:700, padding:"4px 10px", borderRadius:99, display:"flex", alignItems:"center", gap:4}}>
-                      <Camera size={11}/> Cambiar foto
-                    </div>
+                    <>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation(); // Evita abrir el selector de archivos
+                          setSuggForm(prev => prev ? { ...prev, data: { ...prev.data, img: "" } } : prev);
+                        }}
+                        style={{
+                          position: "absolute",
+                          top: 8,
+                          right: 8,
+                          background: "rgba(255, 74, 107, 0.9)",
+                          border: "none",
+                          color: "#fff",
+                          width: 28,
+                          height: 28,
+                          borderRadius: "50%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          cursor: "pointer",
+                          zIndex: 15,
+                          boxShadow: "0 2px 8px rgba(0,0,0,0.3)"
+                        }}
+                      >
+                        <X size={14} style={{strokeWidth: 3}}/>
+                      </button>
+                      <div style={{position:"absolute", bottom:8, right:8, background:"rgba(0,0,0,0.65)", color:C.ink, fontSize:10.5, fontWeight:700, padding:"4px 10px", borderRadius:99, display:"flex", alignItems:"center", gap:4}}>
+                        <Camera size={11}/> Cambiar foto
+                      </div>
+                    </>
                   )}
                 </div>
                 <input ref={suggFileRef} type="file" accept="image/*" onChange={onSuggPhoto} style={{display:"none"}}/>
@@ -6525,6 +6984,402 @@ function Perfil({
         )}
       </div>
 
+    </div>
+  );
+}
+
+/* ===== COMPONENTE AGENTE ENTRENADOR ===== */
+function TrainerAgent({
+  show, onClose, data, busy, onRunAnalysis, exlog, exercises, notes, metricslog, splits,
+  plateauAlerts, overloadSuggestions, muscleImbalances
+}) {
+  if (!show) return null;
+
+  const localMuscleVol = React.useMemo(() => {
+    return data?._local?.muscleVol || calcMuscleVolumeBalance(exlog, exercises);
+  }, [data, exlog, exercises]);
+
+  const localWeeklyLoad = React.useMemo(() => {
+    return data?._local?.weeklyLoad || calcWeeklyTrainingLoad(exlog);
+  }, [data, exlog]);
+
+  const localDeload = React.useMemo(() => {
+    return data?._local?.deloadCheck || detectDeloadNeed(exlog, notes, metricslog);
+  }, [data, exlog, notes, metricslog]);
+
+  const getPhaseColor = (name) => {
+    if (!name) return C.muted;
+    const lower = name.toLowerCase();
+    if (lower.includes("acumul")) return C.lime;
+    if (lower.includes("intens")) return C.cyan;
+    if (lower.includes("delo") || lower.includes("descarg")) return C.amber;
+    if (lower.includes("pico")) return C.rose;
+    return C.lime;
+  };
+
+  const maxVol = Math.max(...localWeeklyLoad.map(w => w.totalVol), 1);
+  const chartHeight = 80;
+  const chartWidth = 360;
+
+  return (
+    <div className="trainer-agent-sheet" onClick={onClose}>
+      <div className="trainer-agent-panel" onClick={e => e.stopPropagation()}>
+        
+        {/* Header */}
+        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", borderBottom:`1px solid ${C.line}`, paddingBottom:12}}>
+          <div style={{display:"flex", alignItems:"center", gap:8}}>
+            <Sparkles size={18} color={C.lime} style={{animation: "pulse 2s infinite"}}/>
+            <span style={{fontSize:15, fontWeight:900, color:C.ink, letterSpacing:".04em"}}>AGENTE ENTRENADOR</span>
+          </div>
+          <button onClick={onClose} style={{background:"none", border:"none", color:C.muted, cursor:"pointer", padding:4}}>
+            <X size={20}/>
+          </button>
+        </div>
+
+        {/* Phase Indicator */}
+        <div style={{
+          background: C.panel,
+          border: `1px solid ${C.line}`,
+          borderRadius: 14,
+          padding: 12,
+          display: "flex",
+          flexDirection: "column",
+          gap: 4
+        }}>
+          <div style={{fontSize: 10, fontWeight: 800, color: C.muted, letterSpacing: ".06em", textTransform: "uppercase"}}>
+            Fase de Periodización Activa
+          </div>
+          {data?.trainingPhase ? (
+            <div>
+              <div style={{display: "flex", alignItems: "center", gap: 8, marginTop: 2}}>
+                <span style={{
+                  fontSize: 13,
+                  fontWeight: 900,
+                  color: getPhaseColor(data.trainingPhase.name),
+                  background: `${getPhaseColor(data.trainingPhase.name)}15`,
+                  padding: "2px 8px",
+                  borderRadius: 6
+                }}>
+                  {data.trainingPhase.name.toUpperCase()}
+                </span>
+                {data.trainingPhase.weekNumber !== undefined && (
+                  <span style={{fontSize: 12, color: C.muted, fontWeight: 700}}>
+                    Semana {data.trainingPhase.weekNumber}
+                  </span>
+                )}
+              </div>
+              <div style={{fontSize: 12.5, color: C.ink, marginTop: 6, lineHeight: 1.4}}>
+                {data.trainingPhase.description}
+              </div>
+            </div>
+          ) : (
+            <div style={{fontSize: 12, color: C.muted, marginTop: 4, fontStyle: "italic"}}>
+              Ejecuta el análisis IA para identificar tu fase de entrenamiento actual.
+            </div>
+          )}
+        </div>
+
+        {/* Muscle Grid */}
+        <div style={{display:"flex", flexDirection:"column", gap:4}}>
+          <div style={{fontSize:10, fontWeight:800, color:C.muted, letterSpacing:".06em", textTransform:"uppercase"}}>
+            Balance de Volumen Muscular (Últimos 28 días)
+          </div>
+          <div className="volume-balance-grid">
+            {Object.entries(localMuscleVol).map(([muscle, item]) => {
+              let bg = "rgba(255, 107, 138, 0.08)";
+              let border = `1px solid rgba(255, 107, 138, 0.25)`;
+              let textCol = C.rose;
+              let label = "Desatendido";
+
+              if (item.status === "low") {
+                bg = "rgba(255, 192, 74, 0.08)";
+                border = `1px solid rgba(255, 192, 74, 0.25)`;
+                textCol = C.amber;
+                label = "Vol. Bajo";
+              } else if (item.status === "optimal") {
+                bg = "rgba(205, 255, 74, 0.08)";
+                border = `1px solid rgba(205, 255, 74, 0.25)`;
+                textCol = C.lime;
+                label = "Óptimo";
+              } else if (item.status === "high") {
+                bg = "rgba(74, 214, 255, 0.08)";
+                border = `1px solid rgba(74, 214, 255, 0.25)`;
+                textCol = C.cyan;
+                label = "Vol. Alto";
+              }
+
+              return (
+                <div key={muscle} style={{
+                  background: bg,
+                  border: border,
+                  borderRadius: 10,
+                  padding: "8px 6px",
+                  textAlign: "center",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 2
+                }} title={item.recommendation}>
+                  <span style={{fontSize:11.5, fontWeight:800, color:C.ink}}>{muscle}</span>
+                  <span style={{fontSize:13, fontWeight:900, color:textCol}}>{item.setsPerWeek.toFixed(1)} <span style={{fontSize:9, fontWeight:500}}>s/sem</span></span>
+                  <span style={{fontSize:8.5, fontWeight:700, color:textCol, textTransform:"uppercase"}}>{label}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Load Chart SVG */}
+        <div style={{
+          background: C.panel,
+          border: `1px solid ${C.line}`,
+          borderRadius: 14,
+          padding: 12,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8
+        }}>
+          <div style={{fontSize: 10, fontWeight: 800, color: C.muted, letterSpacing: ".06em", textTransform: "uppercase"}}>
+            Carga de Trabajo Semanal (Volumen por Semana ISO)
+          </div>
+          <div style={{width:"100%", overflowX:"auto"}}>
+            <svg width={chartWidth} height={chartHeight} style={{display:"block", overflow:"visible"}}>
+              {localWeeklyLoad.map((w, idx) => {
+                const barWidth = 24;
+                const barSpacing = (chartWidth - 20 - (barWidth * 8)) / 7;
+                const x = 10 + idx * (barWidth + barSpacing);
+                const pct = w.totalVol / maxVol;
+                const h = Math.round(pct * (chartHeight - 20)) || 3;
+                const y = chartHeight - 15 - h;
+                const isCurrent = idx === 7;
+                const fill = isCurrent ? C.lime : "rgba(243,244,234,0.3)";
+                
+                return (
+                  <g key={idx}>
+                    <rect
+                      x={x}
+                      y={y}
+                      width={barWidth}
+                      height={h}
+                      rx={4}
+                      fill={fill}
+                    />
+                    {(isCurrent || pct > 0.6) && (
+                      <text
+                        x={x + barWidth / 2}
+                        y={y - 4}
+                        fill={isCurrent ? C.lime : C.ink}
+                        fontSize={8.5}
+                        fontWeight={800}
+                        textAnchor="middle"
+                      >
+                        {Math.round(w.totalVol / 100) / 10}k
+                      </text>
+                    )}
+                    <text
+                      x={x + barWidth / 2}
+                      y={chartHeight - 2}
+                      fill={isCurrent ? C.lime : C.muted}
+                      fontSize={8}
+                      fontWeight={isCurrent ? 800 : 500}
+                      textAnchor="middle"
+                    >
+                      {w.weekLabel}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+        </div>
+
+        {/* Deload Card */}
+        {localDeload.urgency !== "none" && (
+          <div style={{
+            background: localDeload.urgency === "high" ? "rgba(255, 107, 138, 0.08)" : "rgba(255, 192, 74, 0.08)",
+            border: localDeload.urgency === "high" ? `2px solid ${C.rose}` : `1px solid ${C.amber}99`,
+            borderRadius: 14,
+            padding: "12px 14px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            animation: localDeload.urgency === "high" ? "pulseGlow 2s infinite" : "none"
+          }}>
+            <div style={{display:"flex", alignItems:"center", gap:6, fontSize:12, fontWeight:900, color: localDeload.urgency === "high" ? C.rose : C.amber}}>
+              <Activity size={14}/>
+              <span>RECOMENDACIÓN DE DESCARGA: {localDeload.urgency.toUpperCase()}</span>
+            </div>
+            <div style={{fontSize:13, fontWeight:800, color:C.ink}}>
+              {localDeload.reason}
+            </div>
+            <div style={{fontSize:11.5, color:C.muted, marginTop:2, lineHeight:1.3}}>
+              {localDeload.recommended 
+                ? "Se aconseja programar una semana de descarga (deload) reduciendo el volumen al 60% para permitir la recuperación del sistema nervioso y articulaciones."
+                : "Monitorea la acumulación de fatiga. Aún estás en rangos manejables pero debes considerar un deload pronto."
+              }
+            </div>
+          </div>
+        )}
+
+        {/* AI Suggested Variations */}
+        {data?.exerciseVariations && data.exerciseVariations.length > 0 && (
+          <div style={{
+            background: C.panel,
+            border: `1px solid ${C.line}`,
+            borderRadius: 14,
+            padding: 12,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8
+          }}>
+            <div style={{fontSize:10, fontWeight:800, color:C.muted, letterSpacing:".06em", textTransform:"uppercase"}}>
+              Variaciones de Ejercicios Sugeridas (IA)
+            </div>
+            <div style={{display:"flex", flexDirection:"column", gap:8}}>
+              {data.exerciseVariations.map((v, i) => {
+                let priorityBg = "rgba(74, 214, 255, 0.15)";
+                let priorityCol = C.cyan;
+                if (v.priority === "alta") {
+                  priorityBg = "rgba(255, 107, 138, 0.15)";
+                  priorityCol = C.rose;
+                } else if (v.priority === "media") {
+                  priorityBg = "rgba(255, 192, 74, 0.15)";
+                  priorityCol = C.amber;
+                }
+
+                return (
+                  <div key={i} style={{
+                    borderBottom: i < data.exerciseVariations.length - 1 ? `1px solid ${C.line}` : "none",
+                    paddingBottom: i < data.exerciseVariations.length - 1 ? 8 : 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 3
+                  }}>
+                    <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+                      <span style={{fontSize:12.5, fontWeight:800, color:C.ink}}>{v.exercise}</span>
+                      <span style={{
+                        fontSize: 9,
+                        fontWeight: 900,
+                        color: priorityCol,
+                        background: priorityBg,
+                        padding: "1px 6px",
+                        borderRadius: 4,
+                        textTransform: "uppercase"
+                      }}>
+                        {v.priority}
+                      </span>
+                    </div>
+                    <div style={{fontSize:12, fontWeight:700, color:C.lime}}>
+                      &rarr; {v.variation}
+                    </div>
+                    <div style={{fontSize:11.5, color:C.muted, lineHeight:1.3}}>
+                      <b style={{color:C.ink}}>{v.currentIssue}:</b> {v.reason}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* AI Performance Summary */}
+        {data?.performanceSummary && (
+          <div style={{
+            background: C.panel,
+            border: `1px solid ${C.line}`,
+            borderRadius: 14,
+            padding: 12,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8
+          }}>
+            <div style={{fontSize:10, fontWeight:800, color:C.muted, letterSpacing:".06em", textTransform:"uppercase"}}>
+              Resumen de Rendimiento (IA)
+            </div>
+            <div style={{fontSize:12.5, color:C.ink, lineHeight:1.4}}>
+              {data.performanceSummary.narrative}
+            </div>
+            
+            {(data.performanceSummary.topStrengths?.length > 0 || data.performanceSummary.topConcerns?.length > 0) && (
+              <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:4}}>
+                {data.performanceSummary.topStrengths?.length > 0 && (
+                  <div style={{display:"flex", flexDirection:"column", gap:3}}>
+                    <span style={{fontSize:9.5, fontWeight:900, color:C.lime, textTransform:"uppercase"}}>Fortalezas</span>
+                    {data.performanceSummary.topStrengths.map((s, idx) => (
+                      <span key={idx} style={{fontSize:11, color:C.ink, display:"flex", alignItems:"flex-start", gap:4}}>
+                        <span style={{color:C.lime}}>&bull;</span> {s}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {data.performanceSummary.topConcerns?.length > 0 && (
+                  <div style={{display:"flex", flexDirection:"column", gap:3}}>
+                    <span style={{fontSize:9.5, fontWeight:900, color:C.rose, textTransform:"uppercase"}}>Preocupaciones</span>
+                    {data.performanceSummary.topConcerns.map((s, idx) => (
+                      <span key={idx} style={{fontSize:11, color:C.ink, display:"flex", alignItems:"flex-start", gap:4}}>
+                        <span style={{color:C.rose}}>&bull;</span> {s}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {data.performanceSummary.nextWeekFocus && (
+              <div style={{
+                background: "rgba(107,78,255,0.06)",
+                border: `1px solid ${C.line}`,
+                borderRadius: 10,
+                padding: "8px 10px",
+                marginTop: 4
+              }}>
+                <div style={{fontSize:9, fontWeight:900, color:C.cyan, textTransform:"uppercase", letterSpacing:".04em"}}>
+                  Foco Próxima Semana
+                </div>
+                <div style={{fontSize:12, fontWeight:700, color:C.ink, marginTop:2}}>
+                  {data.performanceSummary.nextWeekFocus}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* CTA Button */}
+        <button
+          onClick={onRunAnalysis}
+          disabled={busy}
+          className="btn-active-scale"
+          style={{
+            width: "100%",
+            height: 50,
+            borderRadius: 12,
+            background: "linear-gradient(135deg, var(--accent-lime), var(--accent-cyan))",
+            color: "#0c0e0b",
+            fontSize: 13.5,
+            fontWeight: 800,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            cursor: "pointer",
+            border: "none",
+            marginTop: 10,
+            boxShadow: "0 4px 15px rgba(205,255,74,0.2)"
+          }}
+        >
+          {busy ? (
+            <>
+              <Loader2 size={16} style={{animation: "spin 1s linear infinite"}}/>
+              <span>Analizando...</span>
+            </>
+          ) : (
+            <>
+              <Sparkles size={16}/>
+              <span>{data ? "Actualizar Análisis IA" : "Analizar con IA"}</span>
+            </>
+          )}
+        </button>
+
+      </div>
     </div>
   );
 }
