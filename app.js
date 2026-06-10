@@ -1977,10 +1977,11 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           workoutGroups[key].push(s);
         });
       });
+      const workoutUpsertData = [];
       for (const [key, sets] of Object.entries(workoutGroups)) {
         const [dateStr, exerciseName] = key.split('|');
         const duration = workoutDurations[dateStr] || 0;
-        const { error: wkErr } = await supabase.from('workout_logs').upsert({
+        workoutUpsertData.push({
           user_id: uId,
           date: dateStr,
           exercise_name: exerciseName,
@@ -1988,6 +1989,9 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           duration: duration,
           updated_at: new Date().toISOString()
         });
+      }
+      if (workoutUpsertData.length > 0) {
+        const { error: wkErr } = await supabase.from('workout_logs').upsert(workoutUpsertData);
         if (wkErr) throw wkErr;
       }
 
