@@ -4329,7 +4329,50 @@ function Hoy({
     if (!file || !suggForm) return;
     try {
       const dataUrl = await readSuggestionImage(file);
-      setSuggForm(prev => prev ? { ...prev, data: { ...prev.data, img: dataUrl } } : prev);
+      // Muestra la foto de inmediato y activa el indicador de análisis IA
+      setSuggForm(prev => prev ? { ...prev, data: { ...prev.data, img: dataUrl }, aiPhotoLoading: true } : prev);
+      try {
+        const b64 = dataUrl.split(",")[1];
+        const media = ["image/jpeg","image/png","image/webp"].includes(file.type) ? file.type : "image/jpeg";
+        const SUGG_SCHEMA = {
+          type: "OBJECT",
+          properties: {
+            name: { type: "STRING" },
+            kcal: { type: "INTEGER" },
+            proteina: { type: "INTEGER" },
+            carbo: { type: "INTEGER" },
+            grasa: { type: "INTEGER" }
+          },
+          required: ["name","kcal","proteina","carbo","grasa"]
+        };
+        const out = await callGemini([{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: media, data: b64 } },
+            { type: "text", text: "Identifica este alimento y estima sus macros para una porción típica." }
+          ]
+        }], "Eres un nutricionista experto. Analiza la imagen de comida y responde SOLO con JSON {name, kcal, proteina, carbo, grasa}. Usa nombres en español.", SUGG_SCHEMA);
+        const parsed = cleanAndParseJSON(out);
+        if (parsed && parsed.kcal) {
+          setSuggForm(prev => prev ? {
+            ...prev,
+            aiPhotoLoading: false,
+            data: {
+              ...prev.data,
+              img: dataUrl,
+              name: prev.data.name || parsed.name || "",
+              kcal: parsed.kcal || prev.data.kcal,
+              proteina: parsed.proteina !== undefined ? parsed.proteina : prev.data.proteina,
+              carbo: parsed.carbo !== undefined ? parsed.carbo : prev.data.carbo,
+              grasa: parsed.grasa !== undefined ? parsed.grasa : prev.data.grasa,
+            }
+          } : prev);
+        } else {
+          setSuggForm(prev => prev ? { ...prev, aiPhotoLoading: false } : prev);
+        }
+      } catch(_aiErr) {
+        setSuggForm(prev => prev ? { ...prev, aiPhotoLoading: false } : prev);
+      }
     } catch(err) {
       console.error("Error al leer la foto de la sugerencia:", err);
     }
@@ -5147,26 +5190,31 @@ function Hoy({
           scrollbarWidth: "none",
           msOverflowStyle: "none"
         }}>
-          {[...(customSuggestions || []), ...SUGGESTIONS].map((s,i) => {
+          {[...(customSuggestions || []).map(s => ({...s, _custom:true})), ...SUGGESTIONS].map((s,i) => {
             const suggestionImg = s.img || "https://images.unsplash.com/photo-1498837167922-ddd27525d352?w=300&q=75&fit=crop";
             return (
-              <div 
-                key={i} 
+              <div
+                key={i}
                 style={{
-                  display: "flex", 
-                  flexDirection: "column", 
-                  width: 160, 
-                  flexShrink: 0, 
-                  background: C.panel, 
-                  border: `1px solid ${C.line}`, 
-                  borderRadius: 16, 
-                  overflow: "hidden", 
+                  display: "flex",
+                  flexDirection: "column",
+                  width: 160,
+                  flexShrink: 0,
+                  background: C.panel,
+                  border: `1px solid ${s._custom ? C.lime+"55" : C.line}`,
+                  borderRadius: 16,
+                  overflow: "hidden",
                   boxShadow: "var(--shadow-card)",
                   scrollSnapAlign: "start"
                 }}
               >
                 <div style={{ width: "100%", height: 100, position: "relative", overflow: "hidden" }}>
                   <img src={suggestionImg} alt={s.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="lazy" />
+                  {s._custom && (
+                    <div style={{position:"absolute", top:8, left:8, background:C.lime, color:"#0c0e0b", fontSize:9, fontWeight:900, padding:"2px 6px", borderRadius:99, letterSpacing:".06em"}}>
+                      TUYA
+                    </div>
+                  )}
                   <div style={{
                     position: "absolute",
                     top: 8,
@@ -5265,7 +5313,14 @@ function Hoy({
                       Toca para subir una foto
                     </div>
                   )}
-                  {suggForm.data.img && (
+                  {/* Overlay de análisis IA */}
+                  {suggForm.aiPhotoLoading && (
+                    <div style={{position:"absolute", inset:0, background:"rgba(12,14,11,0.72)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:6, borderRadius:14}}>
+                      <Loader2 size={22} style={{animation:"spin 1s linear infinite", color:C.lime}}/>
+                      <span style={{fontSize:11, color:C.ink, fontWeight:700}}>Analizando macros...</span>
+                    </div>
+                  )}
+                  {suggForm.data.img && !suggForm.aiPhotoLoading && (
                     <div style={{position:"absolute", bottom:8, right:8, background:"rgba(0,0,0,0.65)", color:C.ink, fontSize:10.5, fontWeight:700, padding:"4px 10px", borderRadius:99, display:"flex", alignItems:"center", gap:4}}>
                       <Camera size={11}/> Cambiar foto
                     </div>
@@ -9999,10 +10054,33 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
   // Local state for macro editor — avoids async-lag with controlled inputs
   const [editVals, setEditVals] = React.useState({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
   const [editDirty, setEditDirty] = React.useState(false);
-  // Sync editVals when target changes (e.g. user switches preset)
+  // Tracks previous preset so we can compute the scale factor when switching modes
+  const prevPlanRef = React.useRef({ key: presetKey, kcal: target.kcal });
+  // Sync editVals when target changes; scale meal portions when switching training mode
   React.useEffect(() => {
+    const { key: prevKey, kcal: prevKcal } = prevPlanRef.current;
+    prevPlanRef.current = { key: presetKey, kcal: target.kcal };
     setEditVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
     setEditDirty(false);
+    // Only scale meals when the preset MODE changes (not when macros are edited in-place,
+    // since updateMacroAndAdjustMeals / updateAllMacrosAndAdjustMeals already handle that)
+    if (prevKey !== presetKey && prevKcal && prevKcal !== target.kcal && target.kcal > 0) {
+      const factor = target.kcal / prevKcal;
+      const nextMeals = meals.map(meal => {
+        let kcalStr = meal.kcal;
+        const m = meal.kcal.match(/(\d+)/);
+        if (m) kcalStr = meal.kcal.replace(/\d+/, Math.round(parseInt(m[1]) * factor));
+        const opts = meal.opts.map(opt =>
+          opt.replace(/(\d+(\.\d+)?)\s*(g|ml|scoop|scoops|huevo|huevos|clara|claras|rebanada|rebanadas|tostada|tostadas|unidades|unidad)\b/gi,
+            (_, n, _d, u) => {
+              const v = Math.round(parseFloat(n) * factor * 10) / 10;
+              return `${Number.isInteger(v) ? v : v.toFixed(1)} ${u}`;
+            })
+        );
+        return { ...meal, kcal: kcalStr, opts };
+      });
+      setMeals(nextMeals);
+    }
   }, [presetKey, target.kcal, target.p, target.c, target.f]);
 
   const updateMacroAndAdjustMeals = (type, numVal) => {
