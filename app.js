@@ -6,7 +6,7 @@ import {
   MessageSquare, NotebookPen, Loader2, Scale, Camera, Clock, ChefHat, 
   Sparkles, LineChart, Dumbbell, ClipboardList, GlassWater, Target, 
   CalendarDays, ShoppingCart, Activity, Eye, EyeOff, CheckSquare, Square, ShieldAlert,
-  RefreshCw, Link2, Copy, Check, Settings, Pill, X
+  RefreshCw, Link2, Copy, Check, Settings, Pill, X, Upload
 } from "lucide-react";
 
 /* ===== CONSTANTES Y PRESETS ===== */
@@ -4740,7 +4740,8 @@ function Hoy({
   const [editFoodObj, setEditFoodObj] = useState(null);
   const [showAllSuggestions, setShowAllSuggestions] = useState(false);
   const [suggForm, setSuggForm] = useState(null); // null | { idx: "new" | number, data: {...} }
-  const suggFileRef = useRef(null);
+  const suggCameraRef = useRef(null);
+  const suggGalleryRef = useRef(null);
 
   // Lee y reduce la foto de la sugerencia a un dataURL liviano (max 400px)
   const readSuggestionImage = (file) => new Promise((resolve, reject) => {
@@ -4768,11 +4769,11 @@ function Hoy({
     if (!file || !suggForm) return;
     try {
       const dataUrl = await readSuggestionImage(file);
-      // Muestra la foto de inmediato y activa el indicador de análisis IA
-      setSuggForm(prev => prev ? { ...prev, data: { ...prev.data, img: dataUrl }, aiPhotoLoading: true } : prev);
+      // Muestra la foto de inmediato y activa el indicador de análisis IA, limpiando errores previos
+      setSuggForm(prev => prev ? { ...prev, data: { ...prev.data, img: dataUrl }, aiPhotoLoading: true, aiPhotoError: "" } : prev);
       try {
         const b64 = dataUrl.split(",")[1];
-        const media = ["image/jpeg","image/png","image/webp"].includes(file.type) ? file.type : "image/jpeg";
+        const media = "image/jpeg"; // El canvas de readSuggestionImage genera siempre jpeg
         const SUGG_SCHEMA = {
           type: "OBJECT",
           properties: {
@@ -4807,10 +4808,11 @@ function Hoy({
             }
           } : prev);
         } else {
-          setSuggForm(prev => prev ? { ...prev, aiPhotoLoading: false } : prev);
+          setSuggForm(prev => prev ? { ...prev, aiPhotoLoading: false, aiPhotoError: "La respuesta de la IA no fue válida." } : prev);
         }
-      } catch(_aiErr) {
-        setSuggForm(prev => prev ? { ...prev, aiPhotoLoading: false } : prev);
+      } catch(aiErr) {
+        console.error("Error al analizar foto con Gemini:", aiErr);
+        setSuggForm(prev => prev ? { ...prev, aiPhotoLoading: false, aiPhotoError: "Error IA: " + (aiErr.message || "revisa tu conexión o API Key") } : prev);
       }
     } catch(err) {
       console.error("Error al leer la foto de la sugerencia:", err);
@@ -5737,9 +5739,8 @@ function Hoy({
               <div style={{display:"flex", flexDirection:"column", gap:12}}>
                 {/* Foto */}
                 <div
-                  onClick={() => suggFileRef.current && suggFileRef.current.click()}
                   style={{
-                    width:"100%", height:140, borderRadius:14, overflow:"hidden", cursor:"pointer",
+                    width:"100%", height:140, borderRadius:14, overflow:"hidden",
                     border:`1px dashed ${suggForm.data.img ? C.line : C.lime}`,
                     background:C.panel2, display:"flex", alignItems:"center", justifyContent:"center", position:"relative"
                   }}
@@ -5747,9 +5748,37 @@ function Hoy({
                   {suggForm.data.img ? (
                     <img src={suggForm.data.img} alt="Foto sugerencia" style={{width:"100%", height:"100%", objectFit:"cover"}}/>
                   ) : (
-                    <div style={{display:"flex", flexDirection:"column", alignItems:"center", gap:6, color:C.muted, fontSize:12}}>
-                      <Camera size={22} color={C.lime}/>
-                      Toca para subir una foto
+                    <div style={{ display: "flex", gap: 12, width: "100%", padding: "0 16px" }}>
+                      <div 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          suggCameraRef.current && suggCameraRef.current.click();
+                        }}
+                        style={{
+                          flex: 1, height: 90, borderRadius: 10, background: C.panel,
+                          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                          gap: 6, color: C.ink, border: `1px solid ${C.line}`, fontSize: 11.5, fontWeight: 600,
+                          cursor: "pointer"
+                        }}
+                      >
+                        <Camera size={20} color={C.lime}/>
+                        Tomar Foto
+                      </div>
+                      <div 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          suggGalleryRef.current && suggGalleryRef.current.click();
+                        }}
+                        style={{
+                          flex: 1, height: 90, borderRadius: 10, background: C.panel,
+                          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                          gap: 6, color: C.ink, border: `1px solid ${C.line}`, fontSize: 11.5, fontWeight: 600,
+                          cursor: "pointer"
+                        }}
+                      >
+                        <Upload size={20} color={C.cyan}/>
+                        Subir Galería
+                      </div>
                     </div>
                   )}
                   {/* Overlay de análisis IA */}
@@ -5759,7 +5788,23 @@ function Hoy({
                       <span style={{fontSize:11, color:C.ink, fontWeight:700}}>Analizando macros...</span>
                     </div>
                   )}
-                  {suggForm.data.img && !suggForm.aiPhotoLoading && (
+                  {/* Overlay de error de análisis IA */}
+                  {suggForm.aiPhotoError && (
+                    <div style={{position:"absolute", inset:0, background:"rgba(255, 74, 107, 0.96)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:6, borderRadius:14, padding:12, textAlign:"center"}}>
+                      <span style={{fontSize:12, color:"#fff", fontWeight:700}}>{suggForm.aiPhotoError}</span>
+                      <button 
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSuggForm(prev => prev ? { ...prev, aiPhotoError: "" } : null);
+                        }}
+                        style={{background:"#fff", border:"none", color:"#ff4a6b", fontSize:11, fontWeight:700, padding:"4px 12px", borderRadius:6, cursor:"pointer", marginTop:4}}
+                      >
+                        Entendido
+                      </button>
+                    </div>
+                  )}
+                  {suggForm.data.img && !suggForm.aiPhotoLoading && !suggForm.aiPhotoError && (
                     <>
                       <button
                         type="button"
@@ -5787,13 +5832,20 @@ function Hoy({
                       >
                         <X size={14} style={{strokeWidth: 3}}/>
                       </button>
-                      <div style={{position:"absolute", bottom:8, right:8, background:"rgba(0,0,0,0.65)", color:C.ink, fontSize:10.5, fontWeight:700, padding:"4px 10px", borderRadius:99, display:"flex", alignItems:"center", gap:4}}>
+                      <div 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          suggGalleryRef.current && suggGalleryRef.current.click();
+                        }}
+                        style={{position:"absolute", bottom:8, right:8, background:"rgba(0,0,0,0.65)", color:C.ink, fontSize:10.5, fontWeight:700, padding:"4px 10px", borderRadius:99, display:"flex", alignItems:"center", gap:4, cursor:"pointer"}}
+                      >
                         <Camera size={11}/> Cambiar foto
                       </div>
                     </>
                   )}
                 </div>
-                <input ref={suggFileRef} type="file" accept="image/*" onChange={onSuggPhoto} style={{display:"none"}}/>
+                <input ref={suggCameraRef} type="file" accept="image/*" capture="environment" onChange={onSuggPhoto} style={{display:"none"}}/>
+                <input ref={suggGalleryRef} type="file" accept="image/*" onChange={onSuggPhoto} style={{display:"none"}}/>
 
                 <div>
                   <label style={{fontSize:11, color:C.muted, fontWeight:700, display:"block", marginBottom:4}}>Nombre</label>
