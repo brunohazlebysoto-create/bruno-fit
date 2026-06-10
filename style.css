@@ -360,3 +360,125 @@ button:active {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px;
 }
 
+/* ===== NUEVOS ESTILOS Y ANIMACIONES PREMIUM ===== */
+
+/* Confetti keyframe */
+@keyframes fallDown {
+  0% {
+    transform: translateY(0) rotate(0deg);
+  }
+  100% {
+    transform: translateY(105vh) rotate(720deg);
+  }
+}
+
+/* Slide up animation */
+@keyframes slideUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Glow Card glow effects */
+.glow-card-lime {
+  position: relative;
+  overflow: hidden;
+}
+.glow-card-lime::before {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle, rgba(205,255,74,0.06) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.glow-card-cyan {
+  position: relative;
+  overflow: hidden;
+}
+.glow-card-cyan::before {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle, rgba(74,214,255,0.06) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* PR Gold badge bounce animation */
+@keyframes goldPulse {
+  0% { transform: scale(1); box-shadow: 0 0 4px rgba(255,215,0,0.4); }
+  50% { transform: scale(1.08); box-shadow: 0 0 12px rgba(255,215,0,0.8); }
+  100% { transform: scale(1); box-shadow: 0 0 4px rgba(255,215,0,0.4); }
+}
+
+.pr-gold-badge {
+  background: linear-gradient(135deg, #ffd700 0%, #b8860b 100%);
+  color: #0c0e0b;
+  font-size: 10px;
+  font-weight: 900;
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  animation: goldPulse 2s infinite ease-in-out;
+}
+
+/* Focus Gym Mode full screen styles */
+.focus-gym-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #0c0e0b;
+  z-index: 99990;
+  display: flex;
+  flex-direction: column;
+  color: var(--text-ink);
+  overflow-y: auto;
+}
+
+/* Custom styles for giant Focus Mode inputs */
+.focus-giant-input-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--panel-bg);
+  border: 1px solid var(--line-color);
+  border-radius: 16px;
+  padding: 10px 16px;
+}
+
+.focus-btn-step {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--panel-bg-sec);
+  border: 1px solid var(--line-color);
+  color: var(--text-ink);
+  font-size: 20px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.focus-btn-step:active {
+  background: var(--line-color);
+}
+

@@ -6,8 +6,62 @@ import {
   MessageSquare, NotebookPen, Loader2, Scale, Camera, Clock, ChefHat, 
   Sparkles, LineChart, Dumbbell, ClipboardList, GlassWater, Target, 
   CalendarDays, ShoppingCart, Activity, Eye, EyeOff, CheckSquare, Square, ShieldAlert,
-  RefreshCw, Link2, Copy, Check, Settings, Pill, X, Upload
+  RefreshCw, Link2, Copy, Check, Settings, Pill, X, Upload, ChevronLeft, ChevronRight
 } from "lucide-react";
+
+/* ===== CONFETTI EXPLOSION HELPER ===== */
+window.launchConfetti = () => {
+  const container = document.createElement("div");
+  container.style.position = "fixed";
+  container.style.top = 0;
+  container.style.left = 0;
+  container.style.width = "100%";
+  container.style.height = "100%";
+  container.style.pointerEvents = "none";
+  container.style.zIndex = "999999";
+  document.body.appendChild(container);
+
+  const colors = ["#cdff4a", "#22d3ee", "#fbbf24", "#f43f5e", "#a855f7"];
+  for (let i = 0; i < 60; i++) {
+    const piece = document.createElement("div");
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    piece.style.position = "absolute";
+    piece.style.width = `${Math.random() * 8 + 6}px`;
+    piece.style.height = `${Math.random() * 8 + 6}px`;
+    piece.style.background = color;
+    piece.style.borderRadius = Math.random() > 0.5 ? "50%" : "0";
+    piece.style.left = `${Math.random() * 100}%`;
+    piece.style.top = "-10px";
+    piece.style.opacity = "1";
+    piece.style.transform = `rotate(${Math.random() * 360}deg)`;
+    container.appendChild(piece);
+
+    const speed = Math.random() * 3 + 2;
+    const angle = (Math.random() - 0.5) * 4; // horizontal drift
+    let currentTop = -10;
+    let currentLeft = parseFloat(piece.style.left);
+    let rotation = Math.random() * 360;
+
+    const interval = setInterval(() => {
+      currentTop += speed;
+      currentLeft += angle;
+      rotation += 5;
+      piece.style.top = `${currentTop}px`;
+      piece.style.left = `${currentLeft}%`;
+      piece.style.transform = `rotate(${rotation}deg)`;
+
+      if (currentTop > window.innerHeight) {
+        clearInterval(interval);
+        piece.remove();
+      }
+    }, 16);
+  }
+
+  // Remove container after 4 seconds
+  setTimeout(() => {
+    container.remove();
+  }, 4000);
+};
 
 /* ===== CONSTANTES Y PRESETS ===== */
 const DEFAULT_PRESETS = {
@@ -405,6 +459,41 @@ const cleanAndParseJSON = (str) => {
     throw e;
   }
 };
+
+const launchConfetti = () => {
+  const colors = ["#cdff4a", "#4ad6ff", "#ffcc00", "#ff3366", "#33cc66"];
+  const container = document.createElement("div");
+  container.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:999999;overflow:hidden;";
+  document.body.appendChild(container);
+
+  for (let i = 0; i < 50; i++) {
+    const el = document.createElement("div");
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    const left = Math.random() * 100; // %
+    const size = Math.random() * 8 + 6; // px
+    const delay = Math.random() * 0.5; // s
+    const duration = Math.random() * 1.5 + 1.5; // s
+    
+    el.style.cssText = `
+      position: absolute;
+      top: -20px;
+      left: ${left}%;
+      width: ${size}px;
+      height: ${size}px;
+      background-color: ${color};
+      border-radius: ${Math.random() > 0.5 ? "50%" : "2px"};
+      opacity: ${Math.random() * 0.6 + 0.4};
+      transform: rotate(${Math.random() * 360}deg);
+      animation: fallDown ${duration}s linear ${delay}s forwards;
+    `;
+    container.appendChild(el);
+  }
+
+  setTimeout(() => {
+    container.remove();
+  }, 3500);
+};
+window.launchConfetti = launchConfetti;
 
 async function parseDailyCloudData(cloudData, today) {
   let finalLog = [];
@@ -1119,6 +1208,7 @@ export default function App(){
   const [aiModel, setAiModel] = useState("moonshotai/kimi-k2.6:free");
   const [prAlerts, setPrAlerts] = useState([]);
   const [workoutDurations, setWorkoutDurations] = useState({});
+  const [activeMuscleFilter, setActiveMuscleFilter] = useState(null);
 
   // ── 20 AI Features: New States ──
   const [smartGoals, setSmartGoals] = useState([]); // #10 - Adaptive Goals
@@ -1237,6 +1327,32 @@ export default function App(){
     }
     
     return prMsg;
+  };
+
+  const replaceExerciseInRoutine = (oldName, newName) => {
+    const updatedExercises = { ...exercises };
+    let found = false;
+    Object.entries(updatedExercises).forEach(([splitKey, exList]) => {
+      const idx = exList.findIndex(e => e.name.toLowerCase().trim() === oldName.toLowerCase().trim());
+      if (idx !== -1) {
+        const updatedExList = [...exList];
+        updatedExList[idx] = { 
+          ...updatedExList[idx], 
+          name: newName, 
+          tecnico: `Reemplazado de ${oldName} por recomendación del Coach` 
+        };
+        updatedExercises[splitKey] = updatedExList;
+        found = true;
+      }
+    });
+
+    if (found) {
+      setExercises(updatedExercises);
+      saveState({ exercises: updatedExercises });
+      alert(`Se ha reemplazado "${oldName}" por "${newName}" en tu rutina.`);
+    } else {
+      alert(`No encontramos el ejercicio "${oldName}" en tu split de entrenamiento.`);
+    }
   };
 
   // Consolidated History & Inventory States
@@ -3511,6 +3627,8 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
             setSplits={(s) => saveState({ splits: s })}
             notes={notes}
             chat={chat}
+            activeMuscleFilter={activeMuscleFilter}
+            setActiveMuscleFilter={setActiveMuscleFilter}
           />
         )}
         {view === "reg" && (
@@ -3670,6 +3788,7 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
           plateauAlerts={plateauAlerts}
           overloadSuggestions={overloadSuggestions}
           muscleImbalances={muscleImbalances}
+          onReplaceExercise={replaceExerciseInRoutine}
         />
       )}
 
@@ -3942,7 +4061,7 @@ function AIPanel({title, busy, text, color=C.lime, onClose}){
 }
 
 /* ===== TAB HOY ===== */
-function Bar({ icon: Ic, label, val, max, unit, color, onSettingsClick }) {
+function Bar({ icon: Ic, label, val, max, unit, color, onSettingsClick, onClick }) {
   const pct = Math.min(100, max ? (val / max) * 100 : 0);
   
   // Choose background tint and icon color based on color
@@ -3963,19 +4082,23 @@ function Bar({ icon: Ic, label, val, max, unit, color, onSettingsClick }) {
   }
 
   return (
-    <div style={{
-      display: "flex",
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      padding: 16,
-      border: "1px solid var(--line-color)",
-      borderRadius: "var(--radius-md)",
-      background: "var(--bg-color)",
-      boxShadow: "var(--shadow-card)",
-      marginBottom: 12,
-      gap: 12
-    }}>
+    <div 
+      onClick={onClick}
+      style={{
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: 16,
+        border: "1px solid var(--line-color)",
+        borderRadius: "var(--radius-md)",
+        background: "var(--bg-color)",
+        boxShadow: "var(--shadow-card)",
+        marginBottom: 12,
+        gap: 12,
+        cursor: onClick ? "pointer" : "default"
+      }}
+    >
       {/* Left Icon circular 44x44 */}
       <div style={{
         width: 44,
@@ -4008,7 +4131,10 @@ function Bar({ icon: Ic, label, val, max, unit, color, onSettingsClick }) {
 
       {/* Right Settings Icon */}
       <button 
-        onClick={onSettingsClick}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSettingsClick();
+        }}
         className="btn-active-scale"
         style={{
           width: 44,
@@ -4734,6 +4860,7 @@ function Hoy({
   setView, setShowNutritionModal, setModalVals, addFoodInputText, setAddFoodInputText, customSuggestions
 }){
   const [text, setText] = useState(""); 
+  const [suggFilter, setSuggFilter] = useState("todas"); // 'todas' | 'ia' | 'mias'
   const [busy, setBusy] = useState(false); 
   const [err, setErr] = useState("");
   const [newSuppInput, setNewSuppInput] = useState("");
@@ -5499,6 +5626,7 @@ function Hoy({
           setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
           setShowNutritionModal(true);
         }}
+        onClick={() => setView("addfood")}
       />
       <Bar 
         icon={Beef} 
@@ -5511,6 +5639,7 @@ function Hoy({
           setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
           setShowNutritionModal(true);
         }}
+        onClick={() => setView("addfood")}
       />
       <Bar 
         icon={Wheat} 
@@ -5523,6 +5652,7 @@ function Hoy({
           setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
           setShowNutritionModal(true);
         }}
+        onClick={() => setView("addfood")}
       />
       <Bar 
         icon={Droplet} 
@@ -5535,6 +5665,7 @@ function Hoy({
           setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
           setShowNutritionModal(true);
         }}
+        onClick={() => setView("addfood")}
       />
 
       {/* Proporción de macros consumidos */}
@@ -5942,93 +6073,96 @@ function Hoy({
                   style={{
                     width:"100%", padding:"13px", borderRadius:14, border:`1px dashed ${C.lime}`,
                     background:"rgba(205,255,74,0.06)", color:C.lime, fontWeight:800, fontSize:13.5,
-                    cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8
+                    cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+                    marginBottom:4
                   }}
                 >
                   <Plus size={16}/> Crear nueva sugerencia
                 </button>
 
-                {(customSuggestions || []).length > 0 && (
-                  <div style={{fontSize:11, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".08em", marginTop:4}}>
-                    Creadas por ti ({(customSuggestions || []).length})
-                  </div>
-                )}
-                {(customSuggestions || []).map((s, idx) => (
-                  <div key={"c"+idx} style={{display:"flex", gap:10, alignItems:"center", background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:10}}>
-                    <div style={{width:54, height:54, borderRadius:10, overflow:"hidden", flexShrink:0, background:C.panel2, display:"flex", alignItems:"center", justifyContent:"center"}}>
-                      {s.img
-                        ? <img src={s.img} alt={s.name} style={{width:"100%", height:"100%", objectFit:"cover"}} loading="lazy"/>
-                        : <Utensils size={20} color={C.muted}/>}
-                    </div>
-                    <div style={{flex:1, minWidth:0}}>
-                      <div style={{fontSize:13, fontWeight:700, color:C.ink, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{s.name}</div>
-                      <div style={{fontSize:11, color:C.muted, marginTop:2, display:"flex", gap:8, flexWrap:"wrap"}}>
-                        <span style={{color:C.lime, fontWeight:700}}>{s.kcal} kcal</span>
-                        <span style={{color:C.cyan}}>P {s.proteina !== undefined ? s.proteina : 20}g</span>
-                        <span>C {s.carbo !== undefined ? s.carbo : 30}g</span>
-                        <span style={{color:C.amber}}>G {s.grasa !== undefined ? s.grasa : 10}g</span>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => openEditSuggForm(idx)}
-                      className="btn-active-scale"
-                      title="Editar sugerencia"
-                      style={{width:34, height:34, borderRadius:9, border:`1px solid ${C.line}`, background:C.panel2, color:C.muted, cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
-                    >
-                      <NotebookPen size={14}/>
-                    </button>
-                    <button
-                      onClick={() => {
-                        pushEntry({
-                          resumen: s.name,
-                          kcal: s.kcal,
-                          proteina: s.proteina !== undefined ? s.proteina : 20,
-                          carbo: s.carbo !== undefined ? s.carbo : 30,
-                          grasa: s.grasa !== undefined ? s.grasa : 10
-                        }, s.name);
-                      }}
-                      className="btn-active-scale"
-                      title="Registrar en el día"
-                      style={{width:34, height:34, borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
-                    >
-                      <Plus size={16}/>
-                    </button>
-                  </div>
-                ))}
-
-                <div style={{fontSize:11, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".08em", marginTop:4}}>
-                  Sugerencias del Coach
+                {/* Filtros de sugerencias */}
+                <div style={{display:"flex", gap:6, margin:"6px 0 10px"}}>
+                  {[
+                    ["todas", "Todas"],
+                    ["ia", "De la IA"],
+                    ["mias", "Creadas por ti"]
+                  ].map(([k, lbl]) => {
+                    const isActive = suggFilter === k;
+                    return (
+                      <button
+                        key={k}
+                        onClick={() => setSuggFilter(k)}
+                        style={{
+                          flex:1, padding:"8px 0", borderRadius:10, fontSize:11.5, fontWeight:700, cursor:"pointer",
+                          border:`1px solid ${isActive ? C.lime : C.line}`,
+                          background: isActive ? "rgba(205,255,74,0.08)" : C.panel,
+                          color: isActive ? C.lime : C.muted,
+                          outline:"none"
+                        }}
+                      >
+                        {lbl}
+                      </button>
+                    );
+                  })}
                 </div>
-                {SUGGESTIONS.map((s, idx) => (
-                  <div key={"d"+idx} style={{display:"flex", gap:10, alignItems:"center", background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:10}}>
-                    <div style={{width:54, height:54, borderRadius:10, overflow:"hidden", flexShrink:0}}>
-                      <img src={s.img} alt={s.name} style={{width:"100%", height:"100%", objectFit:"cover"}} loading="lazy"/>
-                    </div>
-                    <div style={{flex:1, minWidth:0}}>
-                      <div style={{fontSize:13, fontWeight:700, color:C.ink, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{s.name}</div>
-                      <div style={{fontSize:11, color:C.muted, marginTop:2, display:"flex", gap:8, alignItems:"center"}}>
-                        <span style={{color:C.lime, fontWeight:700}}>{s.kcal} kcal</span>
-                        <span style={{display:"flex", alignItems:"center", gap:3}}><Clock size={11}/>{s.time}</span>
+
+                {/* Lista unificada filtrada */}
+                <div style={{display:"flex", flexDirection:"column", gap:8, overflowY:"auto", paddingRight:2}}>
+                  {[
+                    ...(suggFilter === "ia" ? [] : (customSuggestions || []).map((s, idx) => ({ ...s, _custom: true, _idx: idx }))),
+                    ...(suggFilter === "mias" ? [] : SUGGESTIONS.map((s, idx) => ({ ...s, _custom: false, _idx: idx })))
+                  ].map((s, i) => (
+                    <div key={i} style={{display:"flex", gap:10, alignItems:"center", background:C.panel, border:`1px solid ${s._custom ? C.lime+"44" : C.line}`, borderRadius:14, padding:10}}>
+                      <div style={{width:54, height:54, borderRadius:10, overflow:"hidden", flexShrink:0, background:C.panel2, display:"flex", alignItems:"center", justifyContent:"center"}}>
+                        {s.img
+                          ? <img src={s.img} alt={s.name} style={{width:"100%", height:"100%", objectFit:"cover"}} loading="lazy"/>
+                          : <Utensils size={20} color={C.muted}/>}
                       </div>
+                      <div style={{flex:1, minWidth:0}}>
+                        <div style={{display:"flex", alignItems:"center", gap:6}}>
+                          <div style={{fontSize:13, fontWeight:700, color:C.ink, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{s.name}</div>
+                          {s._custom && (
+                            <span style={{fontSize:8, fontWeight:900, background:C.lime, color:"#0c0e0b", padding:"1px 4px", borderRadius:4}}>TUYA</span>
+                          )}
+                        </div>
+                        <div style={{fontSize:11, color:C.muted, marginTop:2, display:"flex", gap:8, flexWrap:"wrap"}}>
+                          <span style={{color:C.lime, fontWeight:700}}>{s.kcal} kcal</span>
+                          <span style={{color:C.cyan}}>P {s.proteina !== undefined ? s.proteina : 20}g</span>
+                          <span>C {s.carbo !== undefined ? s.carbo : 30}g</span>
+                          <span style={{color:C.amber}}>G {s.grasa !== undefined ? s.grasa : 10}g</span>
+                        </div>
+                      </div>
+                      {s._custom ? (
+                        <button
+                          onClick={() => openEditSuggForm(s._idx)}
+                          className="btn-active-scale"
+                          title="Editar sugerencia"
+                          style={{width:34, height:34, borderRadius:9, border:`1px solid ${C.line}`, background:C.panel2, color:C.muted, cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
+                        >
+                          <NotebookPen size={14}/>
+                        </button>
+                      ) : (
+                        <span style={{fontSize:10.5, color:C.muted, marginRight:4, display:"flex", alignItems:"center", gap:3}}><Clock size={11}/> {s.time || "10 min"}</span>
+                      )}
+                      <button
+                        onClick={() => {
+                          pushEntry({
+                            resumen: s.name,
+                            kcal: s.kcal,
+                            proteina: s.proteina !== undefined ? s.proteina : 20,
+                            carbo: s.carbo !== undefined ? s.carbo : 30,
+                            grasa: s.grasa !== undefined ? s.grasa : 10
+                          }, s.name);
+                        }}
+                        className="btn-active-scale"
+                        title="Registrar en el día"
+                        style={{width:34, height:34, borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
+                      >
+                        <Plus size={16}/>
+                      </button>
                     </div>
-                    <button
-                      onClick={() => {
-                        pushEntry({
-                          resumen: s.name,
-                          kcal: s.kcal,
-                          proteina: s.proteina !== undefined ? s.proteina : 20,
-                          carbo: s.carbo !== undefined ? s.carbo : 30,
-                          grasa: s.grasa !== undefined ? s.grasa : 10
-                        }, s.name);
-                      }}
-                      className="btn-active-scale"
-                      title="Registrar en el día"
-                      style={{width:34, height:34, borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
-                    >
-                      <Plus size={16}/>
-                    </button>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </>
             )}
           </div>
@@ -7043,7 +7177,7 @@ function Perfil({
 /* ===== COMPONENTE AGENTE ENTRENADOR ===== */
 function TrainerAgent({
   show, onClose, data, busy, onRunAnalysis, exlog, exercises, notes, metricslog, splits,
-  plateauAlerts, overloadSuggestions, muscleImbalances
+  plateauAlerts, overloadSuggestions, muscleImbalances, onReplaceExercise
 }) {
   if (!show) return null;
 
@@ -7320,8 +7454,27 @@ function TrainerAgent({
                         {v.priority}
                       </span>
                     </div>
-                    <div style={{fontSize:12, fontWeight:700, color:C.lime}}>
-                      &rarr; {v.variation}
+                    <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:2}}>
+                      <div style={{fontSize:12, fontWeight:700, color:C.lime}}>
+                        &rarr; {v.variation}
+                      </div>
+                      {onReplaceExercise && (
+                        <button 
+                          onClick={() => onReplaceExercise(v.exercise, v.variation)}
+                          style={{
+                            background:"rgba(205,255,74,0.1)",
+                            border:`1px solid ${C.lime}33`,
+                            color:C.lime,
+                            fontSize:10.5,
+                            fontWeight:700,
+                            padding:"3px 8px",
+                            borderRadius:6,
+                            cursor:"pointer"
+                          }}
+                        >
+                          Aplicar cambio
+                        </button>
+                      )}
                     </div>
                     <div style={{fontSize:11.5, color:C.muted, lineHeight:1.3}}>
                       <b style={{color:C.ink}}>{v.currentIssue}:</b> {v.reason}
@@ -7441,7 +7594,8 @@ function Entreno({
   exlog, setExlog, exercises, setExercises, geminiKey, handleAnalyzeWorkout, importWorkoutData,
   activeSplitKey, setActiveSplitKey, selectedDateStr, setSelectedDateStr, calMonth, setCalMonth,
   workoutDurations, setWorkoutDurations, prAlerts, setPrAlerts, checkNewPR, activeMetrics,
-  overloadSuggestions, plateauAlerts, muscleImbalances, splits, setSplits, notes, chat
+  overloadSuggestions, plateauAlerts, muscleImbalances, splits, setSplits, notes, chat,
+  activeMuscleFilter, setActiveMuscleFilter
 }){
   const sel = activeSplitKey;
   const setSel = setActiveSplitKey;
@@ -7454,6 +7608,54 @@ function Entreno({
   const [editSetObj, setEditSetObj] = useState(null);
   const [editExObj, setEditExObj] = useState(null);
   const [exTab, setExTab] = useState("texto"); // 'texto' or 'nuevo'
+
+  // --- AUTOMATIC REST TIMER STATES & LOGIC ---
+  const [restTimeLeft, setRestTimeLeft] = useState(0);
+  const [restDuration, setRestDuration] = useState(90); // default 90s
+  const [restActive, setRestActive] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const [activeExIdx, setActiveExIdx] = useState(0);
+
+  useEffect(() => {
+    let timer = null;
+    if (restActive && restTimeLeft > 0) {
+      timer = setInterval(() => {
+        setRestTimeLeft(prev => {
+          if (prev <= 1) {
+            setRestActive(false);
+            if (navigator.vibrate) {
+              navigator.vibrate([200, 100, 200]);
+            }
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [restActive, restTimeLeft]);
+
+  const startRestTimer = (seconds = 90) => {
+    setRestDuration(seconds);
+    setRestTimeLeft(seconds);
+    setRestActive(true);
+  };
+
+  const handleWChange = (delta) => {
+    setW(prev => {
+      const val = parseFloat(prev) || 0;
+      return String(Math.max(0, val + delta));
+    });
+  };
+
+  const handleRepsChange = (delta) => {
+    setReps(prev => {
+      const val = parseInt(prev) || 0;
+      return String(Math.max(0, val + delta));
+    });
+  };
 
   const getRecentSensationsText = () => {
     const sevenDaysAgo = Date.now() - 7 * 86400000;
@@ -7549,8 +7751,11 @@ function Entreno({
   };
 
   const dayObj = (splits || DEFAULT_SPLITS).find(d => d.key === sel) || (splits || DEFAULT_SPLITS)[0] || DEFAULT_SPLITS[0];
-  const dayExs = (exercises || {})[sel] || [];
-  const dayMuscles = [...new Set(dayExs.flatMap(e => e.musculos || []))];
+  const allDayExs = (exercises || {})[sel] || [];
+  const dayExs = activeMuscleFilter 
+    ? allDayExs.filter(e => e.musculos && e.musculos.includes(activeMuscleFilter)) 
+    : allDayExs;
+  const dayMuscles = [...new Set(allDayExs.flatMap(e => e.musculos || []))];
   const last = (n) => { const a = (exlog || {})[n]; return a && a.length ? a[0] : null; };
   const chartData = (n) => ((exlog || {})[n] || []).slice().reverse();
 
@@ -7650,6 +7855,9 @@ function Entreno({
     const prMsg = checkNewPR(n, parseFloat(w), reps.trim(), exlog, rirVal);
     if (prMsg) {
       newPrs.push(`${n}: ${prMsg}`);
+      if (typeof window.launchConfetti === 'function') {
+        window.launchConfetti();
+      }
     }
     if (newPrs.length > 0) {
       setPrAlerts(newPrs);
@@ -7667,6 +7875,10 @@ function Entreno({
     }
     const next = {...exlog, [n]: [...newSets.reverse(), ...(exlog[n] || [])].slice(0, 60)}; 
     setExlog(next); 
+    
+    // Iniciar temporizador de descanso automático
+    startRestTimer(setType === "warmup" ? 60 : 90);
+
     setW(""); 
     setReps(""); 
     setSetsCount("1");
@@ -7987,11 +8199,14 @@ function Entreno({
             return (
               <div 
                 key={m} 
-                className="muscle-heatmap-cell"
+                className="muscle-heatmap-cell btn-active-scale"
+                onClick={() => setActiveMuscleFilter(activeMuscleFilter === m ? null : m)}
                 style={{
                   backgroundColor: styleProps.bg,
-                  borderColor: styleProps.border || C.line,
-                  boxShadow: styleProps.boxShadow || "none"
+                  borderColor: activeMuscleFilter === m ? C.lime : (styleProps.border || C.line),
+                  boxShadow: activeMuscleFilter === m ? `0 0 10px ${C.lime}44` : (styleProps.boxShadow || "none"),
+                  cursor: "pointer",
+                  transition: "all 0.2s"
                 }}
               >
                 <span className="muscle-name" style={{ color: styleProps.text === C.muted ? C.muted : "inherit" }}>{m}</span>
@@ -8000,6 +8215,17 @@ function Entreno({
             );
           })}
         </div>
+        {activeMuscleFilter && (
+          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", background:"rgba(205,255,74,0.08)", border:`1px solid ${C.lime}44`, borderRadius:10, padding:"6px 12px", marginTop:10}}>
+            <span style={{fontSize:11.5, color:C.lime, fontWeight:700}}>Filtrado por: {activeMuscleFilter}</span>
+            <button 
+              onClick={() => setActiveMuscleFilter(null)} 
+              style={{background:"none", border:"none", color:C.rose, cursor:"pointer", fontWeight:800, fontSize:11}}
+            >
+              Quitar filtro (X)
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Calendario de Historial de Entrenamientos */}
@@ -8040,7 +8266,17 @@ function Entreno({
           setCalMonth(new Date(year, month + 1, 1));
         };
 
-        const selectedDayWorkouts = workoutSessions[selectedDateStr] || null;
+        let selectedDayWorkouts = workoutSessions[selectedDateStr] || null;
+        if (selectedDayWorkouts && activeMuscleFilter) {
+          const filteredWorkouts = {};
+          Object.entries(selectedDayWorkouts).forEach(([exName, sets]) => {
+            const globalEx = Object.values(exercises).flat().find(item => item.name === exName) || { name: exName };
+            if (globalEx.musculos && globalEx.musculos.includes(activeMuscleFilter)) {
+              filteredWorkouts[exName] = sets;
+            }
+          });
+          selectedDayWorkouts = Object.keys(filteredWorkouts).length > 0 ? filteredWorkouts : null;
+        }
 
         const formatSelectedDateLong = (dStr) => {
           try {
@@ -8528,9 +8764,43 @@ function Entreno({
           </button>
         ))}
         <button
-          onClick={startEditSplits}
+          onClick={() => {
+            if (dayExs.length > 0) {
+              const firstEx = dayExs[0];
+              const l = last(firstEx.name);
+              const sug = overloadSuggestions && overloadSuggestions[firstEx.name];
+              setW(sug ? String(sug.suggested) : (l ? String(l.w) : ""));
+              setReps(l ? String(l.reps) : "");
+              setSetType("work");
+              setRir("-");
+            }
+            setActiveExIdx(0);
+            setFocusMode(true);
+          }}
+          className="btn-active-scale"
           style={{
             marginLeft:"auto",
+            padding:"6px 12px",
+            height:36,
+            borderRadius:10,
+            background: `linear-gradient(135deg, ${C.lime} 0%, #15803d 100%)`,
+            border: "none",
+            color: "#0c0e0b",
+            fontSize:11.5,
+            fontWeight:800,
+            cursor:"pointer",
+            display:"flex",
+            alignItems:"center",
+            gap:4,
+            boxShadow: `0 0 12px ${C.lime}33`
+          }}
+        >
+          <Flame size={12}/>
+          <span>Modo Gimnasio</span>
+        </button>
+        <button
+          onClick={startEditSplits}
+          style={{
             padding:"6px 12px",
             height:36,
             borderRadius:10,
@@ -9507,6 +9777,425 @@ function Entreno({
           </div>
         </div>
       )}
+
+      {/* Rest Timer Floating Panel */}
+      {restTimeLeft > 0 && (
+        <div style={{
+          position: "fixed",
+          bottom: 90,
+          right: 16,
+          background: "rgba(20, 22, 17, 0.95)",
+          backdropFilter: "blur(8px)",
+          border: `1.5px solid ${C.cyan}`,
+          borderRadius: 20,
+          padding: "10px 14px",
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          zIndex: 99995,
+          boxShadow: "0 8px 32px rgba(0,0,0,0.5), 0 0 15px rgba(74, 214, 255, 0.15)",
+          animation: "slideUp 0.3s ease-out"
+        }}>
+          {/* SVG Circular progress */}
+          <div style={{ position: "relative", width: 44, height: 44, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <svg style={{ transform: "rotate(-90deg)", width: "100%", height: "100%", position: "absolute", top: 0, left: 0 }}>
+              <circle cx="22" cy="22" r="18" fill="none" stroke={C.line} strokeWidth="3" />
+              <circle 
+                cx="22" 
+                cy="22" 
+                r="18" 
+                fill="none" 
+                stroke={C.cyan} 
+                strokeWidth="3"
+                strokeDasharray={2 * Math.PI * 18}
+                strokeDashoffset={2 * Math.PI * 18 * (1 - restTimeLeft / restDuration)}
+                style={{ transition: "stroke-dashoffset 1s linear" }}
+              />
+            </svg>
+            <div style={{ fontSize: 11.5, fontWeight: 800, color: C.cyan, zIndex: 2 }}>
+              {Math.floor(restTimeLeft / 60)}:{String(restTimeLeft % 60).padStart(2, '0')}
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <span style={{ fontSize: 10, fontWeight: 800, color: C.muted, textTransform: "uppercase", letterSpacing: ".05em" }}>Descanso</span>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <button 
+                onClick={() => setRestActive(!restActive)} 
+                style={{ background: "none", border: "none", color: C.cyan, cursor: "pointer", fontSize: 11, fontWeight: 800, padding: 0 }}
+              >
+                {restActive ? "Pausar" : "Iniciar"}
+              </button>
+              <span style={{ color: C.line, fontSize: 10 }}>|</span>
+              <button 
+                onClick={() => { setRestTimeLeft(0); setRestActive(false); }} 
+                style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 11, fontWeight: 700, padding: 0 }}
+              >
+                Saltar
+              </button>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <button 
+              onClick={() => setRestTimeLeft(prev => prev + 10)} 
+              style={{ background: C.panel2, border: `1px solid ${C.line}`, color: C.ink, fontSize: 9.5, fontWeight: 800, padding: "2px 6px", borderRadius: 6, cursor: "pointer" }}
+            >
+              +10s
+            </button>
+            <button 
+              onClick={() => setRestTimeLeft(prev => Math.max(0, prev - 10))} 
+              style={{ background: C.panel2, border: `1px solid ${C.line}`, color: C.ink, fontSize: 9.5, fontWeight: 800, padding: "2px 6px", borderRadius: 6, cursor: "pointer" }}
+            >
+              -10s
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Focus Gym Mode Overlay */}
+      {focusMode && (() => {
+        const hasEx = dayExs.length > 0;
+        const currentEx = hasEx ? dayExs[activeExIdx] : null;
+        const recentSets = currentEx ? (exlog[currentEx.name] || []) : [];
+        const todaySets = recentSets.filter(s => {
+          if (!s || !s.date) return false;
+          return s.date.startsWith(selectedDateStr);
+        });
+        
+        // Cargar sugerencia u último registrado si no hay campos rellenos
+        const loadSuggestedValues = (exIndex) => {
+          const targetEx = dayExs[exIndex];
+          if (!targetEx) return;
+          const l = last(targetEx.name);
+          const sug = overloadSuggestions && overloadSuggestions[targetEx.name];
+          setW(sug ? String(sug.suggested) : (l ? String(l.w) : ""));
+          setReps(l ? String(l.reps) : "");
+          setSetType("work");
+          setRir("-");
+        };
+
+        const handleNextEx = () => {
+          if (activeExIdx < dayExs.length - 1) {
+            const nextIdx = activeExIdx + 1;
+            setActiveExIdx(nextIdx);
+            loadSuggestedValues(nextIdx);
+          }
+        };
+
+        const handlePrevEx = () => {
+          if (activeExIdx > 0) {
+            const prevIdx = activeExIdx - 1;
+            setActiveExIdx(prevIdx);
+            loadSuggestedValues(prevIdx);
+          }
+        };
+
+        return (
+          <div style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            background: "rgba(12, 14, 11, 0.98)",
+            zIndex: 99990,
+            display: "flex",
+            flexDirection: "column",
+            padding: "20px 16px",
+            overflowY: "auto"
+          }}>
+            {/* Header */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <span style={{ fontSize: 13, fontWeight: 800, color: C.lime, textTransform: "uppercase", letterSpacing: ".08em" }}>
+                🎯 MODO GIMNASIO ({dayObj.key})
+              </span>
+              <button 
+                onClick={() => setFocusMode(false)}
+                style={{
+                  background: "rgba(255,107,138,0.1)",
+                  border: `1.5px solid ${C.rose}`,
+                  color: C.rose,
+                  padding: "6px 12px",
+                  borderRadius: 10,
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: "pointer"
+                }}
+              >
+                Salir
+              </button>
+            </div>
+
+            {!hasEx ? (
+              <div style={{ color: C.muted, textAlign: "center", marginTop: 40, fontSize: 14 }}>
+                No hay ejercicios configurados para el split de hoy.
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 16, flex: 1 }}>
+                {/* Exercise Navigation Cards */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <button 
+                    onClick={handlePrevEx} 
+                    disabled={activeExIdx === 0}
+                    style={{
+                      background: C.panel,
+                      border: `1.5px solid ${C.line}`,
+                      color: activeExIdx === 0 ? C.muted : C.lime,
+                      width: 44,
+                      height: 44,
+                      borderRadius: 12,
+                      cursor: activeExIdx === 0 ? "default" : "pointer",
+                      display: "grid",
+                      placeItems: "center"
+                    }}
+                  >
+                    <ChevronLeft size={20}/>
+                  </button>
+                  
+                  <div style={{ textAlign: "center", flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: C.muted, fontWeight: 800 }}>
+                      EJERCICIO {activeExIdx + 1} DE {dayExs.length}
+                    </div>
+                    <div style={{ fontSize: 18, fontWeight: 900, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {currentEx.name}
+                    </div>
+                    {currentEx.musculos && (
+                      <span style={{ fontSize: 10.5, color: C.cyan, fontWeight: 700, textTransform: "uppercase" }}>
+                        {currentEx.musculos.join(", ")}
+                      </span>
+                    )}
+                  </div>
+
+                  <button 
+                    onClick={handleNextEx} 
+                    disabled={activeExIdx === dayExs.length - 1}
+                    style={{
+                      background: C.panel,
+                      border: `1.5px solid ${C.line}`,
+                      color: activeExIdx === dayExs.length - 1 ? C.muted : C.lime,
+                      width: 44,
+                      height: 44,
+                      borderRadius: 12,
+                      cursor: activeExIdx === dayExs.length - 1 ? "default" : "pointer",
+                      display: "grid",
+                      placeItems: "center"
+                    }}
+                  >
+                    <ChevronRight size={20}/>
+                  </button>
+                </div>
+
+                {/* Series Logged Count Circle */}
+                <div style={{
+                  background: "rgba(205,255,74,0.04)",
+                  border: `1px solid ${C.lime}33`,
+                  borderRadius: 16,
+                  padding: 12,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between"
+                }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: C.muted }}>Series completadas hoy:</span>
+                  <span style={{ fontSize: 18, fontWeight: 900, color: C.lime }}>
+                    {todaySets.length} / {currentEx.sets || 4}
+                  </span>
+                </div>
+
+                {/* Giant controls */}
+                <div style={{
+                  background: C.panel,
+                  border: `1px solid ${C.line}`,
+                  borderRadius: 16,
+                  padding: 16,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 16
+                }}>
+                  {/* Weight Selector */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: C.muted, textTransform: "uppercase" }}>Peso (kg)</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <button 
+                        onClick={() => handleWChange(-5)} 
+                        style={{ flex: 1, height: 48, borderRadius: 12, background: C.panel2, border: `1.5px solid ${C.line}`, color: C.ink, fontSize: 16, fontWeight: 800, cursor: "pointer" }}
+                      >
+                        -5
+                      </button>
+                      <button 
+                        onClick={() => handleWChange(-1.25)} 
+                        style={{ flex: 1, height: 48, borderRadius: 12, background: C.panel2, border: `1.5px solid ${C.line}`, color: C.ink, fontSize: 15, fontWeight: 800, cursor: "pointer" }}
+                      >
+                        -1.25
+                      </button>
+                      <input 
+                        type="number" 
+                        value={w} 
+                        onChange={(e) => setW(e.target.value)}
+                        placeholder="0"
+                        style={{ width: 80, height: 48, borderRadius: 12, background: C.panel2, border: `1.5px solid ${C.line}`, color: C.lime, fontSize: 20, fontWeight: 900, textAlign: "center" }}
+                      />
+                      <button 
+                        onClick={() => handleWChange(1.25)} 
+                        style={{ flex: 1, height: 48, borderRadius: 12, background: C.panel2, border: `1.5px solid ${C.line}`, color: C.ink, fontSize: 15, fontWeight: 800, cursor: "pointer" }}
+                      >
+                        +1.25
+                      </button>
+                      <button 
+                        onClick={() => handleWChange(5)} 
+                        style={{ flex: 1, height: 48, borderRadius: 12, background: C.panel2, border: `1.5px solid ${C.line}`, color: C.ink, fontSize: 16, fontWeight: 800, cursor: "pointer" }}
+                      >
+                        +5
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Reps Selector */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: C.muted, textTransform: "uppercase" }}>Repeticiones</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <button 
+                        onClick={() => handleRepsChange(-5)} 
+                        style={{ flex: 1, height: 48, borderRadius: 12, background: C.panel2, border: `1.5px solid ${C.line}`, color: C.ink, fontSize: 16, fontWeight: 800, cursor: "pointer" }}
+                      >
+                        -5
+                      </button>
+                      <button 
+                        onClick={() => handleRepsChange(-1)} 
+                        style={{ flex: 1, height: 48, borderRadius: 12, background: C.panel2, border: `1.5px solid ${C.line}`, color: C.ink, fontSize: 15, fontWeight: 800, cursor: "pointer" }}
+                      >
+                        -1
+                      </button>
+                      <input 
+                        type="number" 
+                        value={reps} 
+                        onChange={(e) => setReps(e.target.value)}
+                        placeholder="0"
+                        style={{ width: 80, height: 48, borderRadius: 12, background: C.panel2, border: `1.5px solid ${C.line}`, color: C.lime, fontSize: 20, fontWeight: 900, textAlign: "center" }}
+                      />
+                      <button 
+                        onClick={() => handleRepsChange(1)} 
+                        style={{ flex: 1, height: 48, borderRadius: 12, background: C.panel2, border: `1.5px solid ${C.line}`, color: C.ink, fontSize: 15, fontWeight: 800, cursor: "pointer" }}
+                      >
+                        +1
+                      </button>
+                      <button 
+                        onClick={() => handleRepsChange(5)} 
+                        style={{ flex: 1, height: 48, borderRadius: 12, background: C.panel2, border: `1.5px solid ${C.line}`, color: C.ink, fontSize: 16, fontWeight: 800, cursor: "pointer" }}
+                      >
+                        +5
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* RIR & Type */}
+                  <div style={{ display: "flex", gap: 12 }}>
+                    {/* RIR Selection */}
+                    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+                      <span style={{ fontSize: 11, fontWeight: 800, color: C.muted, textTransform: "uppercase" }}>RIR</span>
+                      <select 
+                        value={rir} 
+                        onChange={(e) => setRir(e.target.value)}
+                        style={{ width: "100%", height: 44, borderRadius: 10, background: C.panel2, border: `1.5px solid ${C.line}`, color: C.ink, fontSize: 14, fontWeight: 800, paddingLeft: 8 }}
+                      >
+                        <option value="-">-</option>
+                        <option value="0">0 (Fallo)</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                      </select>
+                    </div>
+
+                    {/* Set Type Selection */}
+                    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+                      <span style={{ fontSize: 11, fontWeight: 800, color: C.muted, textTransform: "uppercase" }}>Tipo de Serie</span>
+                      <select 
+                        value={setType} 
+                        onChange={(e) => setSetType(e.target.value)}
+                        style={{ width: "100%", height: 44, borderRadius: 10, background: C.panel2, border: `1.5px solid ${C.line}`, color: C.ink, fontSize: 14, fontWeight: 800, paddingLeft: 8 }}
+                      >
+                        <option value="work">Efectiva</option>
+                        <option value="warmup">Calentamiento</option>
+                        <option value="dropset">Dropset</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Add set button */}
+                  <button 
+                    onClick={() => {
+                      if (!w.trim() || !reps.trim()) {
+                        alert("Por favor rellena peso y repeticiones.");
+                        return;
+                      }
+                      addSet(currentEx.name);
+                    }}
+                    className="btn-active-scale"
+                    style={{
+                      width: "100%",
+                      height: 52,
+                      borderRadius: 14,
+                      background: C.lime,
+                      border: "none",
+                      color: "#0c0e0b",
+                      fontSize: 16,
+                      fontWeight: 900,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 8,
+                      boxShadow: `0 4px 20px ${C.lime}44`
+                    }}
+                  >
+                    <Plus size={20} strokeWidth={3}/> Registrar Serie
+                  </button>
+                </div>
+
+                {/* Logged Sets Details */}
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: C.muted, textTransform: "uppercase", marginBottom: 8 }}>
+                    Series Registradas Hoy ({currentEx.name})
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {todaySets.length === 0 ? (
+                      <div style={{ fontSize: 12, color: C.muted, fontStyle: "italic", padding: 10, border: `1px dashed ${C.line}`, borderRadius: 12, textAlign: "center" }}>
+                        Ninguna serie registrada hoy para este ejercicio.
+                      </div>
+                    ) : (
+                      todaySets.map((s, idx) => (
+                        <div key={idx} style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          background: C.panel,
+                          border: `1px solid ${C.line}`,
+                          borderRadius: 12,
+                          padding: "10px 14px"
+                        }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <span style={{ fontSize: 12, fontWeight: 900, color: C.lime }}>#{todaySets.length - idx}</span>
+                            <span style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>{s.w} kg × {s.reps}</span>
+                            <span style={{ fontSize: 11, color: C.muted }}>
+                              {s.type === "warmup" ? "Calentamiento" : s.type === "dropset" ? "Dropset" : "Efectiva"}
+                              {s.rir !== undefined && s.rir !== null ? ` (RIR ${s.rir})` : ""}
+                            </span>
+                          </div>
+                          <button 
+                            onClick={() => delSetFromDay(currentEx.name, s)}
+                            style={{ background: "none", border: "none", color: C.rose, cursor: "pointer", fontSize: 12, fontWeight: 700 }}
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }

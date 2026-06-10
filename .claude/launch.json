@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "bruno-fit",
+      "runtimeExecutable": "C:\\Users\\BRUNO\\AppData\\Local\\Python\\bin\\python.exe",
+      "runtimeArgs": ["-m", "http.server", "3210"],
+      "port": 3210
+    }
+  ]
+}
