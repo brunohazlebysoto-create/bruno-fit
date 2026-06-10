@@ -1907,9 +1907,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
       // 2. Sincronizar Registro de Métricas y Peso
       const metricEntries = Object.entries(metricslog || {});
+      const metricsToUpsert = [];
       for (const [dateStr, m] of metricEntries) {
         if (!m || m.weight === undefined) continue;
-        const { error: metErr } = await supabase.from('metrics_logs').upsert({
+        metricsToUpsert.push({
           user_id: uId,
           date: dateStr,
           weight: parseFloat(m.weight) || 93.9,
@@ -1925,7 +1926,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           cintura: m.cintura !== undefined && m.cintura !== "" ? parseFloat(m.cintura) : null,
           pecho: m.pecho !== undefined && m.pecho !== "" ? parseFloat(m.pecho) : null,
           updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id, date' });
+        });
+      }
+      if (metricsToUpsert.length > 0) {
+        const { error: metErr } = await supabase.from('metrics_logs').upsert(metricsToUpsert, { onConflict: 'user_id, date' });
         if (metErr) throw metErr;
       }
 
