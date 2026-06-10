@@ -79,17 +79,132 @@
   }
   </script>
 
-  <!-- Babel Standalone to compile JSX in the browser on the fly -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
-
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
   <!-- Root entry point for React -->
   <div id="root"></div>
 
-  <!-- Entry script loaded as an ES module transpiled by Babel -->
-  <script type="text/babel" data-type="module" src="./app.js"></script>
+  <!-- Dynamic Loader with IndexedDB Caching for Instant Page Load -->
+  <script>
+    (async function() {
+      const rootEl = document.getElementById('root');
+      
+      // Render a premium loader during compilation on first load
+      const loaderDiv = document.createElement('div');
+      loaderDiv.id = 'app-preloader';
+      loaderDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:#0c0e0b;color:#f3f4ea;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:sans-serif;z-index:999999;transition:opacity 0.3s ease;';
+      loaderDiv.innerHTML = `
+        <div style="width:40px;height:40px;border:3px solid rgba(205,255,74,0.1);border-top-color:#cdff4a;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:16px;"></div>
+        <div style="font-size:16px;font-weight:700;letter-spacing:0.05em;color:#cdff4a;margin-bottom:8px;">BRUNOFIT</div>
+        <div id="preloader-status" style="font-size:11px;color:#9aa088;max-width:240px;text-align:center;line-height:1.4;">Iniciando panel...</div>
+        <style>@keyframes spin{to{transform:rotate(360deg);}}</style>
+      `;
+      rootEl.appendChild(loaderDiv);
+
+      const statusEl = document.getElementById('preloader-status');
+
+      async function getHash(text) {
+        const msgBuffer = new TextEncoder().encode(text);
+        const hashBuffer = await crypto.subtle.digest('SHA-1', msgBuffer);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      }
+
+      function getCachedCode(hash) {
+        return new Promise((resolve) => {
+          const request = indexedDB.open('BabelCache', 1);
+          request.onupgradeneeded = (e) => {
+            e.target.result.createObjectStore('scripts');
+          };
+          request.onsuccess = (e) => {
+            const db = e.target.result;
+            const transaction = db.transaction('scripts', 'readonly');
+            const store = transaction.objectStore('scripts');
+            const getReq = store.get(hash);
+            getReq.onsuccess = () => resolve(getReq.result);
+            getReq.onerror = () => resolve(null);
+          };
+          request.onerror = () => resolve(null);
+        });
+      }
+
+      function cacheCode(hash, code) {
+        return new Promise((resolve) => {
+          const request = indexedDB.open('BabelCache', 1);
+          request.onsuccess = (e) => {
+            const db = e.target.result;
+            const transaction = db.transaction('scripts', 'readwrite');
+            const store = transaction.objectStore('scripts');
+            store.clear(); // una sola versión compilada: evita acumular builds viejos
+            store.put(code, hash);
+            transaction.oncomplete = () => resolve(true);
+          };
+        });
+      }
+
+      function loadBabel() {
+        return new Promise((resolve, reject) => {
+          if (window.Babel) return resolve();
+          statusEl.innerText = "Cargando motor de optimización (solo primer uso)...";
+          const script = document.createElement('script');
+          script.src = "https://unpkg.com/@babel/standalone/babel.min.js";
+          script.crossOrigin = "anonymous";
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+
+      try {
+        // Fetch app.js source (siempre fresco; la caché de compilación vive en IndexedDB)
+        const res = await fetch('./app.js', { cache: 'no-store' });
+        if (!res.ok) throw new Error("No se pudo cargar el archivo app.js");
+        const appCode = await res.text();
+        const hash = await getHash(appCode);
+
+        let compiledCode = await getCachedCode(hash);
+        
+        if (!compiledCode) {
+          statusEl.innerText = "Optimizando código de la aplicación (solo primer uso)...";
+          await loadBabel();
+          
+          compiledCode = Babel.transform(appCode, {
+            presets: ['react'],
+            filename: 'app.js'
+          }).code;
+          
+          await cacheCode(hash, compiledCode);
+        }
+
+        // Hide preloader shortly after execution begins
+        window.addEventListener('load-completed', () => {
+          loaderDiv.style.opacity = 0;
+          setTimeout(() => loaderDiv.remove(), 300);
+        });
+
+        // Execute transpiled script as a module
+        const blob = new Blob([compiledCode], { type: 'application/javascript' });
+        const url = URL.createObjectURL(blob);
+        const moduleScript = document.createElement('script');
+        moduleScript.type = 'module';
+        moduleScript.src = url;
+        document.body.appendChild(moduleScript);
+
+      } catch (err) {
+        console.error("Error en cargador IndexedDB/Babel:", err);
+        statusEl.innerHTML = `<span style="color:#ff6b8a">Error al iniciar: ${err.message}</span><br>Cargando en modo lento de respaldo...`;
+        
+        // Fallback: load Babel standalone normally and load app.js
+        await loadBabel();
+        const fallbackScript = document.createElement('script');
+        fallbackScript.type = 'text/babel';
+        fallbackScript.setAttribute('data-type', 'module');
+        fallbackScript.src = './app.js';
+        document.body.appendChild(fallbackScript);
+      }
+    })();
+  </script>
 
   <!-- Service Worker registration script -->
   <script>

@@ -158,7 +158,7 @@ const COACH_SCHEMA = {
   required: ["chatResponse"]
 };
 
-const WORKOUT_PARSER_SYS = "Eres un asistente experto en entrenamiento de fuerza. Tu tarea es analizar el texto del usuario que describe su sesión de entrenamiento y extraer los ejercicios, pesos y repeticiones. Extrae los pesos en kg (si están en libras, conviértelos a kg dividiendo por 2.2). Responde estrictamente en formato JSON que cumpla con el esquema WORKOUT_PARSER_SCHEMA.";
+const WORKOUT_PARSER_SYS = "Eres un asistente experto en entrenamiento de fuerza. Tu tarea es analizar el texto del usuario que describe su sesión de entrenamiento y extraer los ejercicios, pesos y repeticiones. Extrae los pesos en kg (si están en libras, conviértelos a kg dividiendo por 2.2). Para cada ejercicio extraído, debes identificar obligatoriamente al menos los 3 músculos principales que trabaja. Responde estrictamente en formato JSON que cumpla con el esquema WORKOUT_PARSER_SCHEMA.";
 
 const WORKOUT_PARSER_SCHEMA = {
   type: "OBJECT",
@@ -169,6 +169,11 @@ const WORKOUT_PARSER_SCHEMA = {
         type: "OBJECT",
         properties: {
           name: { type: "STRING" },
+          muscles: {
+            type: "ARRAY",
+            items: { type: "STRING" },
+            description: "Al menos 3 músculos principales involucrados en el ejercicio"
+          },
           sets: {
             type: "ARRAY",
             items: {
@@ -181,7 +186,7 @@ const WORKOUT_PARSER_SCHEMA = {
             }
           }
         },
-        required: ["name", "sets"]
+        required: ["name", "sets", "muscles"]
       }
     }
   },
@@ -535,21 +540,64 @@ function seedExercises(){
 /* ===== GRÁFICO SVG COMPARTIDO ===== */
 function Chart({entries, color=C.lime, height=128}){
   if(!entries || entries.length < 2) return null;
+  const [mode, setMode] = useState("peso"); // "peso" or "esfuerzo"
+
+  const values = entries.map(d => {
+    if (mode === "peso") {
+      return parseFloat(d.w) || 0;
+    } else {
+      const repsVal = parseInt(d.reps) || 0;
+      const rirVal = (d.rir !== undefined && d.rir !== null && !isNaN(parseInt(d.rir))) ? parseInt(d.rir) : 0;
+      return (parseFloat(d.w) || 0) * (1 + (repsVal + rirVal) / 30);
+    }
+  });
+
+  const mn = Math.min(...values), mx = Math.max(...values), rg = (mx - mn) || 1;
   const W = 320, H = height, pad = 22;
-  const ws = entries.map(d => d.w), mn = Math.min(...ws), mx = Math.max(...ws), rg = (mx - mn) || 1;
   const X = i => pad + (i / (entries.length - 1)) * (W - 2 * pad);
   const Y = v => H - pad - ((v - mn) / rg) * (H - 2 * pad - 6) - 3;
-  const line = entries.map((d, i) => `${X(i).toFixed(1)},${Y(d.w).toFixed(1)}`).join(" ");
+  const line = values.map((val, i) => `${X(i).toFixed(1)},${Y(val).toFixed(1)}`).join(" ");
   const area = `${pad},${H - pad} ${line} ${(W - pad).toFixed(1)},${H - pad}`;
-  const up = entries[entries.length - 1].w >= entries[0].w;
+  const lastVal = values[values.length - 1];
+  const firstVal = values[0];
+  const up = lastVal >= firstVal;
   const col = up ? C.lime : C.amber;
+  
   return (
     <div style={{margin:"8px 0 4px"}}>
-      <div style={{fontSize:11,color:C.muted,marginBottom:3}}>Progreso · mín {mn} · máx {mx} · último {entries[entries.length-1].w} kg {up?"📈":"📉"}</div>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5}}>
+        <div style={{fontSize:11, color:C.muted}}>
+          {mode === "peso" ? "Historial de Pesos" : "Esfuerzo Estimado (1RM)"} · {Math.round(lastVal)} kg {up?"📈":"📉"}
+        </div>
+        <div style={{display:"flex", gap:4}}>
+          <button 
+            onClick={() => setMode("peso")} 
+            style={{
+              background: mode === "peso" ? "rgba(205,255,74,0.12)" : "transparent",
+              border: `1px solid ${mode === "peso" ? C.lime : C.line}`,
+              color: mode === "peso" ? C.lime : C.muted,
+              fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 4, cursor: "pointer"
+            }}
+          >
+            Peso
+          </button>
+          <button 
+            onClick={() => setMode("esfuerzo")} 
+            style={{
+              background: mode === "esfuerzo" ? "rgba(205,255,74,0.12)" : "transparent",
+              border: `1px solid ${mode === "esfuerzo" ? C.lime : C.line}`,
+              color: mode === "esfuerzo" ? C.lime : C.muted,
+              fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 4, cursor: "pointer"
+            }}
+          >
+            Esfuerzo (1RM)
+          </button>
+        </div>
+      </div>
       <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height,display:"block"}}>
         <polygon points={area} fill={col} opacity="0.10"/>
         <polyline points={line} fill="none" stroke={col} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"/>
-        {entries.map((d,i)=>(<circle key={i} cx={X(i)} cy={Y(d.w)} r="3.2" fill={col}/>))}
+        {values.map((val,i)=>(<circle key={i} cx={X(i)} cy={Y(val)} r="3.2" fill={col}/>))}
       </svg>
       <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.muted,marginTop:-2}}><span>{fdate(entries[0].date)}</span><span>{fdate(entries[entries.length-1].date)}</span></div>
     </div>
@@ -845,14 +893,15 @@ export default function App(){
     };
   };
 
-  const checkNewPR = (exName, newW, newRepsStr, currentExlog = exlog) => {
+  const checkNewPR = (exName, newW, newRepsStr, currentExlog = exlog, newRir = null) => {
     const sets = (currentExlog || {})[exName] || [];
     if (sets.length === 0) return null;
     
     const newReps = parseInt(newRepsStr);
     if (isNaN(newW) || isNaN(newReps) || newReps <= 0) return null;
     
-    const new1RM = newW * (1 + newReps / 30);
+    const newRirNum = (newRir !== null && newRir !== undefined && !isNaN(parseInt(newRir))) ? parseInt(newRir) : 0;
+    const new1RM = newW * (1 + (newReps + newRirNum) / 30);
     
     let maxWeight = 0;
     let maxRepsForThisWeight = 0;
@@ -866,7 +915,8 @@ export default function App(){
         if (sw === newW && sreps > maxRepsForThisWeight) {
           maxRepsForThisWeight = sreps;
         }
-        const s1RM = sw * (1 + sreps / 30);
+        const sRirNum = (s.rir !== null && s.rir !== undefined && !isNaN(parseInt(s.rir))) ? parseInt(s.rir) : 0;
+        const s1RM = sw * (1 + (sreps + sRirNum) / 30);
         if (s1RM > max1RM) max1RM = s1RM;
       }
     });
@@ -901,6 +951,7 @@ export default function App(){
   const [bodyComp, setBodyComp] = useState({ musculo: 64.7, grasaPct: 26.2, visceral: 9 });
   const [shoppingList, setShoppingList] = useState({ categorias: [] });
   const [meals, setMeals] = useState(DEFAULT_MEALS);
+  const [customSuggestions, setCustomSuggestions] = useState([]);
   const [activeSplitKey, setActiveSplitKey] = useState("A");
 
   // Supabase States
@@ -1086,6 +1137,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       if (!localShoppingList || typeof localShoppingList !== 'object') localShoppingList = { categorias: [] };
       let localMeals = await loadKey("meals", DEFAULT_MEALS);
       if (!Array.isArray(localMeals)) localMeals = DEFAULT_MEALS;
+      let localCustomSuggestions = await loadKey("custom_suggestions", []);
+      if (!Array.isArray(localCustomSuggestions)) localCustomSuggestions = [];
       const localSplitKey = await loadKey("active_split_key", "A");
       let localSplits = await loadKey("training_splits", DEFAULT_SPLITS);
       if (!Array.isArray(localSplits)) localSplits = DEFAULT_SPLITS;
@@ -1125,6 +1178,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       let finalBodyComp = localBodyComp;
       let finalShoppingList = localShoppingList;
       let finalMeals = localMeals;
+      let finalCustomSuggestions = localCustomSuggestions;
       let finalSplitKey = localSplitKey;
       let finalSplits = localSplits;
 
@@ -1138,6 +1192,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         finalBodyComp = (initialData.bodyComp && typeof initialData.bodyComp === 'object') ? initialData.bodyComp : localBodyComp;
         finalShoppingList = (initialData.shoppingList && typeof initialData.shoppingList === 'object') ? initialData.shoppingList : localShoppingList;
         finalMeals = Array.isArray(initialData.meals) ? initialData.meals : localMeals;
+        finalCustomSuggestions = Array.isArray(initialData.customSuggestions) ? initialData.customSuggestions : localCustomSuggestions;
         finalSplitKey = initialData.activeSplitKey || localSplitKey;
         finalSplits = Array.isArray(initialData.splits) ? initialData.splits : localSplits;
 
@@ -1223,6 +1278,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       await saveKey("body_comp", finalBodyComp);
       await saveKey("shopping_list", finalShoppingList);
       await saveKey("meals", finalMeals);
+      await saveKey("custom_suggestions", finalCustomSuggestions);
       await saveKey("active_split_key", finalSplitKey);
       await saveKey("training_splits", finalSplits);
       
@@ -1245,6 +1301,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       setBodyComp(finalBodyComp);
       setShoppingList(finalShoppingList);
       setMeals(finalMeals);
+      setCustomSuggestions(finalCustomSuggestions);
       setActiveSplitKey(finalSplitKey);
       setSplits(finalSplits);
 
@@ -1386,6 +1443,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
             setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
             setShoppingList(cloudData.shoppingList || { categorias: [] });
             setMeals(cloudData.meals || DEFAULT_MEALS);
+            setCustomSuggestions(cloudData.customSuggestions || []);
             setActiveSplitKey(cloudData.activeSplitKey || "A");
             if (Array.isArray(cloudData.splits)) {
               setSplits(cloudData.splits);
@@ -1410,6 +1468,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
             await saveKey("body_comp", cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
             await saveKey("shopping_list", cloudData.shoppingList || { categorias: [] });
             await saveKey("meals", cloudData.meals || DEFAULT_MEALS);
+            await saveKey("custom_suggestions", cloudData.customSuggestions || []);
             await saveKey("active_split_key", cloudData.activeSplitKey || "A");
             if (Array.isArray(cloudData.splits)) {
               await saveKey("training_splits", cloudData.splits);
@@ -1458,6 +1517,16 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     setWater(waterlog[selectedDateStr] || 0);
     setSupplements(suppslog[selectedDateStr] || { Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false });
   }, [selectedDateStr, foodlog, waterlog, suppslog, loaded]);
+
+  // Auto-dismiss de alertas de PR tras 6 segundos
+  useEffect(() => {
+    if (prAlerts && prAlerts.length > 0) {
+      const timer = setTimeout(() => {
+        setPrAlerts([]);
+      }, 6000);
+      return () => clearTimeout(timer);
+    }
+  }, [prAlerts]);
 
   // Función para guardar el estado completo localmente y en la nube
   const saveState = async (updates) => {
@@ -1528,6 +1597,11 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       nextSplits = updates.splits;
     }
 
+    let nextCustomSuggestions = [...customSuggestions];
+    if (updates.customSuggestions !== undefined) {
+      nextCustomSuggestions = updates.customSuggestions;
+    }
+
     const current = {
       presetKey: updates.presetKey !== undefined ? updates.presetKey : presetKey,
       customPresets: nextCustomPresets,
@@ -1538,6 +1612,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       bodyComp: updates.bodyComp !== undefined ? updates.bodyComp : bodyComp,
       shoppingList: updates.shoppingList !== undefined ? updates.shoppingList : shoppingList,
       meals: updates.meals !== undefined ? updates.meals : meals,
+      customSuggestions: nextCustomSuggestions,
       activeSplitKey: updates.activeSplitKey !== undefined ? updates.activeSplitKey : activeSplitKey,
       splits: nextSplits,
       foodlog: nextFoodlog,
@@ -1560,6 +1635,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     if (updates.bodyComp !== undefined) await saveKey("body_comp", updates.bodyComp);
     if (updates.shoppingList !== undefined) await saveKey("shopping_list", updates.shoppingList);
     if (updates.meals !== undefined) await saveKey("meals", updates.meals);
+    if (updates.customSuggestions !== undefined) await saveKey("custom_suggestions", updates.customSuggestions);
     if (updates.activeSplitKey !== undefined) await saveKey("active_split_key", updates.activeSplitKey);
     if (updates.experiments !== undefined) await saveKey("experiments", updates.experiments);
     if (updates.splits !== undefined) await saveKey("training_splits", updates.splits);
@@ -1580,6 +1656,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     if (updates.workoutDurations !== undefined) setWorkoutDurations(nextWorkoutDurations);
     if (updates.customPresets !== undefined) setCustomPresets(nextCustomPresets);
     if (updates.presetKey !== undefined) setPresetKey(updates.presetKey);
+    if (updates.customSuggestions !== undefined) setCustomSuggestions(nextCustomSuggestions);
     if (updates.experiments !== undefined) setExperiments(nextExperiments);
     if (updates.splits !== undefined) setSplits(nextSplits);
 
@@ -2041,6 +2118,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       setShoppingList(cloudData.shoppingList || { categorias: [] });
       setMeals(cloudData.meals || DEFAULT_MEALS);
+      setCustomSuggestions(cloudData.customSuggestions || []);
       setActiveSplitKey(cloudData.activeSplitKey || "A");
       if (Array.isArray(cloudData.splits)) {
         setSplits(cloudData.splits);
@@ -2068,6 +2146,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       await saveKey("body_comp", cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       await saveKey("shopping_list", cloudData.shoppingList || { categorias: [] });
       await saveKey("meals", cloudData.meals || DEFAULT_MEALS);
+      await saveKey("custom_suggestions", cloudData.customSuggestions || []);
       await saveKey("active_split_key", cloudData.activeSplitKey || "A");
       if (Array.isArray(cloudData.splits)) {
         await saveKey("training_splits", cloudData.splits);
@@ -2114,6 +2193,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       setShoppingList(cloudData.shoppingList || { categorias: [] });
       setMeals(cloudData.meals || DEFAULT_MEALS);
+      setCustomSuggestions(cloudData.customSuggestions || []);
       setActiveSplitKey(cloudData.activeSplitKey || "A");
       if (Array.isArray(cloudData.splits)) {
         setSplits(cloudData.splits);
@@ -2141,6 +2221,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       await saveKey("body_comp", cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       await saveKey("shopping_list", cloudData.shoppingList || { categorias: [] });
       await saveKey("meals", cloudData.meals || DEFAULT_MEALS);
+      await saveKey("custom_suggestions", cloudData.customSuggestions || []);
       await saveKey("active_split_key", cloudData.activeSplitKey || "A");
       if (Array.isArray(cloudData.splits)) {
         await saveKey("training_splits", cloudData.splits);
@@ -2757,7 +2838,7 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
         resolvedName = item.originalName;
         const alreadyExistsInSplit = (updatedExercises[currentSplitKey] || []).some(e => e.name.toLowerCase() === resolvedName.toLowerCase());
         if (!alreadyExistsInSplit) {
-          updatedExercises[currentSplitKey] = [...(updatedExercises[currentSplitKey] || []), { name: resolvedName, tecnico: "", musculos: [] }];
+          updatedExercises[currentSplitKey] = [...(updatedExercises[currentSplitKey] || []), { name: resolvedName, tecnico: "", musculos: item.muscles || [] }];
           exercisesChanged = true;
         }
       }
@@ -2801,28 +2882,8 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
   };
 
   return (
-    <div style={{
-      height: "100dvh",
-      display: "flex",
-      justifyContent: "center",
-      alignItems: "center",
-      background: "#f3f4f6", // Outer grey desktop background
-      color: C.ink,
-      fontFamily: "var(--font-sans)",
-      overflow: "hidden"
-    }}>
-      <div style={{
-        width: "100%",
-        maxWidth: 390,
-        height: "100%",
-        maxHeight: "100dvh",
-        background: C.bg,
-        boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)",
-        display: "flex",
-        flexDirection: "column",
-        position: "relative",
-        overflow: "hidden"
-      }}>
+    <div className="app-outer-container">
+      <div className="app-inner-container">
         {/* Navigation Bottom Bar */}
         {["hoy", "coach", "entreno", "reg", "perfil", "plan"].includes(view) && (
           <div style={{
@@ -2878,55 +2939,71 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
         {/* Main Content Viewport */}
         <div style={{
           flex: 1,
-          overflowY: "auto",
-          paddingBottom: ["hoy", "coach", "entreno", "reg", "perfil", "plan"].includes(view) ? 90 : 0,
+          overflowY: view === "coach" ? "hidden" : "auto",
           display: "flex",
           flexDirection: "column"
         }}>
 
-      <div style={{maxWidth:520, margin:"0 auto", padding:"20px 16px 10px"}}>
-        {view === "hoy" && (
-          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
-            <div style={{display:"flex", alignItems:"center", gap:10}}>
-              <div style={{width:36, height:36, borderRadius:10, background:C.lime, display:"flex", alignItems:"center", justifyContent:"center"}}>
-                <Sparkles size={18} color="#ffffff"/>
+      {["hoy", "coach", "entreno", "reg", "plan", "perfil"].includes(view) && (
+        <div style={{maxWidth:520, margin:"0 auto", padding:"20px 16px 10px"}}>
+          {view === "hoy" && (
+            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+              <div style={{display:"flex", alignItems:"center", gap:10}}>
+                <div style={{width:36, height:36, borderRadius:10, background:C.lime, display:"flex", alignItems:"center", justifyContent:"center"}}>
+                  <Sparkles size={18} color="#ffffff"/>
+                </div>
+                <span style={{fontWeight:800, fontSize:16, color:C.ink}}>Espacio IA</span>
               </div>
-              <span style={{fontWeight:800, fontSize:16, color:C.ink}}>Espacio IA</span>
+              <div style={{width:36, height:36, borderRadius:99, background:C.panel2, border:`1px solid ${C.line}`, display:"flex", alignItems:"center", justifyContent:"center", overflow:"hidden"}}>
+                <span style={{fontSize:14, fontWeight:700, color:C.muted}}>B</span>
+              </div>
             </div>
-            <div style={{width:36, height:36, borderRadius:99, background:C.panel2, border:`1px solid ${C.line}`, display:"flex", alignItems:"center", justifyContent:"center", overflow:"hidden"}}>
-              <span style={{fontSize:14, fontWeight:700, color:C.muted}}>B</span>
+          )}
+          {view === "hoy" && (
+            <div style={{marginTop:16}}>
+              <div style={{fontSize:13, color:C.muted}}>¡Hola, Bruno!</div>
+              <div className="disp" style={{fontSize:32, marginTop:2, lineHeight:1}}>CENTRO DE MANDO</div>
             </div>
-          </div>
-        )}
-        {view === "hoy" && (
-          <div style={{marginTop:16}}>
-            <div style={{fontSize:13, color:C.muted}}>¡Hola, Bruno!</div>
-            <div className="disp" style={{fontSize:32, marginTop:2, lineHeight:1}}>CENTRO DE MANDO</div>
-          </div>
-        )}
-        {view === "coach" && (
-          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
-            <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Coach Bruno</div>
-            <div style={{width:36, height:36, borderRadius:99, background:C.panel2, border:`1px solid ${C.line}`, display:"flex", alignItems:"center", justifyContent:"center"}}>
-              <span style={{fontSize:14, fontWeight:700, color:C.muted}}>B</span>
+          )}
+          {view === "coach" && (
+            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+              <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Coach Bruno</div>
+              <div style={{width:36, height:36, borderRadius:99, background:C.panel2, border:`1px solid ${C.line}`, display:"flex", alignItems:"center", justifyContent:"center"}}>
+                <span style={{fontSize:14, fontWeight:700, color:C.muted}}>B</span>
+              </div>
             </div>
-          </div>
-        )}
-        {view === "entreno" && (
-          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
-            <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Rutina de Hoy</div>
-            <Dumbbell size={20} color={C.muted}/>
-          </div>
-        )}
-        {view === "reg" && (
-          <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Registro Histórico</div>
-        )}
-        {view === "plan" && (
-          <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Plan de Objetivos</div>
-        )}
-      </div>
+          )}
+          {view === "entreno" && (
+            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+              <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Rutina de Hoy</div>
+              <Dumbbell size={20} color={C.muted}/>
+            </div>
+          )}
+          {view === "reg" && (
+            <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Registro Histórico</div>
+          )}
+          {view === "plan" && (
+            <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Plan de Objetivos</div>
+          )}
+          {view === "perfil" && (
+            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+              <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Mi Perfil</div>
+              <Settings size={20} color={C.muted}/>
+            </div>
+          )}
+        </div>
+      )}
 
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <div style={{
+        // En Coach la altura es fija (el chat scrollea adentro); en el resto el
+        // contenedor debe crecer con el contenido para que el padding inferior
+        // quede DESPUÉS del último elemento y nada quede oculto tras la barra.
+        flex: view === "coach" ? 1 : "1 0 auto",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+        paddingBottom: ["hoy", "coach", "entreno", "reg", "perfil", "plan"].includes(view) ? 110 : 20
+      }}>
         {view === "onboarding" && (
           <Onboarding setView={setView} />
         )}
@@ -2971,6 +3048,7 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
             setModalVals={setModalVals}
             addFoodInputText={addFoodInputText}
             setAddFoodInputText={setAddFoodInputText}
+            customSuggestions={customSuggestions}
           />
         )}
         {view === "coach" && (
@@ -2979,35 +3057,9 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
             setChat={(c) => { setChat(c); saveState({ chat: c }); }} 
             target={target} 
             totals={totals} 
-            geminiKey={geminiKey}
-            saveGeminiKey={saveGeminiKey}
-            aiModel={aiModel}
-            saveAiModel={saveAiModel}
-            cloudSync={cloudSync}
-            syncCode={syncCode}
-            syncStatus={syncStatus}
-            handleToggleCloudSync={handleToggleCloudSync}
-            handleCreateSyncCode={handleCreateSyncCode}
-            handleLinkDevice={handleLinkDevice}
-            handleForcePull={handleForcePull}
-            handleForcePush={handleForcePush}
-            handleCoachActions={handleCoachActions}
             sendCoachMessage={sendCoachMessage}
             chatBusy={chatBusy}
             sendDailyGreetingIfNeeded={sendDailyGreetingIfNeeded}
-            supabaseUrl={supabaseUrl}
-            supabaseAnonKey={supabaseAnonKey}
-            supabaseUser={supabaseUser}
-            sbSyncing={sbSyncing}
-            sbError={sbError}
-            saveSbConfig={saveSbConfig}
-            handleSbLogin={handleSbLogin}
-            handleSbRegister={handleSbRegister}
-            handleSbLogout={handleSbLogout}
-            syncLocalToSupabase={syncLocalToSupabase}
-            changePreset={changePreset}
-            presetKey={presetKey}
-            customPresets={customPresets}
           />
         )}
         {view === "entreno" && (
@@ -3036,6 +3088,8 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
             muscleImbalances={muscleImbalances}
             splits={splits}
             setSplits={(s) => saveState({ splits: s })}
+            notes={notes}
+            chat={chat}
           />
         )}
         {view === "reg" && (
@@ -3082,21 +3136,77 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
             setModalVals={setModalVals}
           />
         )}
+        {view === "perfil" && (
+          <Perfil 
+            activeMetrics={activeMetrics}
+            geminiKey={geminiKey}
+            saveGeminiKey={saveGeminiKey}
+            aiModel={aiModel}
+            saveAiModel={saveAiModel}
+            cloudSync={cloudSync}
+            syncCode={syncCode}
+            syncStatus={syncStatus}
+            handleToggleCloudSync={handleToggleCloudSync}
+            handleCreateSyncCode={handleCreateSyncCode}
+            handleLinkDevice={handleLinkDevice}
+            handleForcePull={handleForcePull}
+            handleForcePush={handleForcePush}
+            supabaseUrl={supabaseUrl}
+            supabaseAnonKey={supabaseAnonKey}
+            supabaseUser={supabaseUser}
+            sbSyncing={sbSyncing}
+            sbError={sbError}
+            saveSbConfig={saveSbConfig}
+            handleSbLogin={handleSbLogin}
+            handleSbRegister={handleSbRegister}
+            handleSbLogout={handleSbLogout}
+            syncLocalToSupabase={syncLocalToSupabase}
+            changePreset={changePreset}
+            presetKey={presetKey}
+            customPresets={customPresets}
+            bodyComp={bodyComp}
+          />
+        )}
+        {view === "addfood" && (
+          <AddFood 
+            addFoodInputText={addFoodInputText}
+            setAddFoodInputText={setAddFoodInputText}
+            aiParsedResults={aiParsedResults}
+            setAiParsedResults={setAiParsedResults}
+            setView={setView}
+            setEditingEntryIdx={setEditingEntryIdx}
+            setEditingEntryData={setEditingEntryData}
+            log={log}
+            setLog={(l) => { setLog(l); saveState({ log: l }); }}
+            geminiKey={geminiKey}
+            saveState={saveState}
+          />
+        )}
+        {view === "editentry" && (
+          <EditEntry 
+            editingEntryIdx={editingEntryIdx}
+            editingEntryData={editingEntryData}
+            setEditingEntryData={setEditingEntryData}
+            aiParsedResults={aiParsedResults}
+            setAiParsedResults={setAiParsedResults}
+            setView={setView}
+          />
+        )}
       </div>
 
       {prAlerts.length > 0 && (
         <div style={{
-          position: "fixed",
-          top: 75,
+          position: "absolute",
+          top: 16,
           left: "50%",
           transform: "translateX(-50%)",
-          width: "calc(100% - 32px)",
-          maxWidth: 480,
-          background: "rgba(21, 23, 15, 0.95)",
+          width: "calc(100% - 24px)",
+          maxWidth: 360,
+          background: "rgba(21, 23, 15, 0.98)",
           border: `2px solid ${C.lime}`,
           borderRadius: 16,
           padding: 16,
-          boxShadow: "0 4px 24px rgba(107,78,255,.18), 0 2px 8px rgba(0,0,0,0.06)",
+          boxShadow: "0 10px 30px rgba(0,0,0,0.5), 0 0 20px rgba(205,255,74,0.15)",
           zIndex: 9999,
           display: "flex",
           flexDirection: "column",
@@ -3104,19 +3214,19 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
           animation: "pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards"
         }}>
           <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
-            <span style={{display:"flex", alignItems:"center", gap:8, fontSize:14, fontWeight:900, color:C.lime}}>
+            <span style={{display:"flex", alignItems:"center", gap:8, fontSize:13.5, fontWeight:900, color:C.lime}}>
               <Sparkles size={16}/> ¡NUEVO PR DETECTADO!
             </span>
             <button 
               onClick={() => setPrAlerts([])} 
-              style={{background:"none", border:"none", color:C.muted, cursor:"pointer", padding:12, margin:-8, display:"flex", alignItems:"center", justifyContent:"center"}}
+              style={{background:"none", border:"none", color:C.muted, cursor:"pointer", padding:8, margin:-4, display:"flex", alignItems:"center", justifyContent:"center"}}
             >
               <X size={20}/>
             </button>
           </div>
           <div style={{display:"flex", flexDirection:"column", gap:6}}>
             {prAlerts.map((msg, idx) => (
-              <div key={idx} style={{fontSize:13, color:C.ink, fontWeight:600, borderLeft:`3px solid ${C.lime}`, paddingLeft:8}}>
+              <div key={idx} style={{fontSize:12.5, color:C.ink, fontWeight:600, borderLeft:`3px solid ${C.lime}`, paddingLeft:8}}>
                 {msg}
               </div>
             ))}
@@ -3156,7 +3266,7 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
                 style={{
                   flex:1, padding:"6px 12px", borderRadius:8, border:"none",
                   background: modalMode === "manual" ? C.lime : "transparent",
-                  color: modalMode === "manual" ? "#ffffff" : C.muted,
+                  color: modalMode === "manual" ? "#0c0e0b" : C.muted,
                   fontSize:12, fontWeight:800, cursor:"pointer"
                 }}
               >
@@ -3167,7 +3277,7 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
                 style={{
                   flex:1, padding:"6px 12px", borderRadius:8, border:"none",
                   background: modalMode === "ai" ? C.lime : "transparent",
-                  color: modalMode === "ai" ? "#ffffff" : C.muted,
+                  color: modalMode === "ai" ? "#0c0e0b" : C.muted,
                   fontSize:12, fontWeight:800, cursor:"pointer",
                   display:"flex", alignItems:"center", justifyContent:"center", gap:4
                 }}
@@ -3268,7 +3378,7 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
                   <button
                     onClick={handleQueryAiNutrition}
                     disabled={modalAiBusy || !modalAiPrompt.trim()}
-                    style={{padding:"0 12px", background: modalAiBusy ? C.panel2 : C.lime, color: modalAiBusy ? C.muted : "#ffffff", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center"}}
+                    style={{padding:"0 12px", background: modalAiBusy ? C.panel2 : C.lime, color: modalAiBusy ? C.muted : "#0c0e0b", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center"}}
                   >
                     {modalAiBusy ? <Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/> : <Send size={16}/>}
                   </button>
@@ -3322,7 +3432,7 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
                   updateAllMacrosAndAdjustMeals(modalVals.kcal, modalVals.p, modalVals.c, modalVals.f);
                   setShowNutritionModal(false);
                 }}
-                style={{flex:1, padding:"10px", background:C.lime, color:"#ffffff", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+                style={{flex:1, padding:"10px", background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
               >
                 Guardar y Aplicar
               </button>
@@ -3519,7 +3629,7 @@ function Onboarding({ setView }) {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          color: "#ffffff",
+          color: "#0c0e0b",
           marginBottom: 16,
           position: "relative",
           boxShadow: "0 8px 16px rgba(92, 79, 223, 0.2)"
@@ -3612,7 +3722,7 @@ function Onboarding({ setView }) {
               height: 44,
               borderRadius: "var(--radius-md)",
               background: "var(--accent-primary)",
-              color: "#ffffff",
+              color: "#0c0e0b",
               fontSize: 14,
               fontWeight: 600,
               display: "flex",
@@ -3665,7 +3775,7 @@ function Onboarding({ setView }) {
               height: 44,
               borderRadius: "var(--radius-md)",
               background: "var(--accent-cyan)",
-              color: "#ffffff",
+              color: "#04212b",
               fontSize: 14,
               fontWeight: 600,
               display: "flex",
@@ -3720,6 +3830,11 @@ function AddFood({
   const [err, setErr] = useState("");
   const fileRef = useRef();
 
+  const [localText, setLocalText] = useState(addFoodInputText || "");
+  useEffect(() => {
+    setLocalText(addFoodInputText || "");
+  }, [addFoodInputText]);
+
   const FOOD_SYS = "Eres un nutricionista experto. Estima los macros de la comida detallada por el usuario (puede ser texto o imagen).\n" +
                     "REGLAS CRÍTICAS DE ESTIMACIÓN:\n" +
                     "1. Devuelve un listado de ingredientes o platos individuales de forma desglosada.\n" +
@@ -3756,11 +3871,13 @@ function AddFood({
   };
 
   const handleAnalyze = async () => {
-    if (!addFoodInputText.trim() || busy) return;
+    const val = localText.trim();
+    if (!val || busy) return;
+    setAddFoodInputText(val);
     setBusy(true);
     setErr("");
     try {
-      const out = await callGemini([{ role: "user", content: addFoodInputText.trim() }], FOOD_SYS, FOOD_SCHEMA);
+      const out = await callGemini([{ role: "user", content: val }], FOOD_SYS, FOOD_SCHEMA);
       const parsed = cleanAndParseJSON(out);
       if (parsed && parsed.items) {
         setAiParsedResults(prev => [...prev, ...parsed.items]);
@@ -3844,6 +3961,7 @@ function AddFood({
     }));
     const next = [...entries, ...log];
     setLog(next);
+    saveState({ log: next });
     setAiParsedResults([]);
     setAddFoodInputText("");
     setView("hoy");
@@ -3876,8 +3994,9 @@ function AddFood({
 
         <div style={{ position: "relative" }}>
           <textarea
-            value={addFoodInputText}
-            onChange={(e) => setAddFoodInputText(e.target.value)}
+            value={localText}
+            onChange={(e) => setLocalText(e.target.value)}
+            onBlur={() => setAddFoodInputText(localText)}
             placeholder="Ej: Dos huevos revueltos con una tostada de aguacate y café con leche..."
             rows={4}
             style={{ width: "100%", resize: "none", background: "var(--panel-bg)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: 14, color: "var(--text-ink)", fontSize: 14, outline: "none" }}
@@ -3888,14 +4007,14 @@ function AddFood({
         <div style={{ display: "flex", gap: 10 }}>
           <button
             onClick={handleAnalyze}
-            disabled={busy || !addFoodInputText.trim()}
+            disabled={busy || !localText.trim()}
             className="btn-active-scale"
             style={{
               flex: 1,
               height: 56,
               borderRadius: "var(--radius-md)",
               background: "var(--accent-primary)",
-              color: "#ffffff",
+              color: "#0c0e0b",
               fontSize: 15,
               fontWeight: 600,
               display: "flex",
@@ -3981,7 +4100,7 @@ function AddFood({
             </div>
             <div style={{ display: "flex", justifyContent: "space-around" }}>
               <div style={{ textAlign: "center" }}>
-                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "var(--accent-primary)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
+                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "var(--accent-primary)", color: "#0c0e0b", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
                   <Flame size={16}/>
                 </div>
                 <div style={{ fontSize: 10, color: "var(--text-muted)" }}>KCAL</div>
@@ -4020,7 +4139,7 @@ function AddFood({
             style={{
               height: 56,
               background: "var(--text-ink)",
-              color: "#ffffff",
+              color: "#0c0e0b",
               fontSize: 16,
               fontWeight: 700,
               borderRadius: "var(--radius-md)",
@@ -4159,7 +4278,7 @@ function EditEntry({
           <button onClick={() => setView("addfood")} className="btn-active-scale" style={{ flex: 1, height: 56, border: "1px solid var(--line-color)", background: "var(--bg-color)", color: "var(--text-ink)", fontSize: 15, fontWeight: 600, borderRadius: "var(--radius-md)", cursor: "pointer" }}>
             Cancelar
           </button>
-          <button onClick={handleSave} className="btn-active-scale" style={{ flex: 1, height: 56, background: "var(--accent-primary)", color: "#ffffff", fontSize: 15, fontWeight: 600, borderRadius: "var(--radius-md)", border: "none", cursor: "pointer" }}>
+          <button onClick={handleSave} className="btn-active-scale" style={{ flex: 1, height: 56, background: "var(--accent-primary)", color: "#0c0e0b", fontSize: 15, fontWeight: 600, borderRadius: "var(--radius-md)", border: "none", cursor: "pointer" }}>
             Guardar cambios
           </button>
         </div>
@@ -4173,13 +4292,89 @@ function Hoy({
   activeSplitKey, suppsInventory, setSuppsInventory, selectedDateStr, setSelectedDateStr,
   proactiveMsg, aiNotifications, setAiNotifications, macroAdjustSuggestion, setMacroAdjustSuggestion, saveState, customPresets,
   weeklyInsight, smartGoals, challenges, updateChallengeProgress, upcomingEvent, experiments, setExperiments, splits,
-  setView, setShowNutritionModal, setModalVals, addFoodInputText, setAddFoodInputText
+  setView, setShowNutritionModal, setModalVals, addFoodInputText, setAddFoodInputText, customSuggestions
 }){
   const [text, setText] = useState(""); 
   const [busy, setBusy] = useState(false); 
   const [err, setErr] = useState("");
   const [newSuppInput, setNewSuppInput] = useState("");
   const [editFoodObj, setEditFoodObj] = useState(null);
+  const [showAllSuggestions, setShowAllSuggestions] = useState(false);
+  const [suggForm, setSuggForm] = useState(null); // null | { idx: "new" | number, data: {...} }
+  const suggFileRef = useRef(null);
+
+  // Lee y reduce la foto de la sugerencia a un dataURL liviano (max 400px)
+  const readSuggestionImage = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxW = 400;
+        const scale = Math.min(1, maxW / img.width);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.72));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  const onSuggPhoto = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file || !suggForm) return;
+    try {
+      const dataUrl = await readSuggestionImage(file);
+      setSuggForm(prev => prev ? { ...prev, data: { ...prev.data, img: dataUrl } } : prev);
+    } catch(err) {
+      console.error("Error al leer la foto de la sugerencia:", err);
+    }
+    e.target.value = "";
+  };
+
+  const openNewSuggForm = () => {
+    setSuggForm({ idx: "new", data: { name: "", kcal: 400, proteina: 30, carbo: 40, grasa: 12, time: "10 min", img: "" } });
+  };
+
+  const openEditSuggForm = (idx) => {
+    const s = (customSuggestions || [])[idx];
+    if (!s) return;
+    setSuggForm({ idx, data: { name: s.name || "", kcal: s.kcal || 0, proteina: s.proteina !== undefined ? s.proteina : 20, carbo: s.carbo !== undefined ? s.carbo : 30, grasa: s.grasa !== undefined ? s.grasa : 10, time: s.time || "10 min", img: s.img || "" } });
+  };
+
+  const saveSuggForm = () => {
+    if (!suggForm || !suggForm.data.name.trim()) return;
+    const cleanItem = {
+      name: suggForm.data.name.trim(),
+      kcal: +suggForm.data.kcal || 0,
+      proteina: +suggForm.data.proteina || 0,
+      carbo: +suggForm.data.carbo || 0,
+      grasa: +suggForm.data.grasa || 0,
+      time: suggForm.data.time || "10 min",
+      img: suggForm.data.img || ""
+    };
+    const current = customSuggestions || [];
+    const next = suggForm.idx === "new"
+      ? [cleanItem, ...current]
+      : current.map((s, i) => i === suggForm.idx ? cleanItem : s);
+    saveState({ customSuggestions: next });
+    setSuggForm(null);
+  };
+
+  const deleteSuggestion = (idx) => {
+    const next = (customSuggestions || []).filter((_, i) => i !== idx);
+    saveState({ customSuggestions: next });
+    setSuggForm(null);
+  };
+
+  const [localText, setLocalText] = useState(addFoodInputText || "");
+  useEffect(() => {
+    setLocalText(addFoodInputText || "");
+  }, [addFoodInputText]);
 
   const toggleSupplement = (name) => {
     const checked = !supplements[name];
@@ -4884,8 +5079,9 @@ function Hoy({
           <Sparkles size={18} color="var(--accent-primary)"/>Registrar comida
         </div>
         <textarea
-          value={addFoodInputText}
-          onChange={e => setAddFoodInputText(e.target.value)}
+          value={localText}
+          onChange={e => setLocalText(e.target.value)}
+          onBlur={() => setAddFoodInputText(localText)}
           className="ph"
           rows={3}
           placeholder="Describe lo que comiste (ej: Ensalada César con pollo a la parrilla y agua)..."
@@ -4893,7 +5089,10 @@ function Hoy({
         />
         <div style={{display:"flex", gap:10, marginTop:10}}>
           <button
-            onClick={() => setView("addfood")}
+            onClick={() => {
+              setAddFoodInputText(localText);
+              setView("addfood");
+            }}
             className="btn-active-scale"
             style={{
               flex:1,
@@ -4902,7 +5101,7 @@ function Hoy({
               border:"none",
               cursor:"pointer",
               background: "var(--accent-primary)",
-              color: "#ffffff",
+              color: "#0c0e0b",
               fontWeight:800,
               fontSize:14,
               display:"flex",
@@ -4915,7 +5114,10 @@ function Hoy({
             <Sparkles size={15}/>Añadir con IA
           </button>
           <button
-            onClick={() => setView("addfood")}
+            onClick={() => {
+              setAddFoodInputText(localText);
+              setView("addfood");
+            }}
             className="btn-active-scale"
             style={{width:54, height:56, borderRadius:14, border:`1px solid ${C.line}`, background:C.panel, color:C.muted, cursor:"pointer", display:"grid", placeItems:"center", boxShadow:"0 1px 3px rgba(0,0,0,0.05)"}}
           >
@@ -4929,7 +5131,12 @@ function Hoy({
       <div style={{marginBottom:16}}>
         <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10}}>
           <span style={{fontSize:13, fontWeight:800, color:C.ink}}>Sugerencias para ti</span>
-          <span style={{fontSize:11, fontWeight:700, color:"var(--accent-primary)", cursor:"pointer"}}>Ver todas</span>
+          <span 
+            onClick={() => setShowAllSuggestions(true)}
+            style={{fontSize:11, fontWeight:700, color:"var(--accent-primary)", cursor:"pointer"}}
+          >
+            Ver todas
+          </span>
         </div>
         <div style={{
           display: "flex", 
@@ -4940,70 +5147,319 @@ function Hoy({
           scrollbarWidth: "none",
           msOverflowStyle: "none"
         }}>
-          {SUGGESTIONS.map((s,i) => (
-            <div 
-              key={i} 
-              style={{
-                display: "flex", 
-                flexDirection: "column", 
-                width: 160, 
-                flexShrink: 0, 
-                background: C.panel, 
-                border: `1px solid ${C.line}`, 
-                borderRadius: 16, 
-                overflow: "hidden", 
-                boxShadow: "var(--shadow-card)",
-                scrollSnapAlign: "start"
-              }}
-            >
-              <div style={{ width: "100%", height: 100, position: "relative", overflow: "hidden" }}>
-                <img src={s.img} alt={s.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="lazy" />
-                <div style={{
-                  position: "absolute",
-                  top: 8,
-                  right: 8,
-                  background: "rgba(255,255,255,0.9)",
-                  padding: "2px 8px",
-                  borderRadius: "var(--radius-pill)",
-                  fontSize: 10,
-                  fontWeight: 800,
-                  color: "var(--text-ink)"
-                }}>
-                  {s.kcal} kcal
+          {[...(customSuggestions || []), ...SUGGESTIONS].map((s,i) => {
+            const suggestionImg = s.img || "https://images.unsplash.com/photo-1498837167922-ddd27525d352?w=300&q=75&fit=crop";
+            return (
+              <div 
+                key={i} 
+                style={{
+                  display: "flex", 
+                  flexDirection: "column", 
+                  width: 160, 
+                  flexShrink: 0, 
+                  background: C.panel, 
+                  border: `1px solid ${C.line}`, 
+                  borderRadius: 16, 
+                  overflow: "hidden", 
+                  boxShadow: "var(--shadow-card)",
+                  scrollSnapAlign: "start"
+                }}
+              >
+                <div style={{ width: "100%", height: 100, position: "relative", overflow: "hidden" }}>
+                  <img src={suggestionImg} alt={s.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="lazy" />
+                  <div style={{
+                    position: "absolute",
+                    top: 8,
+                    right: 8,
+                    background: "rgba(255,255,255,0.9)",
+                    padding: "2px 8px",
+                    borderRadius: "var(--radius-pill)",
+                    fontSize: 10,
+                    fontWeight: 800,
+                    color: "var(--text-ink)"
+                  }}>
+                    {s.kcal} kcal
+                  </div>
+                </div>
+                <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8, flex: 1, justifyContent: "space-between" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-ink)", lineHeight: 1.3, height: 34, overflow: "hidden" }}>{s.name}</div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, color: "var(--text-muted)" }}>
+                      <Clock size={12}/>{s.time || "10 min"}
+                    </span>
+                    <button 
+                      onClick={() => {
+                        pushEntry({ 
+                          resumen: s.name, 
+                          kcal: s.kcal, 
+                          proteina: s.proteina !== undefined ? s.proteina : 20, 
+                          carbo: s.carbo !== undefined ? s.carbo : 30, 
+                          grasa: s.grasa !== undefined ? s.grasa : 10 
+                        }, s.name);
+                      }}
+                      className="btn-active-scale"
+                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: "50%",
+                        background: "var(--panel-bg-tint)",
+                        color: "var(--accent-primary)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: "pointer",
+                        border: "none"
+                      }}
+                    >
+                      <Plus size={14}/>
+                    </button>
+                  </div>
                 </div>
               </div>
-              <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8, flex: 1, justifyContent: "space-between" }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-ink)", lineHeight: 1.3, height: 34, overflow: "hidden" }}>{s.name}</div>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, color: "var(--text-muted)" }}>
-                    <Clock size={12}/>{s.time}
-                  </span>
-                  <button 
-                    onClick={() => {
-                      pushEntry({ resumen: s.name, kcal: s.kcal, proteina: 20, carbo: 30, grasa: 10 }, s.name);
-                    }}
-                    className="btn-active-scale"
-                    style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: "50%",
-                      background: "var(--panel-bg-tint)",
-                      color: "var(--accent-primary)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      cursor: "pointer",
-                      border: "none"
-                    }}
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Modal: Todas las sugerencias (ver, crear, editar) */}
+      {showAllSuggestions && (
+        <div style={{
+          position:"fixed", top:0, left:0, right:0, bottom:0,
+          background:"rgba(0,0,0,0.65)", backdropFilter:"blur(4px)",
+          display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:9999
+        }} onClick={() => { setShowAllSuggestions(false); setSuggForm(null); }}>
+          <div className="pop" style={{
+            background:C.bg, border:`1px solid ${C.line}`, borderRadius:"20px 20px 0 0",
+            width:"100%", maxWidth:410, maxHeight:"85dvh", overflowY:"auto",
+            padding:"18px 16px 24px", display:"flex", flexDirection:"column", gap:12
+          }} onClick={e => e.stopPropagation()}>
+
+            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+              <span style={{fontSize:16, fontWeight:900, color:C.ink}}>
+                {suggForm ? (suggForm.idx === "new" ? "Nueva Sugerencia" : "Editar Sugerencia") : "Mis Sugerencias"}
+              </span>
+              <button
+                onClick={() => suggForm ? setSuggForm(null) : setShowAllSuggestions(false)}
+                style={{background:"none", border:"none", color:C.muted, cursor:"pointer", padding:6}}
+              >
+                <X size={20}/>
+              </button>
+            </div>
+
+            {suggForm ? (
+              <div style={{display:"flex", flexDirection:"column", gap:12}}>
+                {/* Foto */}
+                <div
+                  onClick={() => suggFileRef.current && suggFileRef.current.click()}
+                  style={{
+                    width:"100%", height:140, borderRadius:14, overflow:"hidden", cursor:"pointer",
+                    border:`1px dashed ${suggForm.data.img ? C.line : C.lime}`,
+                    background:C.panel2, display:"flex", alignItems:"center", justifyContent:"center", position:"relative"
+                  }}
+                >
+                  {suggForm.data.img ? (
+                    <img src={suggForm.data.img} alt="Foto sugerencia" style={{width:"100%", height:"100%", objectFit:"cover"}}/>
+                  ) : (
+                    <div style={{display:"flex", flexDirection:"column", alignItems:"center", gap:6, color:C.muted, fontSize:12}}>
+                      <Camera size={22} color={C.lime}/>
+                      Toca para subir una foto
+                    </div>
+                  )}
+                  {suggForm.data.img && (
+                    <div style={{position:"absolute", bottom:8, right:8, background:"rgba(0,0,0,0.65)", color:C.ink, fontSize:10.5, fontWeight:700, padding:"4px 10px", borderRadius:99, display:"flex", alignItems:"center", gap:4}}>
+                      <Camera size={11}/> Cambiar foto
+                    </div>
+                  )}
+                </div>
+                <input ref={suggFileRef} type="file" accept="image/*" onChange={onSuggPhoto} style={{display:"none"}}/>
+
+                <div>
+                  <label style={{fontSize:11, color:C.muted, fontWeight:700, display:"block", marginBottom:4}}>Nombre</label>
+                  <input
+                    type="text"
+                    value={suggForm.data.name}
+                    onChange={e => setSuggForm(prev => ({ ...prev, data: { ...prev.data, name: e.target.value } }))}
+                    placeholder="Ej: Bowl de pollo y quinoa"
+                    style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none"}}
+                  />
+                </div>
+
+                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
+                  <div>
+                    <label style={{fontSize:11, color:C.lime, fontWeight:700, display:"block", marginBottom:4}}>Calorías (kcal)</label>
+                    <input
+                      type="number" inputMode="numeric"
+                      value={suggForm.data.kcal}
+                      onChange={e => setSuggForm(prev => ({ ...prev, data: { ...prev.data, kcal: e.target.value } }))}
+                      style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center"}}
+                    />
+                  </div>
+                  <div>
+                    <label style={{fontSize:11, color:C.muted, fontWeight:700, display:"block", marginBottom:4}}>Tiempo</label>
+                    <input
+                      type="text"
+                      value={suggForm.data.time}
+                      onChange={e => setSuggForm(prev => ({ ...prev, data: { ...prev.data, time: e.target.value } }))}
+                      placeholder="10 min"
+                      style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center"}}
+                    />
+                  </div>
+                </div>
+
+                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8}}>
+                  <div>
+                    <label style={{fontSize:11, color:C.cyan, fontWeight:700, display:"block", marginBottom:4}}>Proteína (g)</label>
+                    <input
+                      type="number" inputMode="numeric"
+                      value={suggForm.data.proteina}
+                      onChange={e => setSuggForm(prev => ({ ...prev, data: { ...prev.data, proteina: e.target.value } }))}
+                      style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 8px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center"}}
+                    />
+                  </div>
+                  <div>
+                    <label style={{fontSize:11, color:C.amber, fontWeight:700, display:"block", marginBottom:4}}>Carbos (g)</label>
+                    <input
+                      type="number" inputMode="numeric"
+                      value={suggForm.data.carbo}
+                      onChange={e => setSuggForm(prev => ({ ...prev, data: { ...prev.data, carbo: e.target.value } }))}
+                      style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 8px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center"}}
+                    />
+                  </div>
+                  <div>
+                    <label style={{fontSize:11, color:C.rose, fontWeight:700, display:"block", marginBottom:4}}>Grasas (g)</label>
+                    <input
+                      type="number" inputMode="numeric"
+                      value={suggForm.data.grasa}
+                      onChange={e => setSuggForm(prev => ({ ...prev, data: { ...prev.data, grasa: e.target.value } }))}
+                      style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 8px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center"}}
+                    />
+                  </div>
+                </div>
+
+                <div style={{display:"flex", gap:8, marginTop:4}}>
+                  {suggForm.idx !== "new" && (
+                    <button
+                      onClick={() => deleteSuggestion(suggForm.idx)}
+                      style={{padding:"12px 14px", background:"rgba(255,107,138,0.12)", color:C.rose, border:`1px solid ${C.rose}44`, borderRadius:12, fontSize:13, fontWeight:800, cursor:"pointer"}}
+                    >
+                      <Trash2 size={15}/>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setSuggForm(null)}
+                    style={{flex:1, padding:"12px", background:"none", border:`1px solid ${C.line}`, color:C.muted, borderRadius:12, fontSize:13, fontWeight:800, cursor:"pointer"}}
                   >
-                    <Plus size={14}/>
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={saveSuggForm}
+                    disabled={!suggForm.data.name.trim()}
+                    style={{flex:1, padding:"12px", background: suggForm.data.name.trim() ? C.lime : C.panel2, color: suggForm.data.name.trim() ? "#0c0e0b" : C.muted, border:"none", borderRadius:12, fontSize:13, fontWeight:800, cursor:"pointer"}}
+                  >
+                    Guardar
                   </button>
                 </div>
               </div>
-            </div>
-          ))}
+            ) : (
+              <>
+                <button
+                  onClick={openNewSuggForm}
+                  className="btn-active-scale"
+                  style={{
+                    width:"100%", padding:"13px", borderRadius:14, border:`1px dashed ${C.lime}`,
+                    background:"rgba(205,255,74,0.06)", color:C.lime, fontWeight:800, fontSize:13.5,
+                    cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8
+                  }}
+                >
+                  <Plus size={16}/> Crear nueva sugerencia
+                </button>
+
+                {(customSuggestions || []).length > 0 && (
+                  <div style={{fontSize:11, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".08em", marginTop:4}}>
+                    Creadas por ti ({(customSuggestions || []).length})
+                  </div>
+                )}
+                {(customSuggestions || []).map((s, idx) => (
+                  <div key={"c"+idx} style={{display:"flex", gap:10, alignItems:"center", background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:10}}>
+                    <div style={{width:54, height:54, borderRadius:10, overflow:"hidden", flexShrink:0, background:C.panel2, display:"flex", alignItems:"center", justifyContent:"center"}}>
+                      {s.img
+                        ? <img src={s.img} alt={s.name} style={{width:"100%", height:"100%", objectFit:"cover"}} loading="lazy"/>
+                        : <Utensils size={20} color={C.muted}/>}
+                    </div>
+                    <div style={{flex:1, minWidth:0}}>
+                      <div style={{fontSize:13, fontWeight:700, color:C.ink, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{s.name}</div>
+                      <div style={{fontSize:11, color:C.muted, marginTop:2, display:"flex", gap:8, flexWrap:"wrap"}}>
+                        <span style={{color:C.lime, fontWeight:700}}>{s.kcal} kcal</span>
+                        <span style={{color:C.cyan}}>P {s.proteina !== undefined ? s.proteina : 20}g</span>
+                        <span>C {s.carbo !== undefined ? s.carbo : 30}g</span>
+                        <span style={{color:C.amber}}>G {s.grasa !== undefined ? s.grasa : 10}g</span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => openEditSuggForm(idx)}
+                      className="btn-active-scale"
+                      title="Editar sugerencia"
+                      style={{width:34, height:34, borderRadius:9, border:`1px solid ${C.line}`, background:C.panel2, color:C.muted, cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
+                    >
+                      <NotebookPen size={14}/>
+                    </button>
+                    <button
+                      onClick={() => {
+                        pushEntry({
+                          resumen: s.name,
+                          kcal: s.kcal,
+                          proteina: s.proteina !== undefined ? s.proteina : 20,
+                          carbo: s.carbo !== undefined ? s.carbo : 30,
+                          grasa: s.grasa !== undefined ? s.grasa : 10
+                        }, s.name);
+                      }}
+                      className="btn-active-scale"
+                      title="Registrar en el día"
+                      style={{width:34, height:34, borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
+                    >
+                      <Plus size={16}/>
+                    </button>
+                  </div>
+                ))}
+
+                <div style={{fontSize:11, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".08em", marginTop:4}}>
+                  Sugerencias del Coach
+                </div>
+                {SUGGESTIONS.map((s, idx) => (
+                  <div key={"d"+idx} style={{display:"flex", gap:10, alignItems:"center", background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:10}}>
+                    <div style={{width:54, height:54, borderRadius:10, overflow:"hidden", flexShrink:0}}>
+                      <img src={s.img} alt={s.name} style={{width:"100%", height:"100%", objectFit:"cover"}} loading="lazy"/>
+                    </div>
+                    <div style={{flex:1, minWidth:0}}>
+                      <div style={{fontSize:13, fontWeight:700, color:C.ink, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{s.name}</div>
+                      <div style={{fontSize:11, color:C.muted, marginTop:2, display:"flex", gap:8, alignItems:"center"}}>
+                        <span style={{color:C.lime, fontWeight:700}}>{s.kcal} kcal</span>
+                        <span style={{display:"flex", alignItems:"center", gap:3}}><Clock size={11}/>{s.time}</span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        pushEntry({
+                          resumen: s.name,
+                          kcal: s.kcal,
+                          proteina: s.proteina !== undefined ? s.proteina : 20,
+                          carbo: s.carbo !== undefined ? s.carbo : 30,
+                          grasa: s.grasa !== undefined ? s.grasa : 10
+                        }, s.name);
+                      }}
+                      className="btn-active-scale"
+                      title="Registrar en el día"
+                      style={{width:34, height:34, borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
+                    >
+                      <Plus size={16}/>
+                    </button>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Tarjeta de Hidratación */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"13px 15px", marginBottom:14}}>
@@ -5123,7 +5579,7 @@ function Hoy({
           />
           <button 
             onClick={addCustomSupplement}
-            style={{padding:"6px 12px", background:C.lime, color:"#ffffff", fontWeight:800, borderRadius:8, fontSize:11, cursor:"pointer"}}
+            style={{padding:"6px 12px", background:C.lime, color:"#0c0e0b", fontWeight:800, borderRadius:8, fontSize:11, cursor:"pointer"}}
           >
             Añadir
           </button>
@@ -5169,43 +5625,38 @@ function Hoy({
         <div style={{color:C.muted, fontSize:13, padding:"18px 0", textAlign:"center"}}>Aún no registras nada hoy.</div>
       )}
       
-      {log.map(e => {
-        let pressTimer;
-        return (
-          <div key={e.id} className="pop" 
-            onPointerDown={() => {
-              pressTimer = setTimeout(() => {
-                setEditFoodObj({ e, isEditing: false });
-              }, 800);
-            }}
-            onPointerUp={() => clearTimeout(pressTimer)}
-            onPointerLeave={() => clearTimeout(pressTimer)}
-            onPointerCancel={() => clearTimeout(pressTimer)}
-            style={{
-              background:C.panel, 
-              border:`1px solid ${C.line}`, 
-              borderRadius:13, 
-              padding:"11px 14px", 
-              marginBottom:9, 
-              display:"flex", 
-              gap:10, 
-              alignItems:"flex-start",
-              cursor:"pointer",
-              userSelect:"none"
-            }}
-          >
-            <div style={{flex:1}}>
-              <div style={{fontSize:13.5, fontWeight:600, marginBottom:4}}>{e.resumen}</div>
-              <div style={{fontSize:11.5, color:C.muted, display:"flex", gap:10, flexWrap:"wrap", fontVariantNumeric:"tabular-nums"}}>
-                <span style={{color:C.lime}}>{Math.round(e.kcal)} kcal</span>
-                <span style={{color:C.cyan}}>P {Math.round(e.proteina)}g</span>
-                <span>C {Math.round(e.carbo)}g</span>
-                <span style={{color:C.amber}}>G {Math.round(e.grasa)}g</span>
-              </div>
+      {log.map(e => (
+        <div key={e.id} className="pop"
+          style={{
+            background:C.panel,
+            border:`1px solid ${C.line}`,
+            borderRadius:13,
+            padding:"11px 14px",
+            marginBottom:9,
+            display:"flex",
+            gap:10,
+            alignItems:"center"
+          }}
+        >
+          <div style={{flex:1}}>
+            <div style={{fontSize:13.5, fontWeight:600, marginBottom:4}}>{e.resumen}</div>
+            <div style={{fontSize:11.5, color:C.muted, display:"flex", gap:10, flexWrap:"wrap", fontVariantNumeric:"tabular-nums"}}>
+              <span style={{color:C.lime}}>{Math.round(e.kcal)} kcal</span>
+              <span style={{color:C.cyan}}>P {Math.round(e.proteina)}g</span>
+              <span>C {Math.round(e.carbo)}g</span>
+              <span style={{color:C.amber}}>G {Math.round(e.grasa)}g</span>
             </div>
           </div>
-        );
-      })}
+          <button
+            onClick={() => setEditFoodObj({ e, isEditing: false })}
+            className="btn-active-scale"
+            title="Editar registro"
+            style={{width:38, height:38, borderRadius:10, border:`1px solid ${C.line}`, background:C.panel2, color:C.muted, cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
+          >
+            <NotebookPen size={15}/>
+          </button>
+        </div>
+      ))}
 
       {editFoodObj && (
         <div style={{
@@ -5221,7 +5672,7 @@ function Hoy({
               <>
                 <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Opciones de Comida</div>
                 <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>{editFoodObj.e.resumen}</div>
-                <button onClick={() => setEditFoodObj({...editFoodObj, isEditing: true})} style={{background:C.lime, color:"#ffffff", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
+                <button onClick={() => setEditFoodObj({...editFoodObj, isEditing: true})} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
                   ✏️ Editar Comida
                 </button>
                 <button onClick={() => { del(editFoodObj.e.id); setEditFoodObj(null); }} style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}>
@@ -5263,7 +5714,7 @@ function Hoy({
                     setLog(nextLog);
                   }
                   setEditFoodObj(null);
-                }} style={{background:C.lime, color:"#ffffff", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
+                }} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
                   Guardar
                 </button>
               </>
@@ -5278,14 +5729,9 @@ function Hoy({
   );
 }
 
-/* ===== TAB COACH & CONFIGURACIÓN ===== */
+/* ===== TAB COACH ===== */
 function Coach({
-  chat, setChat, target, totals, geminiKey, saveGeminiKey,
-  cloudSync, syncCode, syncStatus, handleToggleCloudSync, handleCreateSyncCode, handleLinkDevice, handleForcePull, handleForcePush,
-  handleCoachActions, sendCoachMessage, chatBusy, sendDailyGreetingIfNeeded,
-  supabaseUrl, supabaseAnonKey, supabaseUser, sbSyncing, sbError,
-  saveSbConfig, handleSbLogin, handleSbRegister, handleSbLogout, syncLocalToSupabase,
-  changePreset, presetKey, aiModel, saveAiModel, customPresets
+  chat, setChat, target, totals, sendCoachMessage, chatBusy, sendDailyGreetingIfNeeded
 }){
   // Simple markdown renderer for Coach responses
   const renderMarkdown = (text) => {
@@ -5319,39 +5765,7 @@ function Coach({
   };
 
   const [text, setText] = useState(""); 
-  const [showKeyField, setShowKeyField] = useState(false);
-  const [newKeyInput, setNewKeyInput] = useState("");
-  const [linkInput, setLinkInput] = useState("");
-  const [linkSuccess, setLinkSuccess] = useState(null);
-  const [copied, setCopied] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [emailInput, setEmailInput] = useState("");
-  const [showEmailInput, setShowEmailInput] = useState(false);
-  const [emailErr, setEmailErr] = useState("");
-  
-  const predefinedModels = ["google/gemini-2.5-flash", "google/gemini-2.5-pro", "deepseek/deepseek-chat", "moonshotai/kimi-k2.6:free"];
-  const [customModelMode, setCustomModelMode] = useState(!predefinedModels.includes(aiModel));
-
-  useEffect(() => {
-    if (!predefinedModels.includes(aiModel)) {
-      setCustomModelMode(true);
-    } else {
-      setCustomModelMode(false);
-    }
-  }, [aiModel]);
-  
-  // Supabase UI States
-  const [sbUrlInput, setSbUrlInput] = useState(supabaseUrl || "");
-  const [sbKeyInput, setSbKeyInput] = useState(supabaseAnonKey || "");
-  const [sbEmail, setSbEmail] = useState("");
-  const [sbPass, setSbPass] = useState("");
-  const [showSbField, setShowSbField] = useState(false);
   const endRef = useRef(null);
-
-  useEffect(() => {
-    setSbUrlInput(supabaseUrl || "");
-    setSbKeyInput(supabaseAnonKey || "");
-  }, [supabaseUrl, supabaseAnonKey]);
 
   useEffect(() => { 
     endRef.current && endRef.current.scrollIntoView({behavior:"smooth"}); 
@@ -5370,410 +5784,13 @@ function Coach({
     setText(""); 
   };
 
-  const keysList = geminiKey ? geminiKey.split(/[,;\s]+/).map(k => k.trim()).filter(k => k.length > 0) : [];
-
-  const handleAddKey = () => {
-    if (!newKeyInput.trim()) return;
-    const added = newKeyInput.trim();
-    if (!keysList.includes(added)) {
-      const updatedList = [...keysList, added];
-      saveGeminiKey(updatedList.join(","));
-    }
-    setNewKeyInput("");
-  };
-
-  const handleRemoveKey = (indexToRemove) => {
-    const updatedList = keysList.filter((_, idx) => idx !== indexToRemove);
-    saveGeminiKey(updatedList.join(","));
-  };
-
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(syncCode);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const processLinking = async () => {
-    if (!linkInput.trim()) return;
-    const ok = await handleLinkDevice(linkInput.trim());
-    setLinkSuccess(ok);
-    if(ok) setLinkInput("");
-    setTimeout(() => setLinkSuccess(null), 3000);
-  };
-
   return (
     <div className="pop chat-window">
       
       {/* Cabecera del Chat con el Coach */}
       <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10, paddingBottom:8, borderBottom:`1px solid ${C.line}`}}>
         <div className="disp" style={{fontSize:22, color:C.lime}}>CHAT CON EL COACH</div>
-        <button 
-          onClick={() => setShowSettings(!showSettings)}
-          style={{
-            background: showSettings ? "rgba(107,78,255,.15)" : C.panel,
-            border: `1px solid ${showSettings ? C.lime : C.line}`,
-            color: showSettings ? C.lime : C.muted,
-            padding: "5px 10px",
-            borderRadius: 8,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 11.5,
-            fontWeight: 700
-          }}
-        >
-          <Settings size={14} color={showSettings ? C.lime : C.muted}/>
-          <span>{showSettings ? "Cerrar Ajustes" : "Ajustes"}</span>
-        </button>
       </div>
-
-      {/* Sección de Ajustes e Integraciones */}
-      {showSettings && (
-        <div className="pop" style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12, display:"flex", flexDirection:"column", gap:8}}>
-          
-          {/* Selector de Objetivo (PRESETS) */}
-          <div style={{display:"flex", flexDirection:"column", gap:6, paddingBottom:8, borderBottom:`1px solid ${C.line}`}}>
-            <span style={{fontSize:12, fontWeight:700, display:"flex", alignItems:"center", gap:6}}>
-              <Target size={14} color={C.rose}/> Objetivo Principal
-            </span>
-            <div style={{display:"flex", gap:6, marginTop:4}}>
-              {Object.keys(customPresets).map(k => (
-                <button 
-                  key={k} 
-                  onClick={() => changePreset(k)} 
-                  style={{
-                    flex:1, 
-                    padding:"6px 2px", 
-                    borderRadius:8, 
-                    fontSize:10.5, 
-                    fontWeight:700, 
-                    cursor:"pointer", 
-                    border:`1px solid ${presetKey === k ? C.rose : C.line}`, 
-                    background: presetKey === k ? "rgba(255,107,152,.15)" : C.panel2, 
-                    color: presetKey === k ? C.rose : C.muted
-                  }}
-                >
-                  {customPresets[k].label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Toggle API Key */}
-          <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer", borderBottom:`1px solid ${C.line}`, paddingBottom:6}} onClick={() => setShowKeyField(!showKeyField)}>
-            <span style={{fontSize:12, fontWeight:700, display:"flex", alignItems:"center", gap:6}}>
-              <Sparkles size={14} color={C.lime}/> Ajustes de API / OpenRouter
-            </span>
-            <span style={{fontSize:10, color:C.muted}}>{showKeyField ? "Ocultar" : "Configurar"}</span>
-          </div>
-          {showKeyField && (
-            <div style={{marginTop:4, display:"flex", flexDirection:"column", gap:8}}>
-              <div style={{display:"flex", gap:8}}>
-                <input 
-                  value={newKeyInput} 
-                  onChange={e => setNewKeyInput(e.target.value)} 
-                  type="password" 
-                  placeholder="Pegar nueva API Key (Gemini o OpenRouter)..." 
-                  style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px 10px", fontSize:12, color:C.ink}}
-                />
-                <button onClick={handleAddKey} style={{padding:"8px 12px", background:C.lime, color:"#ffffff", fontWeight:700, borderRadius:8, fontSize:12, cursor:"pointer"}}>
-                  Añadir
-                </button>
-              </div>
-
-              {keysList.length > 0 ? (
-                <div style={{display:"flex", flexDirection:"column", gap:6, background:C.panel2, padding:8, borderRadius:10, border:`1px solid ${C.line}`}}>
-                  <div style={{fontSize:10, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".05em"}}>Claves activas ({keysList.length}):</div>
-                  {keysList.map((k, idx) => (
-                    <div key={idx} style={{display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:11.5, background:C.panel, padding:"6px 10px", borderRadius:8, border:`1px solid ${C.line}`}}>
-                      <span style={{fontFamily:"monospace", color:C.ink}}>
-                        {k.length > 10 ? `${k.slice(0, 6)}...${k.slice(-4)}` : "Clave corta"}
-                      </span>
-                      <button 
-                        onClick={() => handleRemoveKey(idx)} 
-                        style={{background:"none", border:"none", color:C.rose, cursor:"pointer", fontSize:11, fontWeight:700, padding:4}}
-                      >
-                        Eliminar
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{fontSize:11, color:C.muted, textAlign:"center", padding:"8px 0", border:`1px dashed ${C.line}`, borderRadius:10}}>
-                  No tienes llaves configuradas. Usa el campo de arriba para añadir una.
-                </div>
-              )}
-
-              {/* Selector de modelo para OpenRouter si hay claves que comiencen con sk-or- */}
-              {keysList.some(k => k.startsWith("sk-or-")) && (
-                <div style={{marginTop:4, display:"flex", flexDirection:"column", gap:6, background:C.panel2, padding:10, borderRadius:10, border:`1px solid ${C.line}`}}>
-                  <div style={{fontSize:10, fontWeight:800, color:C.lime, textTransform:"uppercase", letterSpacing:".05em"}}>Modelo de OpenRouter:</div>
-                  <select 
-                    value={customModelMode ? "custom" : aiModel} 
-                    onChange={e => {
-                      if (e.target.value === "custom") {
-                        setCustomModelMode(true);
-                      } else {
-                        setCustomModelMode(false);
-                        saveAiModel(e.target.value);
-                      }
-                    }} 
-                    style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 10px", fontSize:12, color:C.ink, width:"100%"}}
-                  >
-                    <option value="google/gemini-2.5-flash">Gemini 2.5 Flash</option>
-                    <option value="google/gemini-2.5-pro">Gemini 2.5 Pro</option>
-                    <option value="deepseek/deepseek-chat">DeepSeek Chat (V3)</option>
-                    <option value="moonshotai/kimi-k2.6:free">Kimi K2.6 (Gratis)</option>
-                    <option value="custom">Otro (Ingresar ID abajo)</option>
-                  </select>
-                  {customModelMode && (
-                    <input 
-                      value={aiModel === "custom" ? "" : aiModel} 
-                      onChange={e => saveAiModel(e.target.value)} 
-                      placeholder="Ej: meta-llama/llama-3.1-70b-instruct" 
-                      style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 10px", fontSize:12, color:C.ink}}
-                    />
-                  )}
-                </div>
-              )}
-
-              <div style={{fontSize:11, color:C.muted, lineHeight:1.3}}>
-                La aplicación irá alternando entre tus claves guardadas para evitar límites de cuota (error 429). Las claves de OpenRouter deben iniciar con <code>sk-or-</code>.
-              </div>
-            </div>
-          )}
-
-          {/* Sección de Cloud Sync */}
-          <div style={{display:"flex", flexDirection:"column", gap:6, paddingTop:4}}>
-            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
-              <span style={{fontSize:12, fontWeight:700, display:"flex", alignItems:"center", gap:6}}>
-                <RefreshCw size={14} color={C.cyan} style={{ animation: syncStatus === "Sincronizando..." || syncStatus === "Guardando..." ? "spin 2s linear infinite" : "none" }}/> 
-                Sincronización en la Nube
-              </span>
-              <span style={{fontSize:10, color: syncStatus === "Sincronizado" ? C.lime : C.muted, fontWeight:700}}>{syncStatus}</span>
-            </div>
-
-            <div style={{display:"flex", alignItems:"center", gap:8, marginTop:4}}>
-              <span style={{fontSize:11.5, color:C.muted, flex:1}}>Guardar progreso entre dispositivos</span>
-              <button 
-                onClick={() => {
-                  if (cloudSync) {
-                    handleToggleCloudSync(false);
-                  } else {
-                    if (syncCode && !syncCode.startsWith("bf-")) {
-                      handleToggleCloudSync(true);
-                    } else {
-                      setShowEmailInput(!showEmailInput);
-                    }
-                  }
-                }}
-                style={{
-                  padding:"5px 10px",
-                  borderRadius:8,
-                  fontSize:11,
-                  fontWeight:800,
-                  background: cloudSync ? "rgba(107,78,255,.15)" : C.panel2,
-                  border: `1px solid ${cloudSync ? C.lime : C.line}`,
-                  color: cloudSync ? C.lime : C.muted,
-                  cursor:"pointer"
-                }}
-              >
-                {cloudSync ? "ACTIVO" : "DESACTIVADO"}
-              </button>
-            </div>
-
-            {showEmailInput && !cloudSync && (
-              <div className="pop" style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:10, marginTop:6, display:"flex", flexDirection:"column", gap:6}}>
-                <div style={{fontSize:11, color:C.muted}}>Ingresa tu correo para crear un código de sincronización seguro:</div>
-                <div style={{display:"flex", gap:6}}>
-                  <input 
-                    value={emailInput}
-                    onChange={e => setEmailInput(e.target.value)}
-                    type="email"
-                    placeholder="tu-correo@ejemplo.com"
-                    style={{flex:1, background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 10px", fontSize:12, color:C.ink}}
-                  />
-                  <button 
-                    onClick={async () => {
-                      if (!emailInput.trim()) {
-                        setEmailErr("Por favor ingresa un correo");
-                        return;
-                      }
-                      setEmailErr("");
-                      const ok = await handleCreateSyncCode(emailInput);
-                      if (ok) {
-                        setShowEmailInput(false);
-                        setEmailInput("");
-                      } else {
-                        setEmailErr("Error al crear código. Intenta de nuevo.");
-                      }
-                    }}
-                    style={{padding:"6px 12px", background:C.lime, color:"#ffffff", fontWeight:800, borderRadius:8, fontSize:11, cursor:"pointer"}}
-                  >
-                    Crear Código
-                  </button>
-                </div>
-                {emailErr && <div style={{color:C.rose, fontSize:11}}>{emailErr}</div>}
-              </div>
-            )}
-
-            {cloudSync && syncCode && (
-              <div className="pop" style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:10, marginTop:6, display:"flex", flexDirection:"column", gap:6}}>
-                <div style={{fontSize:10.5, color:C.amber, fontWeight:700, display:"flex", alignItems:"center", gap:4}}>
-                  <ShieldAlert size={12}/>
-                  <span>Verificación requerida en tu correo</span>
-                </div>
-                <div style={{fontSize:11, color:C.muted, lineHeight:1.4}}>
-                  Se ha registrado un código seguro. <b>Revisa tu correo</b> para buscar el mensaje de verificación de <b>kvdb.io</b> para activar la sincronización.
-                </div>
-                <div style={{fontSize:10, color:C.muted, textTransform:"uppercase", fontWeight:700, marginTop:4}}>Código de enlace (Copia en tu celular)</div>
-                <div style={{display:"flex", gap:6, alignItems:"center"}}>
-                  <code style={{flex:1, background:C.bg, padding:"6px 8px", borderRadius:6, fontSize:11.5, color:C.cyan, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{syncCode}</code>
-                  <button onClick={handleCopyCode} style={{padding:"6px 10px", borderRadius:6, background:C.line, color:C.ink, cursor:"pointer", display:"flex", alignItems:"center", gap:4}}>
-                    {copied ? <Check size={12} color={C.lime}/> : <Copy size={12}/>}
-                    <span style={{fontSize:10}}>{copied ? "Copiado" : "Copiar"}</span>
-                  </button>
-                  <button onClick={handleForcePush} style={{padding:"6px 10px", borderRadius:6, background:C.line, color:C.lime, cursor:"pointer", fontSize:10, fontWeight:700}}>
-                    Subir
-                  </button>
-                  <button onClick={handleForcePull} style={{padding:"6px 10px", borderRadius:6, background:C.line, color:C.cyan, cursor:"pointer", fontSize:10, fontWeight:700}}>
-                    Descargar
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {cloudSync && (
-              <div style={{marginTop:8, display:"flex", flexDirection:"column", gap:6}}>
-                <div style={{fontSize:10, color:C.muted, textTransform:"uppercase", fontWeight:700}}>Vincular con otro dispositivo</div>
-                <div style={{display:"flex", gap:6}}>
-                  <input 
-                    value={linkInput}
-                    onChange={e => setLinkInput(e.target.value)}
-                    placeholder="Pega el código de sincronización..."
-                    style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 10px", fontSize:12, color:C.ink}}
-                  />
-                  <button onClick={processLinking} style={{padding:"6px 12px", background:C.cyan, color:"#04212b", fontWeight:800, borderRadius:8, fontSize:11, cursor:"pointer", display:"flex", alignItems:"center", gap:4}}>
-                    <Link2 size={12}/> Vincular
-                  </button>
-                </div>
-                {linkSuccess === true && <div style={{color:C.lime, fontSize:11.5}}>¡Vinculado correctamente! Datos actualizados.</div>}
-                {linkSuccess === false && <div style={{color:C.rose, fontSize:11.5}}>Código inválido o error en la descarga.</div>}
-              </div>
-            )}
-          </div>
-
-          {/* Sección de Supabase Cloud Database */}
-          <div style={{display:"flex", flexDirection:"column", gap:6, paddingTop:6, borderTop:`1px solid ${C.line}`}}>
-            <div style={{display:"flex", justifyTarget:"space-between", justifyContent:"space-between", alignItems:"center", cursor:"pointer", paddingBottom:2}} onClick={() => setShowSbField(!showSbField)}>
-              <span style={{fontSize:12, fontWeight:700, display:"flex", alignItems:"center", gap:6}}>
-                <RefreshCw size={14} color={supabaseUser ? C.lime : C.muted} style={{ animation: sbSyncing ? "spin 2s linear infinite" : "none" }}/>
-                Supabase Cloud Database
-              </span>
-              <span style={{fontSize:10, color:C.muted}}>{showSbField ? "Ocultar" : "Configurar"}</span>
-            </div>
-
-            {showSbField && (
-              <div className="pop" style={{display:"flex", flexDirection:"column", gap:8, marginTop:4}}>
-                {/* Inputs de Configuración */}
-                <div>
-                  <span style={{fontSize:10.5, color:C.muted}}>Supabase Project URL:</span>
-                  <input 
-                    value={sbUrlInput}
-                    onChange={e => setSbUrlInput(e.target.value)}
-                    placeholder="https://xxxx.supabase.co"
-                    style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 10px", fontSize:11.5, color:C.ink, marginTop:2}}
-                  />
-                </div>
-                <div>
-                  <span style={{fontSize:10.5, color:C.muted}}>Supabase Anon Key:</span>
-                  <input 
-                    value={sbKeyInput}
-                    onChange={e => setSbKeyInput(e.target.value)}
-                    type="password"
-                    placeholder="eyJhbGciOi..."
-                    style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 10px", fontSize:11.5, color:C.ink, marginTop:2}}
-                  />
-                </div>
-                <button 
-                  onClick={() => saveSbConfig(sbUrlInput, sbKeyInput)}
-                  style={{padding:"8px", background:C.line, color:C.lime, fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", width:"100%"}}
-                >
-                  Guardar Configuración
-                </button>
-
-                {/* Login / Registro / Estado de Sesión */}
-                {supabaseUrl && supabaseAnonKey && (
-                  <div style={{borderTop:`1px dashed ${C.line}`, marginTop:6, paddingTop:8, display:"flex", flexDirection:"column", gap:8}}>
-                    {supabaseUser ? (
-                      <div>
-                        <div style={{fontSize:11.5, color:C.muted, marginBottom:6}}>
-                          Sesión activa: <b style={{color:C.lime}}>{supabaseUser.email}</b>
-                        </div>
-                        <div style={{display:"flex", gap:6}}>
-                          <button 
-                            onClick={syncLocalToSupabase}
-                            disabled={sbSyncing}
-                            style={{flex:1, padding:"8px", background:C.lime, color:"#ffffff", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
-                          >
-                            {sbSyncing ? <Loader2 size={13} style={{animation:"spin 1s linear infinite"}}/> : "Sincronizar ahora"}
-                          </button>
-                          <button 
-                            onClick={handleSbLogout}
-                            disabled={sbSyncing}
-                            style={{padding:"8px 12px", background:C.panel2, border:`1px solid ${C.line}`, color:C.rose, fontWeight:700, borderRadius:8, fontSize:11.5, cursor:"pointer"}}
-                          >
-                            Salir
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div style={{display:"flex", flexDirection:"column", gap:8}}>
-                        <div style={{fontSize:11.5, color:C.muted}}>Ingresa a tu cuenta de Supabase:</div>
-                        <input 
-                          value={sbEmail}
-                          onChange={e => setSbEmail(e.target.value)}
-                          placeholder="tu-correo@ejemplo.com"
-                          style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 10px", fontSize:11.5, color:C.ink}}
-                        />
-                        <input 
-                          value={sbPass}
-                          onChange={e => setSbPass(e.target.value)}
-                          type="password"
-                          placeholder="Contraseña"
-                          style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 10px", fontSize:11.5, color:C.ink}}
-                        />
-                        <div style={{display:"flex", gap:6}}>
-                          <button 
-                            onClick={() => handleSbLogin(sbEmail, sbPass)}
-                            disabled={sbSyncing}
-                            style={{flex:1, padding:"8px", background:C.cyan, color:"#04212b", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer"}}
-                          >
-                            {sbSyncing ? "Conectando..." : "Iniciar Sesión"}
-                          </button>
-                          <button 
-                            onClick={() => handleSbRegister(sbEmail, sbPass)}
-                            disabled={sbSyncing}
-                            style={{flex:1, padding:"8px", background:C.lime, color:"#ffffff", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer"}}
-                          >
-                            Registrarse
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {sbError && (
-                  <div style={{fontSize:11, color: sbError.includes("Error") ? C.rose : C.lime, marginTop:4, lineHeight:1.3}}>
-                    {sbError}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       <div className="chat-bubble-container" style={{display:"flex", flexDirection:"column"}}>
         {chat.length === 0 ? (
@@ -5837,10 +5854,614 @@ function Coach({
           placeholder="Pregúntale a tu coach…" 
           style={{flex:1, background:C.panel, border:`1px solid ${C.line}`, borderRadius:12, padding:"12px 14px", color:C.ink, fontSize:14, outline:"none"}}
         />
-        <button onClick={send} disabled={chatBusy} style={{width:48, borderRadius:12, border:"none", background:C.lime, color:"#ffffff", cursor:"pointer", display:"grid", placeItems:"center"}}>
+        <button onClick={send} disabled={chatBusy} style={{width:48, borderRadius:12, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", display:"grid", placeItems:"center"}}>
           <Send size={18}/>
         </button>
       </div>
+    </div>
+  );
+}
+
+/* ===== TAB PERFIL Y AJUSTES ===== */
+function Perfil({
+  activeMetrics,
+  geminiKey,
+  saveGeminiKey,
+  aiModel,
+  saveAiModel,
+  cloudSync,
+  syncCode,
+  syncStatus,
+  handleToggleCloudSync,
+  handleCreateSyncCode,
+  handleLinkDevice,
+  handleForcePull,
+  handleForcePush,
+  supabaseUrl,
+  supabaseAnonKey,
+  supabaseUser,
+  sbSyncing,
+  sbError,
+  saveSbConfig,
+  handleSbLogin,
+  handleSbRegister,
+  handleSbLogout,
+  syncLocalToSupabase,
+  changePreset,
+  presetKey,
+  customPresets,
+  bodyComp
+}) {
+  const [showKeyField, setShowKeyField] = useState(false);
+  const [newKeyInput, setNewKeyInput] = useState("");
+  const [linkInput, setLinkInput] = useState("");
+  const [linkSuccess, setLinkSuccess] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const [emailInput, setEmailInput] = useState("");
+  const [showEmailInput, setShowEmailInput] = useState(false);
+  const [emailErr, setEmailErr] = useState("");
+  
+  const predefinedModels = ["google/gemini-2.5-flash", "google/gemini-2.5-pro", "deepseek/deepseek-chat", "moonshotai/kimi-k2.6:free"];
+  const [customModelMode, setCustomModelMode] = useState(!predefinedModels.includes(aiModel));
+
+  useEffect(() => {
+    if (!predefinedModels.includes(aiModel)) {
+      setCustomModelMode(true);
+    } else {
+      setCustomModelMode(false);
+    }
+  }, [aiModel]);
+  
+  const [sbUrlInput, setSbUrlInput] = useState(supabaseUrl || "");
+  const [sbKeyInput, setSbKeyInput] = useState(supabaseAnonKey || "");
+  const [sbEmail, setSbEmail] = useState("");
+  const [sbPass, setSbPass] = useState("");
+  const [showSbField, setShowSbField] = useState(false);
+
+  useEffect(() => {
+    setSbUrlInput(supabaseUrl || "");
+    setSbKeyInput(supabaseAnonKey || "");
+  }, [supabaseUrl, supabaseAnonKey]);
+
+  const keysList = geminiKey ? geminiKey.split(/[,;\s]+/).map(k => k.trim()).filter(k => k.length > 0) : [];
+
+  const handleAddKey = () => {
+    if (!newKeyInput.trim()) return;
+    const added = newKeyInput.trim();
+    if (!keysList.includes(added)) {
+      const updatedList = [...keysList, added];
+      saveGeminiKey(updatedList.join(","));
+    }
+    setNewKeyInput("");
+  };
+
+  const handleRemoveKey = (indexToRemove) => {
+    const updatedList = keysList.filter((_, idx) => idx !== indexToRemove);
+    saveGeminiKey(updatedList.join(","));
+  };
+
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(syncCode);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const processLinking = async () => {
+    if (!linkInput.trim()) return;
+    const ok = await handleLinkDevice(linkInput.trim());
+    setLinkSuccess(ok);
+    if(ok) setLinkInput("");
+    setTimeout(() => setLinkSuccess(null), 3000);
+  };
+
+  return (
+    <div className="pop" style={{ display: "flex", flexDirection: "column", padding: "0 16px 16px", gap: 16 }}>
+      
+      {/* Tarjeta de Perfil Bruno */}
+      <div style={{
+        background: "linear-gradient(135deg, var(--panel-bg-sec) 0%, var(--panel-bg) 100%)",
+        border: "1px solid var(--line-color)",
+        borderRadius: "var(--radius-lg)",
+        padding: 16,
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        boxShadow: "var(--shadow-card)"
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{
+            width: 48,
+            height: 48,
+            borderRadius: "50%",
+            background: "var(--accent-primary-hover)",
+            color: "#000000",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontWeight: 800,
+            fontSize: 18
+          }}>
+            B
+          </div>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "var(--text-ink)" }}>Bruno Eduardo</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Hombre • 34 años • 180 cm</div>
+          </div>
+        </div>
+
+        {/* Grid de composición corporal */}
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, 1fr)",
+          gap: 8,
+          marginTop: 4
+        }}>
+          <div style={{
+            background: "rgba(255, 255, 255, 0.03)",
+            border: "1px solid var(--line-color)",
+            borderRadius: "var(--radius-md)",
+            padding: "8px 4px",
+            textAlign: "center"
+          }}>
+            <span style={{ fontSize: 10, color: "var(--text-muted)", fontWeight: 700, display: "block", textTransform: "uppercase" }}>Peso</span>
+            <span style={{ fontSize: 18, fontWeight: 800, color: "var(--accent-primary)", display: "block", marginTop: 2 }}>
+              {activeMetrics.weight || 93.9} <span style={{ fontSize: 10, fontWeight: 500 }}>kg</span>
+            </span>
+          </div>
+          <div style={{
+            background: "rgba(255, 255, 255, 0.03)",
+            border: "1px solid var(--line-color)",
+            borderRadius: "var(--radius-md)",
+            padding: "8px 4px",
+            textAlign: "center"
+          }}>
+            <span style={{ fontSize: 10, color: "var(--text-muted)", fontWeight: 700, display: "block", textTransform: "uppercase" }}>Músculo</span>
+            <span style={{ fontSize: 18, fontWeight: 800, color: "var(--accent-cyan)", display: "block", marginTop: 2 }}>
+              {bodyComp?.musculo || 64.7} <span style={{ fontSize: 10, fontWeight: 500 }}>kg</span>
+            </span>
+          </div>
+          <div style={{
+            background: "rgba(255, 255, 255, 0.03)",
+            border: "1px solid var(--line-color)",
+            borderRadius: "var(--radius-md)",
+            padding: "8px 4px",
+            textAlign: "center"
+          }}>
+            <span style={{ fontSize: 10, color: "var(--text-muted)", fontWeight: 700, display: "block", textTransform: "uppercase" }}>Grasa</span>
+            <span style={{ fontSize: 18, fontWeight: 800, color: "var(--accent-rose)", display: "block", marginTop: 2 }}>
+              {bodyComp?.grasaPct || 26.2} <span style={{ fontSize: 10, fontWeight: 500 }}>%</span>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Selector de Objetivo (PRESETS) */}
+      <div style={{
+        background: "var(--panel-bg)",
+        border: "1px solid var(--line-color)",
+        borderRadius: "var(--radius-lg)",
+        padding: 16,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        boxShadow: "var(--shadow-card)"
+      }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text-ink)", display: "flex", alignItems: "center", gap: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          <Target size={15} color="var(--accent-rose)" />
+          <span>Objetivo Principal</span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 4 }}>
+          {Object.keys(customPresets).map(k => (
+            <button
+              key={k}
+              onClick={() => changePreset(k)}
+              className="btn-active-scale"
+              style={{
+                padding: "10px 8px",
+                borderRadius: "var(--radius-md)",
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: "pointer",
+                border: `1px solid ${presetKey === k ? "var(--accent-rose)" : "var(--line-color)"}`,
+                background: presetKey === k ? "rgba(255,107,152,.12)" : "var(--panel-bg-sec)",
+                color: presetKey === k ? "var(--accent-rose)" : "var(--text-muted)"
+              }}
+            >
+              {customPresets[k].label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Sección de API Key y Modelo */}
+      <div style={{
+        background: "var(--panel-bg)",
+        border: "1px solid var(--line-color)",
+        borderRadius: "var(--radius-lg)",
+        padding: 16,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        boxShadow: "var(--shadow-card)"
+      }}>
+        <div 
+          onClick={() => setShowKeyField(!showKeyField)}
+          style={{ fontSize: 13, fontWeight: 800, color: "var(--text-ink)", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.05em" }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <Sparkles size={15} color="var(--accent-lime)" />
+            <span>Configuración de IA</span>
+          </div>
+          <span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 500 }}>{showKeyField ? "Ocultar" : "Mostrar"}</span>
+        </div>
+
+        {showKeyField && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 4 }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                value={newKeyInput}
+                onChange={e => setNewKeyInput(e.target.value)}
+                type="password"
+                placeholder="Pegar nueva API Key (OpenRouter/Gemini)..."
+                style={{ flex: 1, background: "var(--panel-bg-sec)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: "10px 12px", fontSize: 12, color: "var(--text-ink)" }}
+              />
+              <button 
+                onClick={handleAddKey} 
+                className="btn-active-scale"
+                style={{ padding: "10px 16px", background: "var(--accent-lime)", color: "#000000", fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 12, cursor: "pointer" }}
+              >
+                Añadir
+              </button>
+            </div>
+
+            {keysList.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, background: "var(--panel-bg-sec)", padding: 10, borderRadius: "var(--radius-md)", border: "1px solid var(--line-color)" }}>
+                <div style={{ fontSize: 10, fontWeight: 800, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>Claves activas ({keysList.length}):</div>
+                {keysList.map((k, idx) => (
+                  <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, background: "var(--panel-bg)", padding: "8px 10px", borderRadius: "var(--radius-sm)", border: "1px solid var(--line-color)" }}>
+                    <span style={{ fontFamily: "monospace", color: "var(--text-ink)" }}>
+                      {k.length > 15 ? `${k.slice(0, 8)}...${k.slice(-4)}` : "Clave activa"}
+                    </span>
+                    <button 
+                      onClick={() => handleRemoveKey(idx)} 
+                      style={{ background: "none", border: "none", color: "var(--accent-rose)", cursor: "pointer", fontSize: 11, fontWeight: 700, padding: 4 }}
+                    >
+                      Eliminar
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: 11, color: "var(--text-muted)", textAlign: "center", padding: "12px 0", border: "1px dashed var(--line-color)", borderRadius: "var(--radius-md)" }}>
+                No tienes llaves configuradas. Añade una para usar funciones de IA.
+              </div>
+            )}
+
+            {/* Selector de modelo */}
+            {keysList.some(k => k.startsWith("sk-or-")) && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, background: "var(--panel-bg-sec)", padding: 10, borderRadius: "var(--radius-md)", border: "1px solid var(--line-color)" }}>
+                <div style={{ fontSize: 10, fontWeight: 800, color: "var(--accent-lime)", textTransform: "uppercase", letterSpacing: ".05em" }}>Modelo de OpenRouter:</div>
+                <select 
+                  value={customModelMode ? "custom" : aiModel} 
+                  onChange={e => {
+                    if (e.target.value === "custom") {
+                      setCustomModelMode(true);
+                    } else {
+                      setCustomModelMode(false);
+                      saveAiModel(e.target.value);
+                    }
+                  }} 
+                  style={{ background: "var(--panel-bg)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-sm)", padding: "8px 10px", fontSize: 12, color: "var(--text-ink)", width: "100%" }}
+                >
+                  <option value="google/gemini-2.5-flash">Gemini 2.5 Flash</option>
+                  <option value="google/gemini-2.5-pro">Gemini 2.5 Pro</option>
+                  <option value="deepseek/deepseek-chat">DeepSeek Chat (V3)</option>
+                  <option value="moonshotai/kimi-k2.6:free">Kimi K2.6 (Gratis)</option>
+                  <option value="custom">Otro (Ingresar ID abajo)</option>
+                </select>
+                {customModelMode && (
+                  <input 
+                    value={aiModel === "custom" ? "" : aiModel} 
+                    onChange={e => saveAiModel(e.target.value)} 
+                    placeholder="Ej: meta-llama/llama-3.1-70b-instruct" 
+                    style={{ background: "var(--panel-bg)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-sm)", padding: "8px 10px", fontSize: 12, color: "var(--text-ink)", marginTop: 4 }}
+                  />
+                )}
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.4 }}>
+              Las claves de OpenRouter deben iniciar con <code>sk-or-</code>. Se rotarán automáticamente para evitar límites.
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Sincronización en la Nube (KVDB) */}
+      <div style={{
+        background: "var(--panel-bg)",
+        border: "1px solid var(--line-color)",
+        borderRadius: "var(--radius-lg)",
+        padding: 16,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        boxShadow: "var(--shadow-card)"
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text-ink)", display: "flex", alignItems: "center", gap: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            <RefreshCw 
+              size={15} 
+              color="var(--accent-cyan)" 
+              style={{ animation: syncStatus === "Sincronizando..." || syncStatus === "Guardando..." ? "spin 2s linear infinite" : "none" }}
+            />
+            <span>Sincronización KVDB</span>
+          </div>
+          <span style={{ fontSize: 11, color: syncStatus === "Sincronizado" ? "var(--accent-lime)" : "var(--text-muted)", fontWeight: 700 }}>
+            {syncStatus}
+          </span>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
+          <span style={{ fontSize: 12, color: "var(--text-muted)", flex: 1 }}>Sincronizar entre dispositivos</span>
+          <button 
+            onClick={() => {
+              if (cloudSync) {
+                handleToggleCloudSync(false);
+              } else {
+                if (syncCode && !syncCode.startsWith("bf-")) {
+                  handleToggleCloudSync(true);
+                } else {
+                  setShowEmailInput(!showEmailInput);
+                }
+              }
+            }}
+            className="btn-active-scale"
+            style={{
+              padding: "6px 12px",
+              borderRadius: "var(--radius-md)",
+              fontSize: 11,
+              fontWeight: 800,
+              background: cloudSync ? "rgba(74, 214, 255, 0.12)" : "var(--panel-bg-sec)",
+              border: `1px solid ${cloudSync ? "var(--accent-cyan)" : "var(--line-color)"}`,
+              color: cloudSync ? "var(--accent-cyan)" : "var(--text-muted)",
+              cursor: "pointer"
+            }}
+          >
+            {cloudSync ? "ACTIVO" : "DESACTIVADO"}
+          </button>
+        </div>
+
+        {showEmailInput && !cloudSync && (
+          <div style={{ background: "var(--panel-bg-sec)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Ingresa tu correo para crear un código de sincronización:</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <input 
+                value={emailInput}
+                onChange={e => setEmailInput(e.target.value)}
+                type="email"
+                placeholder="tu-correo@ejemplo.com"
+                style={{ flex: 1, background: "var(--panel-bg)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-sm)", padding: "8px 10px", fontSize: 12, color: "var(--text-ink)" }}
+              />
+              <button 
+                onClick={async () => {
+                  if (!emailInput.trim()) {
+                    setEmailErr("Ingresa un correo");
+                    return;
+                  }
+                  setEmailErr("");
+                  const ok = await handleCreateSyncCode(emailInput);
+                  if (ok) {
+                    setShowEmailInput(false);
+                    setEmailInput("");
+                  } else {
+                    setEmailErr("Error al crear código.");
+                  }
+                }}
+                className="btn-active-scale"
+                style={{ padding: "8px 12px", background: "var(--accent-cyan)", color: "#000000", fontWeight: 800, borderRadius: "var(--radius-sm)", fontSize: 11, cursor: "pointer" }}
+              >
+                Crear
+              </button>
+            </div>
+            {emailErr && <div style={{ color: "var(--accent-rose)", fontSize: 11 }}>{emailErr}</div>}
+          </div>
+        )}
+
+        {cloudSync && syncCode && (
+          <div style={{ background: "var(--panel-bg-sec)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ fontSize: 11, color: "var(--accent-amber)", fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
+              <ShieldAlert size={12} />
+              <span>Verificación requerida en tu correo</span>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.4 }}>
+              Código creado. Revisa tu correo y verifica el mensaje de <b>kvdb.io</b> para activarlo.
+            </div>
+            <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>Código de enlace:</div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <code style={{ flex: 1, background: "var(--panel-bg)", padding: "8px 10px", borderRadius: "var(--radius-sm)", fontSize: 11.5, color: "var(--accent-cyan)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", border: "1px solid var(--line-color)" }}>
+                {syncCode}
+              </code>
+              <button 
+                onClick={handleCopyCode} 
+                className="btn-active-scale"
+                style={{ padding: "8px 10px", borderRadius: "var(--radius-sm)", background: "var(--line-color)", color: "var(--text-ink)", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
+              >
+                {copied ? <Check size={12} color="var(--accent-lime)" /> : <Copy size={12} />}
+                <span style={{ fontSize: 10 }}>{copied ? "Copiado" : "Copiar"}</span>
+              </button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 4 }}>
+              <button 
+                onClick={handleForcePush} 
+                className="btn-active-scale"
+                style={{ padding: "8px", borderRadius: "var(--radius-sm)", background: "var(--line-color)", color: "var(--accent-lime)", cursor: "pointer", fontSize: 11, fontWeight: 700 }}
+              >
+                Subir Datos
+              </button>
+              <button 
+                onClick={handleForcePull} 
+                className="btn-active-scale"
+                style={{ padding: "8px", borderRadius: "var(--radius-sm)", background: "var(--line-color)", color: "var(--accent-cyan)", cursor: "pointer", fontSize: 11, fontWeight: 700 }}
+              >
+                Bajar Datos
+              </button>
+            </div>
+          </div>
+        )}
+
+        {cloudSync && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+            <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>Vincular dispositivo secundario:</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <input 
+                value={linkInput}
+                onChange={e => setLinkInput(e.target.value)}
+                placeholder="Pegar código de sincronización..."
+                style={{ flex: 1, background: "var(--panel-bg-sec)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: "8px 10px", fontSize: 12, color: "var(--text-ink)" }}
+              />
+              <button 
+                onClick={processLinking} 
+                className="btn-active-scale"
+                style={{ padding: "8px 12px", background: "var(--accent-cyan)", color: "#000000", fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
+              >
+                <Link2 size={12} /> Vincular
+              </button>
+            </div>
+            {linkSuccess === true && <div style={{ color: "var(--accent-lime)", fontSize: 11 }}>¡Vinculado con éxito!</div>}
+            {linkSuccess === false && <div style={{ color: "var(--accent-rose)", fontSize: 11 }}>Código inválido.</div>}
+          </div>
+        )}
+      </div>
+
+      {/* Supabase Cloud Database */}
+      <div style={{
+        background: "var(--panel-bg)",
+        border: "1px solid var(--line-color)",
+        borderRadius: "var(--radius-lg)",
+        padding: 16,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        boxShadow: "var(--shadow-card)"
+      }}>
+        <div 
+          onClick={() => setShowSbField(!showSbField)}
+          style={{ fontSize: 13, fontWeight: 800, color: "var(--text-ink)", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.05em" }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <RefreshCw 
+              size={15} 
+              color={supabaseUser ? "var(--accent-lime)" : "var(--text-muted)"} 
+              style={{ animation: sbSyncing ? "spin 2s linear infinite" : "none" }}
+            />
+            <span>Supabase Cloud Database</span>
+          </div>
+          <span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 500 }}>{showSbField ? "Ocultar" : "Mostrar"}</span>
+        </div>
+
+        {showSbField && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 4 }}>
+            <div>
+              <span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 700 }}>Supabase Project URL:</span>
+              <input 
+                value={sbUrlInput}
+                onChange={e => setSbUrlInput(e.target.value)}
+                placeholder="https://xxxx.supabase.co"
+                style={{ width: "100%", background: "var(--panel-bg-sec)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: "8px 10px", fontSize: 11.5, color: "var(--text-ink)", marginTop: 4 }}
+              />
+            </div>
+            <div>
+              <span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 700 }}>Supabase Anon Key:</span>
+              <input 
+                value={sbKeyInput}
+                onChange={e => setSbKeyInput(e.target.value)}
+                type="password"
+                placeholder="eyJhbGciOi..."
+                style={{ width: "100%", background: "var(--panel-bg-sec)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: "8px 10px", fontSize: 11.5, color: "var(--text-ink)", marginTop: 4 }}
+              />
+            </div>
+            <button 
+              onClick={() => saveSbConfig(sbUrlInput, sbKeyInput)}
+              className="btn-active-scale"
+              style={{ padding: "10px", background: "var(--line-color)", color: "var(--accent-lime)", fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer", width: "100%" }}
+            >
+              Guardar Configuración
+            </button>
+
+            {/* Login / Registro / Estado de Sesión */}
+            {supabaseUrl && supabaseAnonKey && (
+              <div style={{ borderTop: "1px dashed var(--line-color)", marginTop: 6, paddingTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+                {supabaseUser ? (
+                  <div>
+                    <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginBottom: 6 }}>
+                      Sesión activa: <b style={{ color: "var(--accent-lime)" }}>{supabaseUser.email}</b>
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button 
+                        onClick={syncLocalToSupabase}
+                        disabled={sbSyncing}
+                        className="btn-active-scale"
+                        style={{ flex: 1, padding: "10px", background: "var(--accent-lime)", color: "#000000", fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                      >
+                        {sbSyncing ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : "Sincronizar ahora"}
+                      </button>
+                      <button 
+                        onClick={handleSbLogout}
+                        disabled={sbSyncing}
+                        className="btn-active-scale"
+                        style={{ padding: "10px 14px", background: "var(--panel-bg-sec)", border: "1px solid var(--line-color)", color: "var(--accent-rose)", fontWeight: 700, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer" }}
+                      >
+                        Salir
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Ingresa a tu cuenta de Supabase:</div>
+                    <input 
+                      value={sbEmail}
+                      onChange={e => setSbEmail(e.target.value)}
+                      placeholder="tu-correo@ejemplo.com"
+                      style={{ width: "100%", background: "var(--panel-bg-sec)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: "8px 10px", fontSize: 11.5, color: "var(--text-ink)" }}
+                    />
+                    <input 
+                      value={sbPass}
+                      onChange={e => setSbPass(e.target.value)}
+                      type="password"
+                      placeholder="Contraseña"
+                      style={{ width: "100%", background: "var(--panel-bg-sec)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: "8px 10px", fontSize: 11.5, color: "var(--text-ink)" }}
+                    />
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button 
+                        onClick={() => handleSbLogin(sbEmail, sbPass)}
+                        disabled={sbSyncing}
+                        className="btn-active-scale"
+                        style={{ flex: 1, padding: "10px", background: "var(--accent-cyan)", color: "#000000", fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer" }}
+                      >
+                        {sbSyncing ? "Conectando..." : "Iniciar Sesión"}
+                      </button>
+                      <button 
+                        onClick={() => handleSbRegister(sbEmail, sbPass)}
+                        disabled={sbSyncing}
+                        className="btn-active-scale"
+                        style={{ flex: 1, padding: "10px", background: "var(--accent-lime)", color: "#000000", fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer" }}
+                      >
+                        Registrarse
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {sbError && (
+              <div style={{ fontSize: 11.5, color: sbError.includes("Error") ? "var(--accent-rose)" : "var(--accent-lime)", marginTop: 4, lineHeight: 1.3 }}>
+                {sbError}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
     </div>
   );
 }
@@ -5850,7 +6471,7 @@ function Entreno({
   exlog, setExlog, exercises, setExercises, geminiKey, handleAnalyzeWorkout, importWorkoutData,
   activeSplitKey, setActiveSplitKey, selectedDateStr, setSelectedDateStr, calMonth, setCalMonth,
   workoutDurations, setWorkoutDurations, prAlerts, setPrAlerts, checkNewPR, activeMetrics,
-  overloadSuggestions, plateauAlerts, muscleImbalances, splits, setSplits
+  overloadSuggestions, plateauAlerts, muscleImbalances, splits, setSplits, notes, chat
 }){
   const sel = activeSplitKey;
   const setSel = setActiveSplitKey;
@@ -5859,9 +6480,24 @@ function Entreno({
   const [reps, setReps] = useState("");
   const [setsCount, setSetsCount] = useState("1");
   const [setType, setSetType] = useState("work"); // 'work' or 'warmup' or 'dropset'
+  const [rir, setRir] = useState("-");
   const [editSetObj, setEditSetObj] = useState(null);
   const [editExObj, setEditExObj] = useState(null);
   const [exTab, setExTab] = useState("texto"); // 'texto' or 'nuevo'
+
+  const getRecentSensationsText = () => {
+    const sevenDaysAgo = Date.now() - 7 * 86400000;
+    const recentNotes = (notes || []).filter(n => n && n.date && new Date(n.date).getTime() >= sevenDaysAgo);
+    let notesText = recentNotes.map(n => `[Nota ${fdate(n.date)}]: ${n.text}`).join(" | ");
+    
+    const recentChat = (chat || []).slice(-8).filter(m => m.role === "user");
+    let chatText = recentChat.map(m => m.content).join(" | ");
+    
+    let combined = "";
+    if (notesText) combined += `Notas de bienestar y esfuerzo recientes: ${notesText}. `;
+    if (chatText) combined += `Comentarios/sensaciones de chat recientes: ${chatText}.`;
+    return combined || "Sin sensaciones o fatiga reportadas recientemente.";
+  };
 
   // --- Splits Manual Editor States ---
   const [showSplitsEditor, setShowSplitsEditor] = useState(false);
@@ -5946,7 +6582,7 @@ function Entreno({
   const dayExs = (exercises || {})[sel] || [];
   const dayMuscles = [...new Set(dayExs.flatMap(e => e.musculos || []))];
   const last = (n) => { const a = (exlog || {})[n]; return a && a.length ? a[0] : null; };
-  const chartData = (n) => ((exlog || {})[n] || []).slice().reverse().map(s => ({date: s.date, w: s.w}));
+  const chartData = (n) => ((exlog || {})[n] || []).slice().reverse();
 
   useEffect(() => {
     (async () => {
@@ -5980,8 +6616,8 @@ function Entreno({
   const getHeatColor = (sets) => {
     if (sets === 0) return { bg: C.panel2, text: C.muted };
     if (sets < 4) return { bg: "rgba(107, 78, 255, 0.15)", text: C.ink, border: "rgba(107, 78, 255, 0.3)" };
-    if (sets < 8) return { bg: "rgba(107, 78, 255, 0.35)", text: "#ffffff", border: C.lime, fontWeight: 700 };
-    return { bg: C.lime, text: "#ffffff", border: C.lime, fontWeight: 800, boxShadow: "0 0 10px rgba(107, 78, 255, 0.3)" };
+    if (sets < 8) return { bg: "rgba(205, 255, 74, 0.25)", text: "#f3f4ea", border: C.lime, fontWeight: 700 };
+    return { bg: C.lime, text: "#0c0e0b", border: C.lime, fontWeight: 800, boxShadow: "0 0 10px rgba(205, 255, 74, 0.3)" };
   };
 
   const allExistingExercises = Object.values(exercises || {}).flat().map(e => e.name);
@@ -6012,7 +6648,8 @@ function Entreno({
         return {
           originalName: ex.name,
           targetName: bestMatch,
-          sets: ex.sets.map(s => ({ w: s.w, reps: String(s.reps), type: s.type || "work" }))
+          sets: ex.sets.map(s => ({ w: s.w, reps: String(s.reps), type: s.type || "work" })),
+          muscles: ex.muscles || []
         };
       });
       setVerificationList(list);
@@ -6036,9 +6673,11 @@ function Entreno({
     const parts = selectedDateStr.split("-");
     const now = new Date();
 
+    const rirVal = rir === "-" ? null : parseInt(rir);
+
     // Check for PR before writing
     const newPrs = [];
-    const prMsg = checkNewPR(n, parseFloat(w), reps.trim());
+    const prMsg = checkNewPR(n, parseFloat(w), reps.trim(), exlog, rirVal);
     if (prMsg) {
       newPrs.push(`${n}: ${prMsg}`);
     }
@@ -6052,7 +6691,8 @@ function Entreno({
         date: d.toISOString(),
         w: parseFloat(w),
         reps: reps.trim() || "-",
-        type: setType
+        type: setType,
+        rir: rirVal
       });
     }
     const next = {...exlog, [n]: [...newSets.reverse(), ...(exlog[n] || [])].slice(0, 60)}; 
@@ -6060,6 +6700,7 @@ function Entreno({
     setW(""); 
     setReps(""); 
     setSetsCount("1");
+    setRir("-");
   };
 
   const delSet = (n, i) => { 
@@ -6220,34 +6861,42 @@ function Entreno({
     setAddErr("");
     try{
       if(addMode === "nombre"){
-        const sys = "Eres un entrenador personal. Analiza el ejercicio brindado y devuelve un JSON. Ejemplo:\n" +
+        const sys = "Eres un entrenador personal experto. Analiza el ejercicio brindado, identifica su nombre técnico e identifica obligatoriamente al menos los 3 músculos principales involucrados (por ejemplo, para Sentadilla podrías listar Cuádriceps femoral, Glúteo mayor, e Isquiotibiales). Devuelve un JSON. Ejemplo:\n" +
                     "{\n" +
                     "  \"tecnico\": \"Extensión de rodilla en máquina\",\n" +
-                    "  \"musculos\": [\"Cuádriceps\"]\n" +
+                    "  \"musculos\": [\"Cuádriceps femoral\", \"Vasto lateral\", \"Vasto medial\"]\n" +
                     "}";
         const schema = {
           type: "OBJECT",
           properties: {
             tecnico: { type: "STRING" },
-            musculos: { type: "ARRAY", items: { type: "STRING" } }
+            musculos: {
+              type: "ARRAY",
+              items: { type: "STRING" },
+              description: "Lista con al menos 3 músculos principales trabajados"
+            }
           },
           required: ["tecnico", "musculos"]
         };
         const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
         setExercises({...exercises, [sel]: [...dayExs, {name: addText.trim(), tecnico: o.tecnico || "", musculos: o.musculos || []}]});
       } else {
-        const sys = "El usuario describe un ejercicio físico. Identifícalo y devuelve un JSON. Ejemplo:\n" +
+        const sys = "El usuario describe un ejercicio físico. Identifícalo, indica su nombre técnico e identifica obligatoriamente al menos los 3 músculos principales involucrados (por ejemplo, para Vuelos laterales podrías listar Deltoides lateral, Supraespinoso, e Hombro anterior). Devuelve un JSON. Ejemplo:\n" +
                     "{\n" +
                     "  \"nombre\": \"Vuelos laterales en polea\",\n" +
                     "  \"tecnico\": \"Abducción de hombro en polea baja\",\n" +
-                    "  \"musculos\": [\"Deltoides\"]\n" +
+                    "  \"musculos\": [\"Deltoides lateral\", \"Supraespinoso\", \"Trapecio\"]\n" +
                     "}";
         const schema = {
           type: "OBJECT",
           properties: {
             nombre: { type: "STRING" },
             tecnico: { type: "STRING" },
-            musculos: { type: "ARRAY", items: { type: "STRING" } }
+            musculos: {
+              type: "ARRAY",
+              items: { type: "STRING" },
+              description: "Lista con al menos 3 músculos principales trabajados"
+            }
           },
           required: ["nombre", "tecnico", "musculos"]
         };
@@ -6264,10 +6913,18 @@ function Entreno({
 
   const analyzeProg = async(ex) => { 
     setProgBusy(ex.name);
-    const hist = (exlog[ex.name] || []).slice(0, 8).map(s => `${fdate(s.date)}: ${s.w}kg x ${s.reps}`).join(" | ") || "Sin registros previos";
+    const hist = (exlog[ex.name] || []).slice(0, 8).map(s => {
+      const rirStr = (s.rir !== undefined && s.rir !== null) ? `@RIR ${s.rir}` : "";
+      const repsNum = parseInt(s.reps);
+      const rirNum = (s.rir !== undefined && s.rir !== null && !isNaN(parseInt(s.rir))) ? parseInt(s.rir) : 0;
+      const rmVal = (!isNaN(s.w) && !isNaN(repsNum) && repsNum > 0) ? Math.round(s.w * (1 + (repsNum + rirNum) / 30)) : null;
+      const rmStr = rmVal ? ` (RM: ${rmVal}kg)` : "";
+      return `${fdate(s.date)}: ${s.w}kg x ${s.reps}${rirStr}${rmStr}`;
+    }).join(" | ") || "Sin registros previos";
     try{ 
-      const sys = `Eres el entrenador personal de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Entrega recomendaciones concretas de sobrecarga progresiva y técnica de ejecución. Corto y directo.`;
-      const out = await callGemini([{role:"user", content:`Ejercicio: ${ex.name}. Músculos: ${(ex.musculos || []).join(", ") || "?"}. Historial reciente (nuevo a viejo): ${hist}. Analiza el rendimiento y da pautas de carga/repeticiones para el próximo entrenamiento.`}], sys);
+      const sensations = getRecentSensationsText();
+      const sys = `Eres el entrenador personal de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Entrega recomendaciones concretas de sobrecarga progresiva y técnica de ejecución. Corto y directo. Si Bruno reporta cansancio, dolor, molestias o fatiga en sus sensaciones o chat reciente, ajusta el entrenamiento proactivamente (bajar carga, deload temporal, o modificar la técnica).`;
+      const out = await callGemini([{role:"user", content:`Ejercicio: ${ex.name}. Músculos: ${(ex.musculos || []).join(", ") || "?"}. Historial reciente (nuevo a viejo): ${hist}.\nSensaciones/Notas recientes de Bruno: ${sensations}.\nAnaliza el rendimiento y da pautas de carga/repeticiones para el próximo entrenamiento.`}], sys);
       setProg(p => ({...p, [ex.name]: out})); 
     } catch(e){ 
       setProg(p => ({...p, [ex.name]: aiErr(e)})); 
@@ -6279,12 +6936,16 @@ function Entreno({
     setDayBusy(true); 
     setDaySug("");
     const hist = dayExs.map(ex => { 
-      const a = (exlog[ex.name] || []).slice(0, 3).map(s => `${s.w}kg x ${s.reps}`).join(", "); 
+      const a = (exlog[ex.name] || []).slice(0, 3).map(s => {
+        const rirStr = (s.rir !== undefined && s.rir !== null) ? `@RIR ${s.rir}` : "";
+        return `${s.w}kg x ${s.reps}${rirStr}`;
+      }).join(", "); 
       return a ? `${ex.name}: ${a}` : `${ex.name}: sin marcas`; 
     }).join(" | ");
     try{ 
-      const sys = `Eres el entrenador de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Orden del entrenamiento: mantener el orden asignado del split. Respuestas estructuradas y breves.`;
-      const out = await callGemini([{role:"user", content:`Día del Split ${sel}: ${dayObj.name}. Músculos: ${dayMuscles.join(", ")}. Historial: ${hist}. Planifica las series, pesos de calentamiento, y series de trabajo sugeridas hoy.`}], sys);
+      const sensations = getRecentSensationsText();
+      const sys = `Eres el entrenador de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Orden del entrenamiento: mantener el orden asignado del split. Respuestas estructuradas y breves. Si Bruno reporta cansancio, dolores o fatiga acumulada en sus sensaciones recientes, adapta de forma proactiva la rutina sugerida hoy reduciendo volumen o intensidad.`;
+      const out = await callGemini([{role:"user", content:`Día del Split ${sel}: ${dayObj.name}. Músculos: ${dayMuscles.join(", ")}. Historial reciente: ${hist}.\nSensaciones/Notas recientes de Bruno: ${sensations}.\nPlanifica las series, pesos de calentamiento, y series de trabajo sugeridas hoy.`}], sys);
       setDaySug(out); 
       saveKey("last_day_sug", out);
     } catch(e){ 
@@ -6754,7 +7415,7 @@ function Entreno({
                             </div>
 
                             {/* Agregar series */}
-                            <div style={{display:"flex", gap:8, marginBottom:8}}>
+                            <div style={{display:"flex", gap:4, marginBottom:8, width:"100%"}}>
                               <input 
                                 value={w} 
                                 onChange={e => setW(e.target.value)} 
@@ -6762,28 +7423,50 @@ function Entreno({
                                 inputMode="decimal" 
                                 className="ph" 
                                 placeholder="kg" 
-                                style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"9px 11px", color:C.ink, fontSize:14, outline:"none"}}
+                                style={{flex:1.2, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
                               />
                               <input 
                                 value={reps} 
                                 onChange={e => setReps(e.target.value)} 
                                 className="ph" 
-                                placeholder="Reps" 
-                                style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"9px 11px", color:C.ink, fontSize:14, outline:"none"}}
+                                placeholder="reps" 
+                                style={{flex:1, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
                               />
+                              <select 
+                                value={rir} 
+                                onChange={e => setRir(e.target.value)} 
+                                style={{width:54, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center", cursor:"pointer"}}
+                              >
+                                <option value="-">RIR</option>
+                                <option value="0">RIR 0</option>
+                                <option value="1">RIR 1</option>
+                                <option value="2">RIR 2</option>
+                                <option value="3">RIR 3</option>
+                                <option value="4">RIR 4+</option>
+                              </select>
                               <input 
                                 value={setsCount} 
                                 onChange={e => setSetsCount(e.target.value)} 
                                 type="number"
                                 inputMode="numeric"
                                 className="ph" 
-                                placeholder="Series" 
-                                style={{width:70, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"9px 11px", color:C.ink, fontSize:14, outline:"none", textAlign:"center"}}
+                                placeholder="ser." 
+                                style={{width:44, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center"}}
                               />
-                              <button onClick={() => addSet(exName)} style={{width:44, borderRadius:9, border:"none", background:C.lime, color:"#ffffff", cursor:"pointer", fontSize:20, fontWeight:700}}>＋</button>
+                              <button onClick={() => addSet(exName)} style={{width:36, height:35, borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", fontSize:18, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center"}}>＋</button>
                             </div>
 
                             <Chart entries={cd}/>
+
+                            <details style={{marginTop:6, marginBottom:10, background:C.panel, border:`1px solid ${C.line}`, borderRadius:9, padding:"6px 10px", cursor:"pointer"}}>
+                              <summary style={{fontSize:11, fontWeight:800, color:C.lime, outline:"none"}}>💡 Guía RIR (Repeticiones en Reserva)</summary>
+                              <div style={{fontSize:10.5, color:C.muted, marginTop:4, lineHeight:1.45}}>
+                                <b>RIR 0:</b> Fallo total. Esfuerzo máximo.<br/>
+                                <b>RIR 1-2:</b> Ideal para hipertrofia (1-2 reps en recámara).<br/>
+                                <b>RIR 3-4:</b> Calentamiento o trabajo técnico.<br/>
+                                <span style={{color:C.cyan}}>* El 1RM se calcula considerando RIR (1RM = w * (1 + (reps + rir) / 30)).</span>
+                              </div>
+                            </details>
 
                             {sets.length === 0 && (
                               <div style={{fontSize:12, color:C.muted, padding:"4px 0"}}>Sin registros en esta sesión.</div>
@@ -6793,7 +7476,23 @@ function Entreno({
                               <div key={i} style={{display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${C.line}`, opacity: s.type === "warmup" ? 0.6 : 1}}>
                                 <span style={{fontSize:12.5, color:C.muted, minWidth:54}}>{formatDay(s.date)}</span>
                                 <span style={{fontSize:13.5, fontWeight:600}}>{s.w} kg</span>
-                                <span style={{fontSize:13, color:C.muted}}>× {s.reps}</span>
+                                <span style={{fontSize:13, color:C.muted}}>
+                                  × {s.reps}
+                                  {s.rir !== undefined && s.rir !== null ? ` @RIR ${s.rir}` : ""}
+                                </span>
+                                {(() => {
+                                  const repsNum = parseInt(s.reps);
+                                  const rirNum = (s.rir !== undefined && s.rir !== null && !isNaN(parseInt(s.rir))) ? parseInt(s.rir) : 0;
+                                  if (!isNaN(s.w) && !isNaN(repsNum) && repsNum > 0) {
+                                    const rmVal = s.w * (1 + (repsNum + rirNum) / 30);
+                                    return (
+                                      <span style={{fontSize:11, color:C.cyan, background:"rgba(74,214,255,0.08)", padding:"2px 5px", borderRadius:4, fontWeight:600}}>
+                                        RM: {Math.round(rmVal)} kg
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                })()}
                                 {s.type === "warmup" && (
                                   <span style={{fontSize:10, color:C.amber, background:"rgba(255,177,61,.12)", padding:"2px 6px", borderRadius:4, fontWeight:700}}>
                                     Calentamiento
@@ -7053,7 +7752,7 @@ function Entreno({
                 </div>
 
                 {/* Agregar series */}
-                <div style={{display:"flex", gap:8, marginBottom:8}}>
+                <div style={{display:"flex", gap:4, marginBottom:8, width:"100%"}}>
                   <input 
                     value={w} 
                     onChange={e => setW(e.target.value)} 
@@ -7061,28 +7760,50 @@ function Entreno({
                     inputMode="decimal" 
                     className="ph" 
                     placeholder="kg" 
-                    style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"9px 11px", color:C.ink, fontSize:14, outline:"none"}}
+                    style={{flex:1.2, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
                   />
                   <input 
                     value={reps} 
                     onChange={e => setReps(e.target.value)} 
                     className="ph" 
-                    placeholder="Reps" 
-                    style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"9px 11px", color:C.ink, fontSize:14, outline:"none"}}
+                    placeholder="reps" 
+                    style={{flex:1, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
                   />
+                  <select 
+                    value={rir} 
+                    onChange={e => setRir(e.target.value)} 
+                    style={{width:54, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center", cursor:"pointer"}}
+                  >
+                    <option value="-">RIR</option>
+                    <option value="0">RIR 0</option>
+                    <option value="1">RIR 1</option>
+                    <option value="2">RIR 2</option>
+                    <option value="3">RIR 3</option>
+                    <option value="4">RIR 4+</option>
+                  </select>
                   <input 
                     value={setsCount} 
                     onChange={e => setSetsCount(e.target.value)} 
                     type="number"
                     inputMode="numeric"
                     className="ph" 
-                    placeholder="Series" 
-                    style={{width:70, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"9px 11px", color:C.ink, fontSize:14, outline:"none", textAlign:"center"}}
+                    placeholder="ser." 
+                    style={{width:44, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center"}}
                   />
-                  <button onClick={() => addSet(ex.name)} style={{width:44, borderRadius:9, border:"none", background:C.lime, color:"#ffffff", cursor:"pointer", fontSize:20, fontWeight:700}}>＋</button>
+                  <button onClick={() => addSet(ex.name)} style={{width:36, height:35, borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", fontSize:18, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center"}}>＋</button>
                 </div>
 
                 <Chart entries={cd}/>
+
+                <details style={{marginTop:6, marginBottom:10, background:C.panel, border:`1px solid ${C.line}`, borderRadius:9, padding:"6px 10px", cursor:"pointer"}}>
+                  <summary style={{fontSize:11, fontWeight:800, color:C.lime, outline:"none"}}>💡 Guía RIR (Repeticiones en Reserva)</summary>
+                  <div style={{fontSize:10.5, color:C.muted, marginTop:4, lineHeight:1.45}}>
+                    <b>RIR 0:</b> Fallo total. Esfuerzo máximo.<br/>
+                    <b>RIR 1-2:</b> Ideal para hipertrofia (1-2 reps en recámara).<br/>
+                    <b>RIR 3-4:</b> Calentamiento o trabajo técnico.<br/>
+                    <span style={{color:C.cyan}}>* El 1RM se calcula considerando RIR (1RM = w * (1 + (reps + rir) / 30)).</span>
+                  </div>
+                </details>
 
                 {(exlog[ex.name] || []).length === 0 && (
                   <div style={{fontSize:12, color:C.muted, padding:"4px 0"}}>Sin registros en bitácora.</div>
@@ -7092,7 +7813,23 @@ function Entreno({
                   <div key={i} style={{display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${C.line}`, opacity: s.type === "warmup" ? 0.6 : 1}}>
                     <span style={{fontSize:12.5, color:C.muted, minWidth:54}}>{fdate(s.date)}</span>
                     <span style={{fontSize:13.5, fontWeight:600}}>{s.w} kg</span>
-                    <span style={{fontSize:13, color:C.muted}}>× {s.reps}</span>
+                    <span style={{fontSize:13, color:C.muted}}>
+                      × {s.reps}
+                      {s.rir !== undefined && s.rir !== null ? ` @RIR ${s.rir}` : ""}
+                    </span>
+                    {(() => {
+                      const repsNum = parseInt(s.reps);
+                      const rirNum = (s.rir !== undefined && s.rir !== null && !isNaN(parseInt(s.rir))) ? parseInt(s.rir) : 0;
+                      if (!isNaN(s.w) && !isNaN(repsNum) && repsNum > 0) {
+                        const rmVal = s.w * (1 + (repsNum + rirNum) / 30);
+                        return (
+                          <span style={{fontSize:11, color:C.cyan, background:"rgba(74,214,255,0.08)", padding:"2px 5px", borderRadius:4, fontWeight:600}}>
+                            RM: {Math.round(rmVal)} kg
+                          </span>
+                        );
+                      }
+                      return null;
+                    })()}
                     {s.type === "warmup" && (
                       <span style={{fontSize:10, color:C.amber, background:"rgba(255,177,61,.12)", padding:"2px 6px", borderRadius:4, fontWeight:700}}>
                         Calentamiento
@@ -7169,7 +7906,7 @@ function Entreno({
                     border:"none", 
                     cursor:"pointer", 
                     background: importBusy ? C.panel2 : C.lime, 
-                    color: importBusy ? C.muted : "#ffffff", 
+                    color: importBusy ? C.muted : "#0c0e0b", 
                     fontWeight:800, 
                     fontSize:14, 
                     display:"flex", 
@@ -7284,7 +8021,7 @@ function Entreno({
                 <div style={{display:"flex", gap:8, marginTop:4}}>
                   <button 
                     onClick={handleConfirmAndImport}
-                    style={{flex:1, padding:"10px", borderRadius:8, border:"none", background:C.lime, color:"#ffffff", fontWeight:800, fontSize:13, cursor:"pointer"}}
+                    style={{flex:1, padding:"10px", borderRadius:8, border:"none", background:C.lime, color:"#0c0e0b", fontWeight:800, fontSize:13, cursor:"pointer"}}
                   >
                     Confirmar e Importar
                   </button>
@@ -7320,7 +8057,7 @@ function Entreno({
               <button 
                 onClick={addExercise} 
                 disabled={addBusy} 
-                style={{flex:1, padding:"10px", borderRadius:10, border:"none", background: addBusy ? C.panel2 : C.lime, color: addBusy ? C.muted : "#ffffff", cursor:"pointer", fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:6}}
+                style={{flex:1, padding:"10px", borderRadius:10, border:"none", background: addBusy ? C.panel2 : C.lime, color: addBusy ? C.muted : "#0c0e0b", cursor:"pointer", fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:6}}
               >
                 {addBusy ? <><Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/>Procesando…</> : (addMode === "nombre" ? "Añadir ejercicio" : "Identificar y añadir")}
               </button>
@@ -7340,8 +8077,8 @@ function Entreno({
           borderRadius:12, 
           border:"none", 
           cursor:"pointer", 
-          background:`linear-gradient(90deg, ${C.cyan}, ${C.lime})`, 
-          color:"#ffffff", 
+          background:`linear-gradient(90deg, ${C.cyan}, ${C.lime})`,
+          color:"#0c0e0b",
           fontWeight:800, 
           fontSize:14, 
           display:"flex", 
@@ -7358,7 +8095,7 @@ function Entreno({
       <button 
         onClick={suggest} 
         disabled={dayBusy} 
-        style={{width:"100%", marginTop:12, padding:"12px", borderRadius:12, border:"none", cursor:"pointer", background: dayBusy ? C.panel2 : C.lime, color: dayBusy ? C.muted : "#ffffff", fontWeight:800, fontSize:14, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:8}}
+        style={{width:"100%", marginTop:12, padding:"12px", borderRadius:12, border:"none", cursor:"pointer", background: dayBusy ? C.panel2 : C.lime, color: dayBusy ? C.muted : "#0c0e0b", fontWeight:800, fontSize:14, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:8}}
       >
         {dayBusy ? <><Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/>Planificando…</> : <><Sparkles size={16}/>Rutina sugerida para hoy</>}
       </button>
@@ -7387,7 +8124,7 @@ function Entreno({
               <>
                 <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Opciones de Serie</div>
                 <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>{editSetObj.s.w} kg x {editSetObj.s.reps}</div>
-                <button onClick={() => setEditSetObj({...editSetObj, isEditing: true})} style={{background:C.lime, color:"#ffffff", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
+                <button onClick={() => setEditSetObj({...editSetObj, isEditing: true})} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
                   ✏️ Editar Serie
                 </button>
                 <button onClick={() => { delSetFromDay(editSetObj.exName, editSetObj.s); setEditSetObj(null); }} style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}>
@@ -7416,7 +8153,7 @@ function Entreno({
                     setExlog({ ...exlog, [editSetObj.exName]: updatedSets });
                   }
                   setEditSetObj(null);
-                }} style={{background:C.lime, color:"#ffffff", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
+                }} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
                   Guardar
                 </button>
               </>
@@ -7444,7 +8181,7 @@ function Entreno({
                 <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>
                   {editExObj.ex.name} {editExObj.isSession && `(Sesión: ${formatDay(editExObj.sessionDate)})`}
                 </div>
-                <button onClick={() => setEditExObj({...editExObj, isEditing: true})} style={{background:C.lime, color:"#ffffff", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
+                <button onClick={() => setEditExObj({...editExObj, isEditing: true})} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
                   ✏️ Editar Ejercicio
                 </button>
                 {editExObj.isSession && (
@@ -7499,7 +8236,7 @@ function Entreno({
                     handleUpdateExercise(editExObj.ex.name, newName, newTecnico, newMusculosList);
                   }
                   setEditExObj(null);
-                }} style={{background:C.lime, color:"#ffffff", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
+                }} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
                   Guardar
                 </button>
               </>
@@ -7755,7 +8492,7 @@ function Entreno({
                           setNewExText("");
                         }
                       }}
-                      style={{padding:"0 14px", background:C.lime, color:"#ffffff", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+                      style={{padding:"0 14px", background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
                     >
                       Añadir
                     </button>
@@ -7792,7 +8529,7 @@ function Entreno({
               </button>
               <button 
                 onClick={() => saveSplitsAndSyncExercises(editSplitsData)}
-                style={{flex:1, padding:"10px", background:C.lime, color:"#ffffff", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+                style={{flex:1, padding:"10px", background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
               >
                 Guardar Todo
               </button>
@@ -8938,7 +9675,7 @@ function Registro({
           />
         )}
 
-        <button onClick={add} style={{width:"100%", marginTop:8, padding:"10px", borderRadius:10, border:"none", cursor:"pointer", background:C.lime, color:"#ffffff", fontWeight:800, fontSize:14}}>
+        <button onClick={add} style={{width:"100%", marginTop:8, padding:"10px", borderRadius:10, border:"none", cursor:"pointer", background:C.lime, color:"#0c0e0b", fontWeight:800, fontSize:14}}>
           {buttonLabels[type] || "Guardar Registro"}
         </button>
       </div>
@@ -9601,10 +10338,10 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
                 padding:"10px 6px", borderRadius:12, cursor:"pointer",
                 background: sel ? C.lime : C.panel,
                 border: sel ? `1.5px solid ${C.lime}` : `1px solid ${C.line}`,
-                color: sel ? "#fff" : C.muted,
-                boxShadow: sel ? "0 2px 8px rgba(107,78,255,0.2)" : "none"
+                color: sel ? "#0c0e0b" : C.muted,
+                boxShadow: sel ? "0 2px 8px rgba(205,255,74,0.2)" : "none"
               }}>
-                <Ic size={14} color={sel ? "#fff" : C.muted} strokeWidth={sel ? 2.5 : 1.8}/>
+                <Ic size={14} color={sel ? "#0c0e0b" : C.muted} strokeWidth={sel ? 2.5 : 1.8}/>
                 <span style={{fontSize:11, fontWeight:700, whiteSpace:"nowrap"}}>{label}</span>
               </button>
             );
@@ -9616,66 +10353,95 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"14px 16px", marginBottom:14}}>
         <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10}}>
           <span style={{fontSize:12, fontWeight:700, color:C.ink}}>Presupuesto Diario</span>
-          <span style={{fontSize:20, fontWeight:900, color:C.lime, fontFamily:"'Bebas Neue',sans-serif", letterSpacing:".02em"}}>{editVals.kcal} <span style={{fontSize:11, fontWeight:600, color:C.muted, fontFamily:"'Manrope',sans-serif"}}>kcal</span></span>
+          <div style={{display:"flex", alignItems:"center", gap:8}}>
+            <span style={{fontSize:20, fontWeight:900, color:C.lime, fontFamily:"'Bebas Neue',sans-serif", letterSpacing:".02em"}}>{target.kcal} <span style={{fontSize:11, fontWeight:600, color:C.muted, fontFamily:"'Manrope',sans-serif"}}>kcal</span></span>
+            <button 
+              onClick={() => {
+                setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
+                setShowNutritionModal(true);
+              }}
+              className="btn-active-scale"
+              style={{
+                background: "rgba(205,255,74,0.1)",
+                border: "none",
+                color: C.lime,
+                fontSize: 11.5,
+                fontWeight: 800,
+                padding: "4px 8px",
+                borderRadius: 6,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 4
+              }}
+            >
+              <NotebookPen size={12}/> Editar
+            </button>
+          </div>
         </div>
-        <input type="range" min={1200} max={4500} step={50} value={editVals.kcal}
-          onChange={e => {
-            const newKcal = parseInt(e.target.value);
-            const factor = newKcal / (editVals.kcal || 1);
-            setEditVals({ kcal:newKcal, p:Math.round(editVals.p*factor), c:Math.round(editVals.c*factor), f:Math.round(editVals.f*factor) });
-            setEditDirty(true);
-          }}
-          style={{width:"100%", accentColor:C.lime, height:4, cursor:"pointer"}}
-        />
+        <div style={{ height: 6, background: "var(--panel-bg-sec)", borderRadius: "var(--radius-pill)", overflow: "hidden", width: "100%" }}>
+          <div style={{ height: "100%", width: `${Math.min(100, (target.kcal / 4500) * 100)}%`, background: C.lime, borderRadius: "var(--radius-pill)" }}/>
+        </div>
         <div style={{display:"flex", justifyContent:"space-between", fontSize:10, color:C.muted, marginTop:5}}>
-          <span>1200</span><span>4500</span>
+          <span>1200 kcal</span><span>4500 kcal</span>
         </div>
       </div>
 
       {/* Distribución de Macros */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"14px 16px", marginBottom:14}}>
-        <div style={{fontSize:12, fontWeight:700, color:C.ink, marginBottom:12}}>Distribución de Macros</div>
+        <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12}}>
+          <span style={{fontSize:12, fontWeight:700, color:C.ink}}>Distribución de Macros</span>
+          <button 
+            onClick={() => {
+              setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
+              setShowNutritionModal(true);
+            }}
+            className="btn-active-scale"
+            style={{
+              background: "rgba(205,255,74,0.1)",
+              border: "none",
+              color: C.lime,
+              fontSize: 11.5,
+              fontWeight: 800,
+              padding: "4px 8px",
+              borderRadius: 6,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 4
+            }}
+          >
+            <NotebookPen size={12}/> Editar
+          </button>
+        </div>
         {[
-          {label:"Proteínas",     pct:pPctCalc, g:editVals.p, color:C.lime,  onChange:(v)=>{ const newP=Math.round(editVals.kcal*v/100/4); setEditVals(ev=>({...ev,p:newP})); setEditDirty(true); }},
-          {label:"Carbohidratos", pct:cPctCalc, g:editVals.c, color:C.amber, onChange:(v)=>{ const newC=Math.round(editVals.kcal*v/100/4); setEditVals(ev=>({...ev,c:newC})); setEditDirty(true); }},
-          {label:"Grasas",        pct:fPctCalc, g:editVals.f, color:C.cyan,  onChange:(v)=>{ const newF=Math.round(editVals.kcal*v/100/9); setEditVals(ev=>({...ev,f:newF})); setEditDirty(true); }},
-        ].map(({label,pct,g,color,onChange}) => (
+          {label:"Proteínas",     pct:Math.round(target.p * 4 / (target.kcal || 1) * 100), g:target.p, color:C.lime },
+          {label:"Carbohidratos", pct:Math.round(target.c * 4 / (target.kcal || 1) * 100), g:target.c, color:C.amber },
+          {label:"Grasas",        pct:100 - Math.round(target.p * 4 / (target.kcal || 1) * 100) - Math.round(target.c * 4 / (target.kcal || 1) * 100), g:target.f, color:C.cyan },
+        ].map(({label,pct,g,color}) => (
           <div key={label} style={{marginBottom:12}}>
             <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5}}>
               <span style={{fontSize:12, fontWeight:600, color:C.ink}}>{label}</span>
               <span style={{fontSize:12, fontWeight:800, color}}>{pct}% <span style={{fontSize:10, color:C.muted, fontWeight:500}}>· {g}g</span></span>
             </div>
-            <input type="range" min={5} max={70} step={1} value={pct}
-              onChange={e => onChange(parseInt(e.target.value))}
-              style={{width:"100%", accentColor:color, height:3, cursor:"pointer"}}
-            />
+            <div style={{ height: 6, background: "var(--panel-bg-sec)", borderRadius: "var(--radius-pill)", overflow: "hidden", width: "100%" }}>
+              <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: "var(--radius-pill)" }}/>
+            </div>
           </div>
         ))}
         <div style={{display:"flex", justifyContent:"space-between", borderTop:`1px solid ${C.line}`, paddingTop:8, fontSize:11, fontWeight:700}}>
           <span style={{color:C.muted}}>Total</span>
-          <span style={{color: totalPctCalc === 100 ? C.lime : C.rose}}>{totalPctCalc}%</span>
+          <span style={{color: C.lime}}>100%</span>
         </div>
       </div>
 
-      {editDirty && (
-        <button onClick={commitMacros} style={{
-          width:"100%", padding:"16px", borderRadius:16, border:"none", cursor:"pointer",
-          background:C.lime, color:"#fff", fontWeight:800, fontSize:15, marginBottom:20,
-          display:"flex", alignItems:"center", justifyContent:"center", gap:8,
-          boxShadow:"0 4px 16px rgba(107,78,255,0.3)"
-        }}>
-          <NotebookPen size={17}/>Guardar Cambios
-        </button>
-      )}
-      {!editDirty && (
-        <button onClick={() => { setShowNutritionModal(true); setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f }); }} style={{
-          width:"100%", padding:"14px", borderRadius:16, border:`1px solid ${C.line}`, cursor:"pointer",
-          background:C.panel, color:C.muted, fontWeight:700, fontSize:14, marginBottom:20,
-          display:"flex", alignItems:"center", justifyContent:"center", gap:8
-        }}>
-          <Settings size={15}/>Ajuste avanzado con IA
-        </button>
-      )}
+      <button onClick={() => { setShowNutritionModal(true); setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f }); }} style={{
+        width:"100%", padding:"14px", borderRadius:16, border:`1px solid ${C.line}`, cursor:"pointer",
+        background:C.panel, color:C.lime, fontWeight:800, fontSize:14, marginBottom:20,
+        display:"flex", alignItems:"center", justifyContent:"center", gap:8
+      }}>
+        <Settings size={15}/> Ajuste avanzado con IA / Manual
+      </button>
 
       {/* Lista de Compras Inteligente */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"16px 18px", marginBottom:14}}>
@@ -9690,7 +10456,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
               padding:"6px 12px", 
               borderRadius:9, 
               background: shopBusy ? C.panel2 : C.lime, 
-              color: shopBusy ? C.muted : "#ffffff", 
+              color: shopBusy ? C.muted : "#0c0e0b", 
               fontSize:11.5, 
               fontWeight:800,
               cursor:"pointer",
@@ -9808,7 +10574,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
               <button 
                 onClick={adjustMealsWithAI}
                 disabled={aiMealsBusy || !mealsPrompt.trim()}
-                style={{padding:"0 12px", background: aiMealsBusy ? C.panel : C.lime, color: aiMealsBusy ? C.muted : "#ffffff", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center"}}
+                style={{padding:"0 12px", background: aiMealsBusy ? C.panel : C.lime, color: aiMealsBusy ? C.muted : "#0c0e0b", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center"}}
               >
                 {aiMealsBusy ? <Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/> : <Send size={14}/>}
               </button>
@@ -9823,7 +10589,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
               <Sparkles size={12}/> Vista previa de cambios generada por la IA
             </div>
             <div style={{display:"flex", gap:6, marginTop:8}}>
-              <button onClick={handleConfirmMeals} style={{flex:1, padding:"6px 12px", background:C.lime, color:"#ffffff", fontWeight:800, borderRadius:6, fontSize:11, cursor:"pointer"}}>
+              <button onClick={handleConfirmMeals} style={{flex:1, padding:"6px 12px", background:C.lime, color:"#0c0e0b", fontWeight:800, borderRadius:6, fontSize:11, cursor:"pointer"}}>
                 Confirmar y Aplicar
               </button>
               <button onClick={handleCancelPreview} style={{padding:"6px 12px", background:"none", border:`1px solid ${C.line}`, color:C.muted, fontWeight:700, borderRadius:6, fontSize:11, cursor:"pointer"}}>
@@ -9971,7 +10737,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
               <button 
                 onClick={saveMeal}
                 style={{
-                  flex:1, padding:"8px 14px", background:C.lime, color:"#ffffff", border:"none",
+                  flex:1, padding:"8px 14px", background:C.lime, color:"#0c0e0b", border:"none",
                   borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"
                 }}
               >
@@ -9992,6 +10758,7 @@ const container = document.getElementById("root");
 if (container) {
   const root = createRoot(container);
   root.render(React.createElement(App));
+  window.dispatchEvent(new Event('load-completed'));
 }
 
 // Para testing (Jest / Node.js)

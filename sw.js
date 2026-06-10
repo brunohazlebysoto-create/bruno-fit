@@ -1,4 +1,4 @@
-const CACHE_NAME = "brunofit-cache-v2";
+const CACHE_NAME = "brunofit-cache-v4";
 const ASSETS = [
   "./index.html",
   "./style.css",
@@ -44,7 +44,9 @@ self.addEventListener("fetch", (e) => {
   }
   
   e.respondWith(
-    fetch(e.request)
+    // "no-store" evita que la caché HTTP del navegador sirva versiones viejas;
+    // la caché offline propia (CACHE_NAME) sigue siendo el respaldo sin red.
+    fetch(e.request, { cache: "no-store" })
       .then((res) => {
         // Clonar y guardar en caché el recurso más nuevo si la red funciona
         const resClone = res.clone();
