@@ -1759,6 +1759,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       suppsInventory: nextSuppsInventory,
       workoutDurations: nextWorkoutDurations,
       experiments: nextExperiments,
+      smartGoals: updates.smartGoals !== undefined ? updates.smartGoals : smartGoals,
+      challenges: updates.challenges !== undefined ? updates.challenges : challenges,
+      weeklyInsight: updates.weeklyInsight !== undefined ? updates.weeklyInsight : weeklyInsight,
+      upcomingEvent: updates.upcomingEvent !== undefined ? updates.upcomingEvent : upcomingEvent,
       updatedAt: updateTime
     };
 
@@ -2189,6 +2193,13 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       if (s.presetKey) { setPresetKey(s.presetKey); await saveKey("profile", { presetKey: s.presetKey }); }
       if (s.activeSplitKey) { setActiveSplitKey(s.activeSplitKey); await saveKey("active_split_key", s.activeSplitKey); }
       if (s.customPresets) { setCustomPresets(s.customPresets); await saveKey("custom_presets", s.customPresets); }
+      if (s.customSuggestions && Array.isArray(s.customSuggestions)) { setCustomSuggestions(s.customSuggestions); await saveKey("custom_suggestions", s.customSuggestions); }
+      if (s.chat && Array.isArray(s.chat) && s.chat.length > 0) { setChat(s.chat); await saveKey("chat", s.chat); }
+      if (s.experiments && Array.isArray(s.experiments)) { setExperiments(s.experiments); await saveKey("experiments", s.experiments); }
+      if (s.smartGoals && Array.isArray(s.smartGoals) && s.smartGoals.length > 0) { setSmartGoals(s.smartGoals); await saveKey("smart_goals", s.smartGoals); }
+      if (s.challenges && Array.isArray(s.challenges) && s.challenges.length > 0) { setChallenges(s.challenges); await saveKey("challenges", s.challenges); }
+      if (s.weeklyInsight) { setWeeklyInsight(s.weeklyInsight); await saveKey("weekly_insight", s.weeklyInsight); }
+      if (s.upcomingEvent) { setUpcomingEvent(s.upcomingEvent); await saveKey("upcoming_event", s.upcomingEvent); }
       if (s.updatedAt) await saveKey("last_local_update", s.updatedAt);
       return true;
     } catch(e) {
@@ -2203,7 +2214,9 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       exportedAt: new Date().toISOString(),
       notes, exlog, exercises, foodlog, waterlog, suppslog, metricslog,
       suppsInventory, workoutDurations, meals, splits, bodyComp,
-      shoppingList, presetKey, activeSplitKey, customPresets
+      shoppingList, presetKey, activeSplitKey, customPresets,
+      customSuggestions, chat, experiments, smartGoals, challenges,
+      weeklyInsight, upcomingEvent
     };
     const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
