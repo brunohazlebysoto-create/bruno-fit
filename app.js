@@ -11260,5 +11260,5 @@ if (container) {
 
 // Para testing (Jest / Node.js)
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { loadKey, default: App };
+  module.exports = { loadKey, saveKey, default: App };
 }

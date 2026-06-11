@@ -1,7 +1,59 @@
 import React from 'react';
 import { render, screen, act, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
-const { loadKey } = require('./app.js');
+const { loadKey, saveKey } = require('./app.js');
+
+describe('saveKey', () => {
+  let originalLocalStorage;
+
+  beforeAll(() => {
+    originalLocalStorage = global.localStorage;
+  });
+
+  afterAll(() => {
+    Object.defineProperty(global, 'localStorage', {
+      value: originalLocalStorage,
+      writable: true
+    });
+  });
+
+  beforeEach(() => {
+    delete global.window.storage;
+    Object.defineProperty(global, 'localStorage', {
+      value: {
+        setItem: jest.fn()
+      },
+      writable: true
+    });
+  });
+
+  test('saves value to localStorage if window.storage is not available', async () => {
+    await saveKey('testKey', 'testValue');
+    expect(global.localStorage.setItem).toHaveBeenCalledWith('testKey', JSON.stringify('testValue'));
+  });
+
+  test('saves value to window.storage if available', async () => {
+    global.window.storage = {
+      set: jest.fn().mockResolvedValue(true)
+    };
+    await saveKey('testKey', 'testValue');
+    expect(global.window.storage.set).toHaveBeenCalledWith('testKey', JSON.stringify('testValue'), false);
+    expect(global.localStorage.setItem).not.toHaveBeenCalled();
+  });
+
+  test('catches and logs error if saving fails', async () => {
+    const originalConsoleError = console.error;
+    console.error = jest.fn();
+    const error = new Error('Storage error');
+    global.localStorage.setItem.mockImplementation(() => { throw error; });
+
+    await saveKey('testKey', 'testValue');
+
+    expect(console.error).toHaveBeenCalledWith(error);
+
+    console.error = originalConsoleError;
+  });
+});
 
 describe('loadKey', () => {
   let originalLocalStorage;
