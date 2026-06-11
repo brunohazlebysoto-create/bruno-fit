@@ -18,16 +18,20 @@ jobs:
       - name: Deploy to Hugging Face Spaces
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          # El token de Hugging Face debe ser almacenado en los Secrets de tu repositorio de GitHub como HF_TOKEN.
         run: |
-          # Configurar identidad de git
           git config --global user.email "github-actions-bot@users.noreply.github.com"
           git config --global user.name "GitHub Actions Bot"
-          
-          # Agregar el repositorio de Hugging Face Spaces como un remote
-          # Se asume que el nombre del Space es "bruno-fit".
-          # Puedes cambiar el nombre si tu espacio se llama de otra forma en Hugging Face.
+
+          # Crear rama temporal sin archivos binarios LFS para HF
+          git checkout -b hf-deploy
+
+          # Eliminar archivos binarios que HF rechaza (PNG via LFS)
+          git lfs ls-files -n | xargs -I{} git rm --cached "{}" 2>/dev/null || true
+          find . -name "*.png" -not -path "./.git/*" | xargs git rm --cached 2>/dev/null || true
+
+          # Si hubo cambios, hacer commit
+          git diff --cached --quiet || git commit -m "chore: remove binary files for HF deployment"
+
+          # Push a Hugging Face
           git remote add hf https://user:$HF_TOKEN@huggingface.co/spaces/BrunoEduardo/bruno-fit
-          
-          # Empujar la rama actual (main) a la rama master de Hugging Face Spaces (que es la rama por defecto de los Spaces)
-          git push --force hf main:refs/heads/main
+          git push --force hf hf-deploy:main
