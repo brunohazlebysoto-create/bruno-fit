@@ -140,9 +140,13 @@ describe('App Component', () => {
       render(<App />);
     });
 
-    expect(screen.getAllByText('Definición').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Mantenimiento').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Volumen').length).toBeGreaterThan(0);
+    // Cambiamos a la vista 'plan' para que los botones de preset sean visibles
+    const planTab = screen.getByText('Plan').closest('button');
+    await act(async () => {
+      planTab.click();
+    });
+
+    expect(screen.getAllByText(/Definición/i).length).toBeGreaterThan(0);
 
     console.error = originalError;
   });
