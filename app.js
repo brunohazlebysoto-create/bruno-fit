@@ -1093,6 +1093,8 @@ export default function App(){
   const [supabaseUser, setSupabaseUser] = useState(null);
   const [sbSyncing, setSbSyncing] = useState(false);
   const [sbError, setSbError] = useState("");
+  const [sbAutoSyncStatus, setSbAutoSyncStatus] = useState(""); // "" | "saving" | "saved" | "error"
+  const sbFullSyncTimer = useRef(null);
 
   const target = customPresets[presetKey] || customPresets.personalizado || DEFAULT_PRESETS.personalizado;
 
@@ -1225,6 +1227,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
             const { data: { session } } = await client.auth.getSession();
             if (session?.user) {
               setSupabaseUser(session.user);
+              // Restaurar full_state desde Supabase si la nube es más reciente
+              setTimeout(() => loadFullStateFromSupabase(session.user.id), 1500);
             }
           } catch(e) {
             console.error("Error al obtener sesión de Supabase:", e);
@@ -1793,6 +1797,9 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     if (updates.experiments !== undefined) setExperiments(nextExperiments);
     if (updates.splits !== undefined) setSplits(nextSplits);
 
+    // Auto-sync completo a Supabase (full_state)
+    scheduleFullSupabaseSync(current);
+
     // Guardar nube
     if (cloudSync && syncCode && !syncCode.startsWith("bf-")) {
       setSyncStatus("Guardando...");
@@ -1955,10 +1962,12 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       if (error) throw error;
       if (data?.user) {
         setSupabaseUser(data.user);
-        // Sincronizar datos locales a la nube automáticamente
-        setTimeout(() => {
-          syncLocalToSupabase();
-        }, 1000);
+        // Primero intentar restaurar desde la nube (si hay datos más recientes)
+        const restored = await loadFullStateFromSupabase(data.user.id);
+        setSbError(restored ? "Datos restaurados desde la nube." : "Sesión iniciada. Sincronizando...");
+        if (!restored) {
+          setTimeout(() => syncLocalToSupabase(), 1000);
+        }
       }
     } catch(err) {
       console.error("Error al iniciar sesión en Supabase:", err);
@@ -2131,7 +2140,108 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     }
   };
 
-  const changePreset = (k) => { 
+  // ── Auto-sync completo a Supabase (debounced 5s) ──────────────────────────
+  const scheduleFullSupabaseSync = (stateBlob) => {
+    if (!supabase || !supabaseUser) return;
+    clearTimeout(sbFullSyncTimer.current);
+    setSbAutoSyncStatus("saving");
+    sbFullSyncTimer.current = setTimeout(async () => {
+      try {
+        const { error } = await supabase.from('profiles').upsert({
+          id: supabaseUser.id,
+          email: supabaseUser.email,
+          full_state: stateBlob,
+          updated_at: new Date().toISOString()
+        });
+        if (error) throw error;
+        setSbAutoSyncStatus("saved");
+        setTimeout(() => setSbAutoSyncStatus(""), 3000);
+      } catch(e) {
+        console.error("SB full-sync error:", e);
+        setSbAutoSyncStatus("error");
+      }
+    }, 5000);
+  };
+
+  // Restaura TODO el estado desde profiles.full_state (al hacer login en nuevo dispositivo)
+  const loadFullStateFromSupabase = async (userId) => {
+    try {
+      const { data, error } = await supabase.from('profiles').select('full_state, updated_at').eq('id', userId).single();
+      if (error || !data?.full_state) return false;
+      const s = data.full_state;
+      const localUpdatedAt = await loadKey("last_local_update", 0);
+      const cloudUpdatedAt = s.updatedAt || 0;
+      if (cloudUpdatedAt <= localUpdatedAt) return false; // local es más reciente
+      // Restaurar todo desde la nube
+      if (s.notes && Array.isArray(s.notes) && s.notes.length > 0) { setNotes(s.notes); await saveKey("notes", s.notes); }
+      if (s.exlog && Object.keys(s.exlog).length > 0) { setExlog(s.exlog); await saveKey("exlog", s.exlog); }
+      if (s.exercises && Object.keys(s.exercises).length > 0) { setExercises(s.exercises); await saveKey("exercises", s.exercises); }
+      if (s.foodlog && Object.keys(s.foodlog).length > 0) { setFoodlog(s.foodlog); await saveKey("foodlog", s.foodlog); }
+      if (s.waterlog && Object.keys(s.waterlog).length > 0) { setWaterlog(s.waterlog); await saveKey("waterlog", s.waterlog); }
+      if (s.suppslog && Object.keys(s.suppslog).length > 0) { setSuppslog(s.suppslog); await saveKey("suppslog", s.suppslog); }
+      if (s.metricslog && Object.keys(s.metricslog).length > 0) { setMetricslog(s.metricslog); await saveKey("metricslog", s.metricslog); }
+      if (s.suppsInventory && Object.keys(s.suppsInventory).length > 0) { setSuppsInventory(s.suppsInventory); await saveKey("supps_inventory", s.suppsInventory); }
+      if (s.workoutDurations && Object.keys(s.workoutDurations).length > 0) { setWorkoutDurations(s.workoutDurations); await saveKey("workout_durations", s.workoutDurations); }
+      if (s.meals && Array.isArray(s.meals) && s.meals.length > 0) { setMeals(s.meals); await saveKey("meals", s.meals); }
+      if (s.splits && Array.isArray(s.splits) && s.splits.length > 0) { setSplits(s.splits); await saveKey("training_splits", s.splits); }
+      if (s.bodyComp) { setBodyComp(s.bodyComp); await saveKey("body_comp", s.bodyComp); }
+      if (s.shoppingList) { setShoppingList(s.shoppingList); await saveKey("shopping_list", s.shoppingList); }
+      if (s.presetKey) { setPresetKey(s.presetKey); await saveKey("profile", { presetKey: s.presetKey }); }
+      if (s.activeSplitKey) { setActiveSplitKey(s.activeSplitKey); await saveKey("active_split_key", s.activeSplitKey); }
+      if (s.customPresets) { setCustomPresets(s.customPresets); await saveKey("custom_presets", s.customPresets); }
+      if (s.updatedAt) await saveKey("last_local_update", s.updatedAt);
+      return true;
+    } catch(e) {
+      console.error("loadFullState error:", e);
+      return false;
+    }
+  };
+
+  // Exportar todos los datos como JSON
+  const exportDataJSON = () => {
+    const snapshot = {
+      exportedAt: new Date().toISOString(),
+      notes, exlog, exercises, foodlog, waterlog, suppslog, metricslog,
+      suppsInventory, workoutDurations, meals, splits, bodyComp,
+      shoppingList, presetKey, activeSplitKey, customPresets
+    };
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `brunofit-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Importar datos desde JSON
+  const importDataJSON = (file) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const s = JSON.parse(e.target.result);
+        if (s.notes && Array.isArray(s.notes)) { setNotes(s.notes); await saveKey("notes", s.notes); }
+        if (s.exlog && typeof s.exlog === 'object') { setExlog(s.exlog); await saveKey("exlog", s.exlog); }
+        if (s.exercises && typeof s.exercises === 'object') { setExercises(s.exercises); await saveKey("exercises", s.exercises); }
+        if (s.foodlog && typeof s.foodlog === 'object') { setFoodlog(s.foodlog); await saveKey("foodlog", s.foodlog); }
+        if (s.waterlog && typeof s.waterlog === 'object') { setWaterlog(s.waterlog); await saveKey("waterlog", s.waterlog); }
+        if (s.suppslog && typeof s.suppslog === 'object') { setSuppslog(s.suppslog); await saveKey("suppslog", s.suppslog); }
+        if (s.metricslog && typeof s.metricslog === 'object') { setMetricslog(s.metricslog); await saveKey("metricslog", s.metricslog); }
+        if (s.suppsInventory && typeof s.suppsInventory === 'object') { setSuppsInventory(s.suppsInventory); await saveKey("supps_inventory", s.suppsInventory); }
+        if (s.workoutDurations && typeof s.workoutDurations === 'object') { setWorkoutDurations(s.workoutDurations); await saveKey("workout_durations", s.workoutDurations); }
+        if (s.meals && Array.isArray(s.meals)) { setMeals(s.meals); await saveKey("meals", s.meals); }
+        if (s.splits && Array.isArray(s.splits)) { setSplits(s.splits); await saveKey("training_splits", s.splits); }
+        if (s.bodyComp) { setBodyComp(s.bodyComp); await saveKey("body_comp", s.bodyComp); }
+        if (s.shoppingList) { setShoppingList(s.shoppingList); await saveKey("shopping_list", s.shoppingList); }
+        setSbError("Datos importados correctamente.");
+      } catch(err) {
+        setSbError("Error al importar: archivo inválido.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const changePreset = (k) => {
     setPresetKey(k);
     saveState({ presetKey: k });
   };
@@ -3325,6 +3435,9 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
             handleSbRegister={handleSbRegister}
             handleSbLogout={handleSbLogout}
             syncLocalToSupabase={syncLocalToSupabase}
+            exportDataJSON={exportDataJSON}
+            importDataJSON={importDataJSON}
+            sbAutoSyncStatus={sbAutoSyncStatus}
             changePreset={changePreset}
             presetKey={presetKey}
             customPresets={customPresets}
@@ -6141,6 +6254,9 @@ function Perfil({
   handleSbRegister,
   handleSbLogout,
   syncLocalToSupabase,
+  exportDataJSON,
+  importDataJSON,
+  sbAutoSyncStatus,
   changePreset,
   presetKey,
   customPresets,
@@ -6712,8 +6828,43 @@ function Perfil({
                 {sbError}
               </div>
             )}
+            {sbAutoSyncStatus === "saving" && (
+              <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 2 }}>Guardando en la nube…</div>
+            )}
+            {sbAutoSyncStatus === "saved" && (
+              <div style={{ fontSize: 10, color: "var(--accent-lime)", marginTop: 2 }}>Guardado en la nube ✓</div>
+            )}
           </div>
         )}
+      </div>
+
+      {/* Exportar / Importar datos */}
+      <div style={{ background: "var(--panel-bg-sec)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-ink)", letterSpacing: "0.05em" }}>COPIA DE SEGURIDAD</div>
+        <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.4 }}>
+          Exporta todos tus datos a un archivo JSON para guardarlos o pasarlos a otro dispositivo.
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            onClick={exportDataJSON}
+            className="btn-active-scale"
+            style={{ flex: 1, padding: "10px", background: "var(--accent-lime)", color: "#000", fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer" }}
+          >
+            Exportar JSON
+          </button>
+          <label
+            className="btn-active-scale"
+            style={{ flex: 1, padding: "10px", background: "var(--panel-bg)", border: "1px solid var(--line-color)", color: "var(--text-ink)", fontWeight: 700, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer", textAlign: "center" }}
+          >
+            Importar JSON
+            <input
+              type="file"
+              accept=".json"
+              style={{ display: "none" }}
+              onChange={e => { if (e.target.files[0]) importDataJSON(e.target.files[0]); }}
+            />
+          </label>
+        </div>
       </div>
 
     </div>
