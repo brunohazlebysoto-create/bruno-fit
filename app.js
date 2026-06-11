@@ -2038,7 +2038,19 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       const uId = supabaseUser.id;
       const uEmail = supabaseUser.email;
 
-      // 1. Sincronizar Perfil
+      // Antes de subir, verificar si la nube tiene datos más recientes
+      const localUpdatedAt = await loadKey("last_local_update", 0);
+      const { data: profileCheck } = await supabase.from('profiles').select('full_state').eq('id', uId).single();
+      const cloudUpdatedAt = profileCheck?.full_state?.updatedAt || 0;
+      if (cloudUpdatedAt > localUpdatedAt) {
+        // La nube es más reciente → restaurar en vez de sobreescribir
+        const restored = await loadFullStateFromSupabase(uId);
+        setSbSyncing(false);
+        setSbError(restored ? "Datos restaurados desde la nube (más recientes)." : "Sin cambios.");
+        return true;
+      }
+
+
       const { error: profErr } = await supabase.from('profiles').upsert({
         id: uId,
         email: uEmail,
