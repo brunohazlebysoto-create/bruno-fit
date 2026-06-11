@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - claude/ai-trainer-agent-window-arck0p
 
 jobs:
   deploy:
