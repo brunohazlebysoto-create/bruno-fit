@@ -30,7 +30,7 @@
   --z-base: 1;
   --z-nav: 100;
   --z-floating: 200;
-  --z-modal: 999;
+  --z-modal: 9999;
 
   --transition-fast: 150ms ease-in-out;
   --transition-layout: 300ms cubic-bezier(0.4, 0, 0.2, 1);

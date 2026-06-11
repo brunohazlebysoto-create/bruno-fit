@@ -1767,29 +1767,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       updatedAt: updateTime
     };
 
-    // Guardar local
-    if (updates.presetKey !== undefined) await saveKey("profile", { presetKey: updates.presetKey });
-    if (updates.customPresets !== undefined) await saveKey("custom_presets", updates.customPresets);
-    if (updates.notes !== undefined) await saveKey("notes", updates.notes);
-    if (updates.chat !== undefined) await saveKey("chat", updates.chat);
-    if (updates.exlog !== undefined) await saveKey("exlog", updates.exlog);
-    if (updates.exercises !== undefined) await saveKey("exercises", updates.exercises);
-    if (updates.bodyComp !== undefined) await saveKey("body_comp", updates.bodyComp);
-    if (updates.shoppingList !== undefined) await saveKey("shopping_list", updates.shoppingList);
-    if (updates.meals !== undefined) await saveKey("meals", updates.meals);
-    if (updates.customSuggestions !== undefined) await saveKey("custom_suggestions", updates.customSuggestions);
-    if (updates.activeSplitKey !== undefined) await saveKey("active_split_key", updates.activeSplitKey);
-    if (updates.experiments !== undefined) await saveKey("experiments", updates.experiments);
-    if (updates.splits !== undefined) await saveKey("training_splits", updates.splits);
-    
-    await saveKey("foodlog", nextFoodlog);
-    await saveKey("waterlog", nextWaterlog);
-    await saveKey("suppslog", nextSuppslog);
-    await saveKey("metricslog", nextMetricslog);
-    await saveKey("supps_inventory", nextSuppsInventory);
-    await saveKey("workout_durations", nextWorkoutDurations);
-    await saveKey("last_local_update", updateTime);
-
+    // Actualizar UI primero (feedback instantáneo), luego persistir
     if (updates.log !== undefined) setFoodlog(nextFoodlog);
     if (updates.water !== undefined) setWaterlog(nextWaterlog);
     if (updates.supplements !== undefined) setSuppslog(nextSuppslog);
@@ -1801,6 +1779,30 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     if (updates.customSuggestions !== undefined) setCustomSuggestions(nextCustomSuggestions);
     if (updates.experiments !== undefined) setExperiments(nextExperiments);
     if (updates.splits !== undefined) setSplits(nextSplits);
+
+    // Guardar local en paralelo (antes era secuencial: ~20 awaits encadenados)
+    const writes = [];
+    if (updates.presetKey !== undefined) writes.push(saveKey("profile", { presetKey: updates.presetKey }));
+    if (updates.customPresets !== undefined) writes.push(saveKey("custom_presets", updates.customPresets));
+    if (updates.notes !== undefined) writes.push(saveKey("notes", updates.notes));
+    if (updates.chat !== undefined) writes.push(saveKey("chat", updates.chat));
+    if (updates.exlog !== undefined) writes.push(saveKey("exlog", updates.exlog));
+    if (updates.exercises !== undefined) writes.push(saveKey("exercises", updates.exercises));
+    if (updates.bodyComp !== undefined) writes.push(saveKey("body_comp", updates.bodyComp));
+    if (updates.shoppingList !== undefined) writes.push(saveKey("shopping_list", updates.shoppingList));
+    if (updates.meals !== undefined) writes.push(saveKey("meals", updates.meals));
+    if (updates.customSuggestions !== undefined) writes.push(saveKey("custom_suggestions", updates.customSuggestions));
+    if (updates.activeSplitKey !== undefined) writes.push(saveKey("active_split_key", updates.activeSplitKey));
+    if (updates.experiments !== undefined) writes.push(saveKey("experiments", updates.experiments));
+    if (updates.splits !== undefined) writes.push(saveKey("training_splits", updates.splits));
+    writes.push(saveKey("foodlog", nextFoodlog));
+    writes.push(saveKey("waterlog", nextWaterlog));
+    writes.push(saveKey("suppslog", nextSuppslog));
+    writes.push(saveKey("metricslog", nextMetricslog));
+    writes.push(saveKey("supps_inventory", nextSuppsInventory));
+    writes.push(saveKey("workout_durations", nextWorkoutDurations));
+    writes.push(saveKey("last_local_update", updateTime));
+    await Promise.all(writes);
 
     // Auto-sync completo a Supabase (full_state)
     scheduleFullSupabaseSync(current);
@@ -2176,6 +2178,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       } catch(e) {
         console.error("SB full-sync error:", e);
         setSbAutoSyncStatus("error");
+      } finally {
+        sbFullSyncTimer.current = null;
       }
     }, 5000);
   };
@@ -2188,6 +2192,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     }
     sbPullIntervalRef.current = setInterval(async () => {
       try {
+        if (sbFullSyncTimer.current) return; // hay un push pendiente: no pisar con un pull
         const localTs = await loadKey("last_local_update", 0);
         const { data } = await supabase.from('profiles').select('full_state').eq('id', supabaseUser.id).single();
         const cloudTs = data?.full_state?.updatedAt || 0;
@@ -6937,8 +6942,8 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, exlog, exercises, no
     return calcMuscleVolumeBalance(exlog, exercises);
   }, [local, exlog, exercises]);
 
-  const weeklyLoad = local?.weeklyLoad || calcWeeklyTrainingLoad(exlog);
-  const deloadCheck = local?.deloadCheck || detectDeloadNeed(exlog, notes, metricslog);
+  const weeklyLoad = React.useMemo(() => local?.weeklyLoad || calcWeeklyTrainingLoad(exlog), [local, exlog]);
+  const deloadCheck = React.useMemo(() => local?.deloadCheck || detectDeloadNeed(exlog, notes, metricslog), [local, exlog, notes, metricslog]);
 
   const STATUS_COLORS = {
     neglected: { bg:"rgba(244,63,94,0.12)", border:"rgba(244,63,94,0.3)", text:"#f43f5e" },
