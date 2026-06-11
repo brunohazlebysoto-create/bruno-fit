@@ -1227,7 +1227,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
             const { data: { session } } = await client.auth.getSession();
             if (session?.user) {
               setSupabaseUser(session.user);
-              // Restaurar full_state desde Supabase si la nube es más reciente
+              setSbError(""); // limpiar cualquier error viejo al restaurar sesión
               setTimeout(() => loadFullStateFromSupabase(session.user.id), 1500);
             }
           } catch(e) {
@@ -2027,9 +2027,9 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     }
   };
 
-  const syncLocalToSupabase = async () => {
+  const syncLocalToSupabase = async (silent = false) => {
     if (!supabase || !supabaseUser) {
-      setSbError("Supabase no está inicializado o no hay sesión activa.");
+      if (!silent) setSbError("Supabase no está inicializado o no hay sesión activa.");
       return false;
     }
     setSbSyncing(true);
