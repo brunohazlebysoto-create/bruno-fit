@@ -2246,6 +2246,16 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         if (s.splits && Array.isArray(s.splits)) { setSplits(s.splits); await saveKey("training_splits", s.splits); }
         if (s.bodyComp) { setBodyComp(s.bodyComp); await saveKey("body_comp", s.bodyComp); }
         if (s.shoppingList) { setShoppingList(s.shoppingList); await saveKey("shopping_list", s.shoppingList); }
+        if (s.presetKey) { setPresetKey(s.presetKey); await saveKey("profile", { presetKey: s.presetKey }); }
+        if (s.activeSplitKey) { setActiveSplitKey(s.activeSplitKey); await saveKey("active_split_key", s.activeSplitKey); }
+        if (s.customPresets) { setCustomPresets(s.customPresets); await saveKey("custom_presets", s.customPresets); }
+        if (s.customSuggestions && Array.isArray(s.customSuggestions)) { setCustomSuggestions(s.customSuggestions); await saveKey("custom_suggestions", s.customSuggestions); }
+        if (s.chat && Array.isArray(s.chat)) { setChat(s.chat); await saveKey("chat", s.chat); }
+        if (s.experiments && Array.isArray(s.experiments)) { setExperiments(s.experiments); await saveKey("experiments", s.experiments); }
+        if (s.smartGoals && Array.isArray(s.smartGoals)) { setSmartGoals(s.smartGoals); await saveKey("smart_goals", s.smartGoals); }
+        if (s.challenges && Array.isArray(s.challenges)) { setChallenges(s.challenges); await saveKey("challenges", s.challenges); }
+        if (s.weeklyInsight) { setWeeklyInsight(s.weeklyInsight); await saveKey("weekly_insight", s.weeklyInsight); }
+        if (s.upcomingEvent) { setUpcomingEvent(s.upcomingEvent); await saveKey("upcoming_event", s.upcomingEvent); }
         setSbError("Datos importados correctamente.");
       } catch(err) {
         setSbError("Error al importar: archivo inválido.");
