@@ -39,7 +39,7 @@ def main():
     files_to_upload = [
         "index.html", "style.css", "app.js", 
         "manifest.json", "sw.js", 
-        "icon-192.png", "icon-512.png"
+        "icon-192.png", "icon-512.png", "README.md"
     ]
     
     for filename in files_to_upload:
