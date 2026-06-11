@@ -22,20 +22,25 @@ jobs:
         run: |
           git config --global user.email "github-actions-bot@users.noreply.github.com"
           git config --global user.name "GitHub Actions Bot"
-
-          # Deshabilitar LFS para que no interfiera con el push a HF
           git lfs uninstall --local 2>/dev/null || true
 
-          # Eliminar archivos binarios del disco y del index
+          # Crear rama huerfana = historial limpio (HF rechaza binarios en cualquier commit del historial)
+          git checkout --orphan hf-deploy
+
+          # Vaciar el index completamente
+          git rm -rf --cached . 2>/dev/null || true
+
+          # Borrar binarios del disco
           find . -name "*.png" -not -path "./.git/*" -delete
           find . -name "*.jpg" -not -path "./.git/*" -delete
           find . -name "*.ico" -not -path "./.git/*" -delete
-          git rm --cached $(git ls-files "*.png" "*.jpg" "*.ico") 2>/dev/null || true
 
-          # Commit con README y sin binarios
+          # Agregar todo lo que queda en disco (incluye README.md, app.js, style.css, etc.)
           git add -A
-          git diff --cached --quiet || git commit -m "deploy: remove binaries for HF"
 
-          # Push directo a HF (fetch-depth:0 evita "shallow update not allowed")
+          # Commit unico sin binarios
+          git commit -m "deploy"
+
+          # Push a HF (historial de 1 commit, sin binarios en ninguna parte)
           git remote add hf https://user:$HF_TOKEN@huggingface.co/spaces/BrunoEduardo/bruno-fit
           git push --force hf HEAD:main
