@@ -13,34 +13,43 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           lfs: false
 
-      - name: Deploy to Hugging Face Spaces
+      - name: Install huggingface_hub
+        run: pip install huggingface_hub
+
+      - name: Deploy via HF Hub API
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git config --global user.email "github-actions-bot@users.noreply.github.com"
-          git config --global user.name "GitHub Actions Bot"
-          git lfs uninstall --local 2>/dev/null || true
+          python3 << 'EOF'
+          import os
+          from huggingface_hub import HfApi
 
-          # Crear rama huerfana = historial limpio (HF rechaza binarios en cualquier commit del historial)
-          git checkout --orphan hf-deploy
+          api = HfApi(token=os.environ["HF_TOKEN"])
 
-          # Vaciar el index completamente
-          git rm -rf --cached . 2>/dev/null || true
-
-          # Borrar binarios del disco
-          find . -name "*.png" -not -path "./.git/*" -delete
-          find . -name "*.jpg" -not -path "./.git/*" -delete
-          find . -name "*.ico" -not -path "./.git/*" -delete
-
-          # Agregar todo lo que queda en disco (incluye README.md, app.js, style.css, etc.)
-          git add -A
-
-          # Commit unico sin binarios
-          git commit -m "deploy"
-
-          # Push a HF (historial de 1 commit, sin binarios en ninguna parte)
-          git remote add hf https://user:$HF_TOKEN@huggingface.co/spaces/BrunoEduardo/bruno-fit
-          git push --force hf HEAD:main
+          api.upload_folder(
+              folder_path=".",
+              repo_id="BrunoEduardo/bruno-fit",
+              repo_type="space",
+              ignore_patterns=[
+                  ".git/*",
+                  ".env",
+                  "*.png",
+                  "*.jpg",
+                  "*.ico",
+                  ".github/*",
+                  "node_modules/*",
+                  "__pycache__/*",
+                  "*.test.js",
+                  "jest*",
+                  "babel*",
+                  "package-lock.json",
+                  "schema.sql",
+                  "deploy_hf.py",
+              ],
+              commit_message="deploy: bruno-fit",
+          )
+          print("Deploy exitoso!")
+          EOF
