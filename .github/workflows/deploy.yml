@@ -27,7 +27,7 @@ jobs:
           # Agregar el repositorio de Hugging Face Spaces como un remote
           # Se asume que el nombre del Space es "bruno-fit".
           # Puedes cambiar el nombre si tu espacio se llama de otra forma en Hugging Face.
-          git remote add hf https://BrunoEduardo:$HF_TOKEN@huggingface.co/spaces/BrunoEduardo/bruno-fit
+          git remote add hf https://user:$HF_TOKEN@huggingface.co/spaces/BrunoEduardo/bruno-fit
           
           # Empujar la rama actual (main) a la rama master de Hugging Face Spaces (que es la rama por defecto de los Spaces)
           git push --force hf main:refs/heads/main
