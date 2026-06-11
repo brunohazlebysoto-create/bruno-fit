@@ -1580,7 +1580,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
             setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
             setShoppingList(cloudData.shoppingList || { categorias: [] });
             if (cloudData.meals && Array.isArray(cloudData.meals) && cloudData.meals.length > 0) setMeals(cloudData.meals);
-            setCustomSuggestions(cloudData.customSuggestions || []);
+            if (cloudData.customSuggestions && Array.isArray(cloudData.customSuggestions) && cloudData.customSuggestions.length > 0) setCustomSuggestions(cloudData.customSuggestions);
             setActiveSplitKey(cloudData.activeSplitKey || "A");
             if (Array.isArray(cloudData.splits)) {
               setSplits(cloudData.splits);
@@ -2384,7 +2384,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       setShoppingList(cloudData.shoppingList || { categorias: [] });
       if (cloudData.meals && Array.isArray(cloudData.meals) && cloudData.meals.length > 0) setMeals(cloudData.meals);
-      setCustomSuggestions(cloudData.customSuggestions || []);
+      if (cloudData.customSuggestions && Array.isArray(cloudData.customSuggestions) && cloudData.customSuggestions.length > 0) setCustomSuggestions(cloudData.customSuggestions);
       setActiveSplitKey(cloudData.activeSplitKey || "A");
       if (Array.isArray(cloudData.splits)) {
         setSplits(cloudData.splits);
@@ -2459,7 +2459,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       setShoppingList(cloudData.shoppingList || { categorias: [] });
       if (cloudData.meals && Array.isArray(cloudData.meals) && cloudData.meals.length > 0) setMeals(cloudData.meals);
-      setCustomSuggestions(cloudData.customSuggestions || []);
+      if (cloudData.customSuggestions && Array.isArray(cloudData.customSuggestions) && cloudData.customSuggestions.length > 0) setCustomSuggestions(cloudData.customSuggestions);
       setActiveSplitKey(cloudData.activeSplitKey || "A");
       if (Array.isArray(cloudData.splits)) {
         setSplits(cloudData.splits);
