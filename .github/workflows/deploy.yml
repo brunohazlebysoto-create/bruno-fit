@@ -22,17 +22,23 @@ jobs:
           git config --global user.email "github-actions-bot@users.noreply.github.com"
           git config --global user.name "GitHub Actions Bot"
 
-          # Desinstalar git-lfs para evitar que expanda los punteros al hacer push
-          git lfs uninstall 2>/dev/null || true
+          # Eliminar fisicamente los archivos binarios del disco
+          find . -name "*.png" -not -path "./.git/*" -delete
+          find . -name "*.jpg" -not -path "./.git/*" -delete
+          find . -name "*.ico" -not -path "./.git/*" -delete
 
-          # Eliminar archivos PNG del índice git (quedan como punteros LFS o no existen)
-          git rm --cached $(git ls-files "*.png") 2>/dev/null || true
-          git rm --cached $(git ls-files "*.jpg") 2>/dev/null || true
-          git rm --cached $(git ls-files "*.ico") 2>/dev/null || true
+          # Crear rama huerfana (sin historial) para evitar que HF encuentre binarios en commits anteriores
+          git checkout --orphan hf-deploy
 
-          # Commit solo si hay cambios staged
-          git diff --cached --quiet || git commit -m "chore: exclude binary files for HF deployment"
+          # Remover binarios del index
+          git rm --cached $(git ls-files "*.png" "*.jpg" "*.ico") 2>/dev/null || true
 
-          # Push a Hugging Face
+          # Agregar todo lo demas
+          git add -A
+
+          # Commit limpio
+          git commit -m "deploy: bruno-fit to Hugging Face Spaces"
+
+          # Push a HF
           git remote add hf https://user:$HF_TOKEN@huggingface.co/spaces/BrunoEduardo/bruno-fit
-          git push --force hf HEAD:refs/heads/main
+          git push --force hf hf-deploy:main
