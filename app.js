@@ -1554,10 +1554,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         if (cloudData && cloudData.updatedAt) {
           const localLastUpdate = await loadKey("last_local_update", 0);
           if (cloudData.updatedAt > localLastUpdate) {
-            const nextFoodlog = cloudData.foodlog || {};
-            const nextWaterlog = cloudData.waterlog || {};
-            const nextSuppslog = cloudData.suppslog || {};
-            const nextMetricslog = cloudData.metricslog || {};
+            const nextFoodlog = (cloudData.foodlog && Object.keys(cloudData.foodlog).length > 0) ? cloudData.foodlog : undefined;
+            const nextWaterlog = (cloudData.waterlog && Object.keys(cloudData.waterlog).length > 0) ? cloudData.waterlog : undefined;
+            const nextSuppslog = (cloudData.suppslog && Object.keys(cloudData.suppslog).length > 0) ? cloudData.suppslog : undefined;
+            const nextMetricslog = (cloudData.metricslog && Object.keys(cloudData.metricslog).length > 0) ? cloudData.metricslog : undefined;
             const nextSuppsInventory = cloudData.suppsInventory || {
               "Creatina": { active: true, servingsLeft: 60, totalServings: 60 },
               "Whey Protein": { active: true, servingsLeft: 30, totalServings: 30 }
@@ -1575,17 +1575,17 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
             setExercises(cloudData.exercises || seedExercises());
             setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
             setShoppingList(cloudData.shoppingList || { categorias: [] });
-            setMeals(cloudData.meals || DEFAULT_MEALS);
+            if (cloudData.meals && Array.isArray(cloudData.meals) && cloudData.meals.length > 0) setMeals(cloudData.meals);
             setCustomSuggestions(cloudData.customSuggestions || []);
             setActiveSplitKey(cloudData.activeSplitKey || "A");
             if (Array.isArray(cloudData.splits)) {
               setSplits(cloudData.splits);
             }
 
-            setFoodlog(nextFoodlog);
-            setWaterlog(nextWaterlog);
-            setSuppslog(nextSuppslog);
-            setMetricslog(nextMetricslog);
+            if (nextFoodlog !== undefined) setFoodlog(nextFoodlog);
+            if (nextWaterlog !== undefined) setWaterlog(nextWaterlog);
+            if (nextSuppslog !== undefined) setSuppslog(nextSuppslog);
+            if (nextMetricslog !== undefined) setMetricslog(nextMetricslog);
             setSuppsInventory(nextSuppsInventory);
             setWorkoutDurations(nextWorkoutDurations);
 
@@ -1600,17 +1600,17 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
             await saveKey("exercises", cloudData.exercises || seedExercises());
             await saveKey("body_comp", cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
             await saveKey("shopping_list", cloudData.shoppingList || { categorias: [] });
-            await saveKey("meals", cloudData.meals || DEFAULT_MEALS);
+            if (cloudData.meals && Array.isArray(cloudData.meals) && cloudData.meals.length > 0) await saveKey("meals", cloudData.meals);
             await saveKey("custom_suggestions", cloudData.customSuggestions || []);
             await saveKey("active_split_key", cloudData.activeSplitKey || "A");
             if (Array.isArray(cloudData.splits)) {
               await saveKey("training_splits", cloudData.splits);
             }
-            
-            await saveKey("foodlog", nextFoodlog);
-            await saveKey("waterlog", nextWaterlog);
-            await saveKey("suppslog", nextSuppslog);
-            await saveKey("metricslog", nextMetricslog);
+
+            if (nextFoodlog !== undefined) await saveKey("foodlog", nextFoodlog);
+            if (nextWaterlog !== undefined) await saveKey("waterlog", nextWaterlog);
+            if (nextSuppslog !== undefined) await saveKey("suppslog", nextSuppslog);
+            if (nextMetricslog !== undefined) await saveKey("metricslog", nextMetricslog);
             await saveKey("supps_inventory", nextSuppsInventory);
             await saveKey("workout_durations", nextWorkoutDurations);
             await saveKey("last_local_update", cloudData.updatedAt);
@@ -2161,7 +2161,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       setSyncStatus("Sincronizando...");
       const today = new Date().toISOString().slice(0,10);
       const updateTime = Date.now();
-      const current = { presetKey, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, updatedAt: updateTime };
+      const current = { presetKey, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, updatedAt: updateTime };
       try {
         await pushStateToCloud(syncCode, current);
         setSyncStatus("Sincronizado");
@@ -2202,7 +2202,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         
         const today = new Date().toISOString().slice(0,10);
         const updateTime = Date.now();
-        const current = { presetKey, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, updatedAt: updateTime };
+        const current = { presetKey, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, updatedAt: updateTime };
         try {
           await pushStateToCloud(code, current);
           setSyncStatus("Sincronizado");
@@ -2250,17 +2250,17 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       setSupplements(finalSupplements);
       setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       setShoppingList(cloudData.shoppingList || { categorias: [] });
-      setMeals(cloudData.meals || DEFAULT_MEALS);
+      if (cloudData.meals && Array.isArray(cloudData.meals) && cloudData.meals.length > 0) setMeals(cloudData.meals);
       setCustomSuggestions(cloudData.customSuggestions || []);
       setActiveSplitKey(cloudData.activeSplitKey || "A");
       if (Array.isArray(cloudData.splits)) {
         setSplits(cloudData.splits);
       }
-      
-      setFoodlog(cloudData.foodlog || {});
-      setWaterlog(cloudData.waterlog || {});
-      setSuppslog(cloudData.suppslog || {});
-      setMetricslog(cloudData.metricslog || {});
+
+      if (cloudData.foodlog && Object.keys(cloudData.foodlog).length > 0) setFoodlog(cloudData.foodlog);
+      if (cloudData.waterlog && Object.keys(cloudData.waterlog).length > 0) setWaterlog(cloudData.waterlog);
+      if (cloudData.suppslog && Object.keys(cloudData.suppslog).length > 0) setSuppslog(cloudData.suppslog);
+      if (cloudData.metricslog && Object.keys(cloudData.metricslog).length > 0) setMetricslog(cloudData.metricslog);
       setSuppsInventory(cloudData.suppsInventory || {
         "Creatina": { active: true, servingsLeft: 60, totalServings: 60 },
         "Whey Protein": { active: true, servingsLeft: 30, totalServings: 30 }
@@ -2278,17 +2278,17 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       await saveKey(suppsKey(), finalSupplements);
       await saveKey("body_comp", cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       await saveKey("shopping_list", cloudData.shoppingList || { categorias: [] });
-      await saveKey("meals", cloudData.meals || DEFAULT_MEALS);
+      if (cloudData.meals && Array.isArray(cloudData.meals) && cloudData.meals.length > 0) await saveKey("meals", cloudData.meals);
       await saveKey("custom_suggestions", cloudData.customSuggestions || []);
       await saveKey("active_split_key", cloudData.activeSplitKey || "A");
       if (Array.isArray(cloudData.splits)) {
         await saveKey("training_splits", cloudData.splits);
       }
-      
-      await saveKey("foodlog", cloudData.foodlog || {});
-      await saveKey("waterlog", cloudData.waterlog || {});
-      await saveKey("suppslog", cloudData.suppslog || {});
-      await saveKey("metricslog", cloudData.metricslog || {});
+
+      if (cloudData.foodlog && Object.keys(cloudData.foodlog).length > 0) await saveKey("foodlog", cloudData.foodlog);
+      if (cloudData.waterlog && Object.keys(cloudData.waterlog).length > 0) await saveKey("waterlog", cloudData.waterlog);
+      if (cloudData.suppslog && Object.keys(cloudData.suppslog).length > 0) await saveKey("suppslog", cloudData.suppslog);
+      if (cloudData.metricslog && Object.keys(cloudData.metricslog).length > 0) await saveKey("metricslog", cloudData.metricslog);
       await saveKey("supps_inventory", cloudData.suppsInventory || {
         "Creatina": { active: true, servingsLeft: 60, totalServings: 60 },
         "Whey Protein": { active: true, servingsLeft: 30, totalServings: 30 }
@@ -2325,17 +2325,17 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       setSupplements(finalSupplements);
       setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       setShoppingList(cloudData.shoppingList || { categorias: [] });
-      setMeals(cloudData.meals || DEFAULT_MEALS);
+      if (cloudData.meals && Array.isArray(cloudData.meals) && cloudData.meals.length > 0) setMeals(cloudData.meals);
       setCustomSuggestions(cloudData.customSuggestions || []);
       setActiveSplitKey(cloudData.activeSplitKey || "A");
       if (Array.isArray(cloudData.splits)) {
         setSplits(cloudData.splits);
       }
-      
-      setFoodlog(cloudData.foodlog || {});
-      setWaterlog(cloudData.waterlog || {});
-      setSuppslog(cloudData.suppslog || {});
-      setMetricslog(cloudData.metricslog || {});
+
+      if (cloudData.foodlog && Object.keys(cloudData.foodlog).length > 0) setFoodlog(cloudData.foodlog);
+      if (cloudData.waterlog && Object.keys(cloudData.waterlog).length > 0) setWaterlog(cloudData.waterlog);
+      if (cloudData.suppslog && Object.keys(cloudData.suppslog).length > 0) setSuppslog(cloudData.suppslog);
+      if (cloudData.metricslog && Object.keys(cloudData.metricslog).length > 0) setMetricslog(cloudData.metricslog);
       setSuppsInventory(cloudData.suppsInventory || {
         "Creatina": { active: true, servingsLeft: 60, totalServings: 60 },
         "Whey Protein": { active: true, servingsLeft: 30, totalServings: 30 }
@@ -2353,17 +2353,17 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       await saveKey(suppsKey(), finalSupplements);
       await saveKey("body_comp", cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       await saveKey("shopping_list", cloudData.shoppingList || { categorias: [] });
-      await saveKey("meals", cloudData.meals || DEFAULT_MEALS);
+      if (cloudData.meals && Array.isArray(cloudData.meals) && cloudData.meals.length > 0) await saveKey("meals", cloudData.meals);
       await saveKey("custom_suggestions", cloudData.customSuggestions || []);
       await saveKey("active_split_key", cloudData.activeSplitKey || "A");
       if (Array.isArray(cloudData.splits)) {
         await saveKey("training_splits", cloudData.splits);
       }
-      
-      await saveKey("foodlog", cloudData.foodlog || {});
-      await saveKey("waterlog", cloudData.waterlog || {});
-      await saveKey("suppslog", cloudData.suppslog || {});
-      await saveKey("metricslog", cloudData.metricslog || {});
+
+      if (cloudData.foodlog && Object.keys(cloudData.foodlog).length > 0) await saveKey("foodlog", cloudData.foodlog);
+      if (cloudData.waterlog && Object.keys(cloudData.waterlog).length > 0) await saveKey("waterlog", cloudData.waterlog);
+      if (cloudData.suppslog && Object.keys(cloudData.suppslog).length > 0) await saveKey("suppslog", cloudData.suppslog);
+      if (cloudData.metricslog && Object.keys(cloudData.metricslog).length > 0) await saveKey("metricslog", cloudData.metricslog);
       await saveKey("supps_inventory", cloudData.suppsInventory || {
         "Creatina": { active: true, servingsLeft: 60, totalServings: 60 },
         "Whey Protein": { active: true, servingsLeft: 30, totalServings: 30 }
@@ -4219,14 +4219,32 @@ function AddFood({
           </button>
           <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onPhotoUpload} style={{ display: "none" }}/>
         </div>
-        {err && <div style={{ color: "var(--accent-red)", fontSize: 12 }}>{err}</div>}
+        {err && (
+          <div style={{ fontSize: 12, color: "var(--accent-red)", background:"rgba(244,63,94,0.08)", border:"1px solid rgba(244,63,94,0.2)", borderRadius:8, padding:"10px 12px" }}>
+            {err}
+            <div style={{ marginTop:8 }}>
+              <button onClick={handleAddCustomItem} style={{ background:"rgba(205,255,74,0.1)", border:"1px solid rgba(205,255,74,0.3)", borderRadius:8, padding:"7px 14px", color:"var(--accent-primary)", fontWeight:700, fontSize:12, cursor:"pointer" }}>
+                + Añadir manualmente sin IA
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Resultados IA */}
         <div style={{ marginTop: 8 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <span style={{ fontSize: 16, fontWeight: 800, color: "var(--text-ink)" }}>Resultados IA</span>
-            <button onClick={handleAddCustomItem} style={{ background: "none", border: "none", color: "var(--accent-primary)", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>+ Añadir otro</button>
+            <span style={{ fontSize: 16, fontWeight: 800, color: "var(--text-ink)" }}>{aiParsedResults.length > 0 ? "Resultados IA" : "Añadir alimentos"}</span>
+            <button onClick={handleAddCustomItem} style={{ background: "none", border: "none", color: "var(--accent-primary)", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>+ Añadir manual</button>
           </div>
+          {aiParsedResults.length === 0 && !err && (
+            <div style={{ textAlign:"center", padding:"20px 0", color:"var(--text-muted)", fontSize:13 }}>
+              <div style={{ marginBottom:10 }}>Describe tu comida arriba y toca "Analizar con IA",</div>
+              <div style={{ marginBottom:16 }}>o agrega un alimento manualmente:</div>
+              <button onClick={handleAddCustomItem} style={{ background:"rgba(205,255,74,0.1)", border:"1px solid rgba(205,255,74,0.3)", borderRadius:10, padding:"10px 20px", color:"var(--accent-primary)", fontWeight:700, fontSize:13, cursor:"pointer" }}>
+                + Añadir alimento manualmente
+              </button>
+            </div>
+          )}
 
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {aiParsedResults.map((item, idx) => (
