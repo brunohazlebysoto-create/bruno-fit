@@ -1095,6 +1095,7 @@ export default function App(){
   const [sbError, setSbError] = useState("");
   const [sbAutoSyncStatus, setSbAutoSyncStatus] = useState(""); // "" | "saving" | "saved" | "error"
   const sbFullSyncTimer = useRef(null);
+  const sbPullIntervalRef = useRef(null);
 
   const target = customPresets[presetKey] || customPresets.personalizado || DEFAULT_PRESETS.personalizado;
 
@@ -2178,6 +2179,27 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       }
     }, 5000);
   };
+
+  // Pull automático cada 60s: si la nube tiene datos más recientes los restaura silenciosamente
+  useEffect(() => {
+    if (!supabase || !supabaseUser) {
+      clearInterval(sbPullIntervalRef.current);
+      return;
+    }
+    sbPullIntervalRef.current = setInterval(async () => {
+      try {
+        const localTs = await loadKey("last_local_update", 0);
+        const { data } = await supabase.from('profiles').select('full_state').eq('id', supabaseUser.id).single();
+        const cloudTs = data?.full_state?.updatedAt || 0;
+        if (cloudTs > localTs) {
+          await loadFullStateFromSupabase(supabaseUser.id);
+          setSbAutoSyncStatus("saved");
+          setTimeout(() => setSbAutoSyncStatus(""), 3000);
+        }
+      } catch(e) { /* silencioso */ }
+    }, 60000);
+    return () => clearInterval(sbPullIntervalRef.current);
+  }, [supabaseUser]);
 
   // Restaura TODO el estado desde profiles.full_state (al hacer login en nuevo dispositivo)
   const loadFullStateFromSupabase = async (userId) => {
