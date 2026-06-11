@@ -13,7 +13,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           lfs: false
 
       - name: Deploy to Hugging Face Spaces
@@ -22,6 +22,9 @@ jobs:
         run: |
           git config --global user.email "github-actions-bot@users.noreply.github.com"
           git config --global user.name "GitHub Actions Bot"
+
+          # Deshabilitar LFS para que no interfiera con el push a HF
+          git lfs uninstall --local 2>/dev/null || true
 
           # Eliminar archivos binarios del disco y del index
           find . -name "*.png" -not -path "./.git/*" -delete
@@ -33,6 +36,6 @@ jobs:
           git add -A
           git diff --cached --quiet || git commit -m "deploy: remove binaries for HF"
 
-          # Push directo a HF (sin orphan, para que README quede bien incluido)
+          # Push directo a HF (fetch-depth:0 evita "shallow update not allowed")
           git remote add hf https://user:$HF_TOKEN@huggingface.co/spaces/BrunoEduardo/bruno-fit
           git push --force hf HEAD:main
