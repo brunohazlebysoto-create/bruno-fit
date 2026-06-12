@@ -22,6 +22,7 @@ const DEFAULT_SPLITS = [
   { key:"B", name:"Pierna Cuádriceps + Hombros", fuel:"Carbo alto", ex:["Sentadilla","Prensa 45°","Sentadilla búlgara","Sentadilla ciclista Smith","Extensión cuádriceps","Press Arnold","Vuelos laterales","Vuelos posteriores polea"] },
   { key:"C", name:"Espalda + Tríceps", fuel:"Carbo medio-alto", ex:["Dominadas / Jalón","Remo barra","Remo máquina","Pullover polea","Face pull","Press cerrado","Extensión polea","Extensión sobre cabeza"] },
   { key:"D", name:"Pierna Posterior", fuel:"Carbo alto", ex:["Peso muerto","Leg curl sentado","Puente glúteos","Estocada atrás Smith"] },
+  { key:"E", name:"100% Suelo y Cero Espacio", fuel:"Carbo bajo-medio", ex:["Sentadillas con pulso","Flexiones de brazos","Remo Delfín","Curl con Auto-Resistencia"] },
 ];
 
 const MUSCLES = {
@@ -51,6 +52,10 @@ const MUSCLES = {
   "Leg curl sentado":["Isquios"],
   "Puente glúteos":["Glúteos"],
   "Estocada atrás Smith":["Glúteos","Cuádriceps","Isquios"],
+  "Sentadillas con pulso":["Cuádriceps","Glúteos","Isquios"],
+  "Flexiones de brazos":["Pectoral","Tríceps","Deltoide ant."],
+  "Remo Delfín":["Espalda","Deltoides"],
+  "Curl con Auto-Resistencia":["Bíceps"],
 };
 
 const DEFAULT_MEALS = [
