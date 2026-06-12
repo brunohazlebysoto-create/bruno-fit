@@ -534,6 +534,49 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
   throw lastError || new Error("No se pudo conectar con ninguna API Key.");
 }
 
+async function callGeminiStream(messages, systemInstruction, onChunk) {
+  let apiKeysStr = await loadKey("gemini_api_key", "");
+  const apiKeys = apiKeysStr ? apiKeysStr.split(/[,;\s]+/).map(k => k.trim()).filter(k => k && !k.startsWith("sk-or-")) : [];
+  const defaultKeys = DEFAULT_GEMINI_KEY.split(/[,;\s]+/).map(k => k.trim()).filter(k => k && !k.startsWith("sk-or-"));
+  defaultKeys.forEach(dk => { if (!apiKeys.includes(dk)) apiKeys.push(dk); });
+  if (apiKeys.length === 0) { return callGemini(messages, systemInstruction); }
+  const apiKey = apiKeys[Math.floor(Math.random() * apiKeys.length)];
+
+  const contents = messages.map(m => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }]
+  }));
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?alt=sse&key=${apiKey}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents,
+      systemInstruction: { parts: [{ text: systemInstruction }] },
+      generationConfig: { temperature: 0.3 }
+    })
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let full = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    const lines = chunk.split("\n");
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        const json = JSON.parse(line.slice(6));
+        const text = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        if (text) { full += text; onChunk(full); }
+      } catch (_) {}
+    }
+  }
+  return full;
+}
+
 const SEED_TECNICO = {
   "Press banca":"Press de pectoral con barra plano",
   "Press inclinado mancuerna":"Press de pectoral inclinado con mancuernas",
@@ -1040,6 +1083,8 @@ export default function App(){
   const [showTrainerAgent, setShowTrainerAgent] = useState(false);
   const [trainerAgentData, setTrainerAgentData] = useState(null);
   const [trainerAgentBusy, setTrainerAgentBusy] = useState(false);
+  const [coachPersonality, setCoachPersonality] = useState("técnico");
+  const [chatStreaming, setChatStreaming] = useState("");
   const [showFocusMode, setShowFocusMode] = useState(false);
 
   // Elevated Calendar States & Helpers
@@ -2660,9 +2705,11 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     const todayProtein = todayLog.reduce((s,e)=>s+(+e.proteina||0),0);
     const todayHasWorkout = Object.values(eLog||{}).some(sets=>(sets||[]).some(s=>s?.date?.slice(0,10)===todayStr));
     let msg = null;
+    const remKcal = (tgt?.kcal||2200) - todayKcal;
     if (hour>=7&&hour<=9&&todayKcal<100) msg={icon:"🌅",text:`Buenos días! Objetivo: ${tgt?.kcal||2200} kcal · ${tgt?.p||180}g proteína. Registra tu desayuno.`};
     else if (hour>=12&&hour<=13&&todayKcal<400) msg={icon:"🍽️",text:`Son las ${hour}:00h y llevas solo ${todayKcal} kcal. Come bien antes del entreno.`};
     else if (hour>=17&&hour<=19&&!todayHasWorkout&&todayKcal>200) msg={icon:"💪",text:`¿Ya entrenaste? Llevas ${todayProtein}g de ${tgt?.p||180}g proteína objetivo.`};
+    else if (hour>=21&&hour<23&&remKcal>300) msg={icon:"🌙",text:`Faltan ${remKcal} kcal para cerrar el día. ¿Ya cenaste? Ve a la pestaña Hoy para pedir sugerencias de cena.`};
     else if (hour>=21&&todayProtein<(tgt?.p||180)*0.7) msg={icon:"🥛",text:`Cierre del día: ${todayProtein}g de ${tgt?.p||180}g proteína. Un batido antes de dormir te ayuda.`};
     setProactiveMsg(msg);
   };
@@ -3174,7 +3221,8 @@ ${todayWorkout}
 ${workoutHistory}
 --- FIN HISTORIAL ---
 
-Español, directo, técnico y motivador. Usa el historial para dar recomendaciones personalizadas y basadas en datos reales (PRs, progresión, volumen). Si detectás estancamiento o regresión en algún ejercicio, mencionalo proactivamente.
+Español. ${coachPersonality==="motivacional" ? "Tono motivacional, empático y energético. Celebra logros, usa frases inspiradoras, motiva a Bruno a superar sus límites." : coachPersonality==="nutricionista" ? "Enfócate principalmente en nutrición, timing de comidas, macros y estrategias alimentarias. Profundiza en el aspecto nutricional sobre el entrenamiento." : coachPersonality==="psicólogo" ? "Tono empático, comprensivo y de apoyo. Atiende el aspecto mental y emocional del fitness. Ayuda a manejar el estrés, la motivación y los hábitos." : "Directo, técnico y basado en datos. Prioriza análisis de progresión, volumen, PRs y optimización del rendimiento."}
+Usa el historial para dar recomendaciones personalizadas y basadas en datos reales (PRs, progresión, volumen). Si detectás estancamiento o regresión en algún ejercicio, mencionalo proactivamente.
 REGLA DE CALCULADORA INVERSA: Si Bruno te pregunta qué cenar o comer para cerrar el día o cómo completar sus macros restantes (ej. 'me quedan 600 calorías y 50g de proteína...'), calcula con precisión matemática una combinación rápida de alimentos (ej. claras, huevo entero, gramos exactos de pechuga de pollo, scoop de whey) para cuadrar sus números de forma exacta.
 REGLA CRÍTICA DE PORCIONES E INGREDIENTES: Cuando recomiendes porciones, alimentos o comidas en el chat, debes ajustar estrictamente las porciones (detallando gramos exactos) al plan nutricional seleccionado por Bruno (${target.label}) y a las necesidades energéticas del split del día (${activeSplit.fuel}). No recomiendes las mismas porciones por defecto. Si está en "Volumen" o día de "Carbo alto", propón porciones abundantes de carbohidratos. Si está en "Definición" o día de "Carbo medio", sé sumamente estricto y reduce las porciones de carbohidratos, sugiriendo fuentes de proteína magra más saciantes.
 REGLA DE DATOS NUTRICIONALES DE REFERENCIA: Para calcular calorías y macronutrientes de los alimentos registrados (ADD_FOOD) o recomendados en el chat, debes basar tus cálculos estrictamente en bases de datos nutricionales oficiales y verificadas (como USDA FoodData Central o tablas locales de Latinoamérica/Chile). No inventes ni alucines valores; asegúrate de que todas las estimaciones por porción/gramaje sean científicamente coherentes con estas fuentes oficiales.
@@ -3189,12 +3237,20 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
 * En 'data', proporciona: 'splits' (arreglo que contiene la estructura COMPLETA de todos los días de entrenamiento, cada uno con key, name, fuel y ex).
       Ejercicios válidos para ADD_SET: ${exerciseNamesStr}.`;
       
-      const out = await callGemini(nextChat.slice(-12), sys, COACH_SCHEMA);
+      setChatStreaming("");
+      const [out, streamedText] = await Promise.all([
+        callGemini(nextChat.slice(-12), sys, COACH_SCHEMA),
+        callGeminiStream(
+          nextChat.slice(-12),
+          sys + "\nResponde SOLO con texto conversacional en español. No uses formato JSON.",
+          (partial) => setChatStreaming(partial)
+        ).catch(() => "")
+      ]);
+      setChatStreaming("");
       const parsed = cleanAndParseJSON(out);
-      
-      if (parsed.actions && parsed.actions.length > 0) {
+
+      if (parsed && parsed.actions && parsed.actions.length > 0) {
         handleCoachActions(parsed.actions);
-        // Si registró ejercicios, análisis automático de la sesión
         const hasNewSets = parsed.actions.some(a => a.type === 'ADD_SET');
         if (hasNewSets) {
           setTimeout(() => {
@@ -3202,8 +3258,8 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
           }, 1500);
         }
       }
-      
-      const finalChat = [...nextChat, { role: "assistant", content: parsed.chatResponse || "..." }];
+
+      const finalChat = [...nextChat, { role: "assistant", content: (parsed && parsed.chatResponse) || streamedText || "..." }];
       setChat(finalChat);
       await saveState({ chat: finalChat });
     } catch(e) {
@@ -3469,17 +3525,26 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
             addFoodInputText={addFoodInputText}
             setAddFoodInputText={setAddFoodInputText}
             customSuggestions={customSuggestions}
+            exlog={exlog}
+            notes={notes}
+            foodlog={foodlog}
           />
         )}
         {view === "coach" && (
-          <Coach 
-            chat={chat} 
-            setChat={(c) => { setChat(c); saveState({ chat: c }); }} 
-            target={target} 
-            totals={totals} 
+          <Coach
+            chat={chat}
+            setChat={(c) => { setChat(c); saveState({ chat: c }); }}
+            target={target}
+            totals={totals}
             sendCoachMessage={sendCoachMessage}
             chatBusy={chatBusy}
+            chatStreaming={chatStreaming}
             sendDailyGreetingIfNeeded={sendDailyGreetingIfNeeded}
+            coachPersonality={coachPersonality}
+            setCoachPersonality={setCoachPersonality}
+            metricslog={metricslog}
+            foodlog={foodlog}
+            exlog={exlog}
           />
         )}
         {view === "entreno" && (
@@ -4753,12 +4818,82 @@ function EditEntry({
   );
 }
 
+function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr) {
+  let score = 5;
+  const factors = [];
+
+  // Factor 1: Rest days since last workout
+  const today = selectedDateStr || new Date().toISOString().slice(0, 10);
+  let lastWorkoutDate = null;
+  Object.values(exlog || {}).forEach(sets => {
+    (sets || []).forEach(s => {
+      if (s?.date) {
+        const d = s.date.slice(0, 10);
+        if (d < today && (!lastWorkoutDate || d > lastWorkoutDate)) {
+          lastWorkoutDate = d;
+        }
+      }
+    });
+  });
+  let restDays = 0;
+  if (lastWorkoutDate) {
+    const diff = (new Date(today) - new Date(lastWorkoutDate)) / 86400000;
+    restDays = Math.floor(diff);
+  } else {
+    restDays = 7;
+  }
+  if (restDays === 0) { score -= 1; factors.push("Entrenaste ayer"); }
+  else if (restDays === 1) { score += 0.5; factors.push("1 día de descanso"); }
+  else if (restDays >= 2 && restDays <= 3) { score += 1.5; factors.push(`${restDays} días de descanso`); }
+  else if (restDays > 3) { score += 0.5; factors.push("Descanso prolongado"); }
+
+  // Factor 2: Hydration
+  const waterGoal = 14;
+  const hydPct = Math.min(1, (water || 0) / waterGoal);
+  if (hydPct >= 0.85) { score += 1.5; factors.push("Bien hidratado"); }
+  else if (hydPct >= 0.6) { score += 0.5; factors.push("Hidratación aceptable"); }
+  else if (hydPct < 0.4) { score -= 1.5; factors.push("Baja hidratación"); }
+
+  // Factor 3: Recent fatigue notes (last 7 days)
+  const fatigueKeywords = ["fatiga", "cansado", "cansada", "dolor", "agotado", "agotada"];
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const recentFatigueCount = (notes || []).filter(n => {
+    if (!n?.date) return false;
+    const nDate = (n.date || "").slice(0, 10);
+    if (nDate < weekAgo) return false;
+    const text = (n.text || "").toLowerCase();
+    return fatigueKeywords.some(k => text.includes(k));
+  }).length;
+  if (recentFatigueCount >= 3) { score -= 2; factors.push("Alta fatiga reciente"); }
+  else if (recentFatigueCount >= 1) { score -= 1; factors.push("Fatiga leve anotada"); }
+
+  // Factor 4: Yesterday's caloric intake
+  const yesterday = new Date(new Date(today).getTime() - 86400000).toISOString().slice(0, 10);
+  const yesterdayLog = (foodlog || {})[yesterday] || [];
+  const yesterdayKcal = yesterdayLog.reduce((a, e) => a + (+e.kcal || 0), 0);
+  if (yesterdayKcal > 0) {
+    if (yesterdayKcal >= 2200) { score += 1; factors.push("Buena carga calórica ayer"); }
+    else if (yesterdayKcal < 1500) { score -= 0.5; factors.push("Poca energía ayer"); }
+  }
+
+  score = Math.round(Math.max(1, Math.min(10, score)));
+
+  let label, color;
+  if (score >= 8) { label = "Listo para rendir al máximo"; color = C.lime; }
+  else if (score >= 6) { label = "Buena preparación"; color = C.cyan; }
+  else if (score >= 4) { label = "Preparación moderada"; color = C.amber; }
+  else { label = "Considera descansar"; color = C.rose; }
+
+  return { score, label, color, factors };
+}
+
 function Hoy({
   target, totals, log, setLog, loaded, water, setWater, geminiKey, supplements, handleUpdateSupplements,
   activeSplitKey, suppsInventory, setSuppsInventory, selectedDateStr, setSelectedDateStr,
   proactiveMsg, aiNotifications, setAiNotifications, macroAdjustSuggestion, setMacroAdjustSuggestion, saveState, customPresets,
   weeklyInsight, smartGoals, challenges, updateChallengeProgress, upcomingEvent, experiments, setExperiments, splits,
-  setView, setShowNutritionModal, setModalVals, addFoodInputText, setAddFoodInputText, customSuggestions
+  setView, setShowNutritionModal, setModalVals, addFoodInputText, setAddFoodInputText, customSuggestions,
+  exlog, notes, foodlog
 }){
   const [text, setText] = useState(""); 
   const [busy, setBusy] = useState(false); 
@@ -5189,6 +5324,22 @@ function Hoy({
         </button>
       </div>
 
+      {(() => {
+        const readiness = predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr);
+        return (
+          <div style={{display:"flex", alignItems:"center", gap:10, background:C.panel, border:`1.5px solid ${readiness.color}33`, borderRadius:14, padding:"10px 14px", marginBottom:12, animation:"pop 0.3s ease"}}>
+            <div style={{width:44, height:44, borderRadius:"50%", background:`${readiness.color}22`, border:`2px solid ${readiness.color}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0}}>
+              <span style={{fontSize:16, fontWeight:900, color:readiness.color}}>{readiness.score}</span>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:10, fontWeight:800, color:readiness.color, textTransform:"uppercase", letterSpacing:".07em"}}>Preparación hoy</div>
+              <div style={{fontSize:13, fontWeight:700, color:C.ink}}>{readiness.label}</div>
+              {readiness.factors.length > 0 && <div style={{fontSize:10.5, color:C.muted, marginTop:1}}>{readiness.factors.join(" · ")}</div>}
+            </div>
+          </div>
+        );
+      })()}
+
       {upcomingEvent && upcomingEvent.date && (() => {
         const days = Math.ceil((new Date(upcomingEvent.date) - new Date()) / 86400000);
         if (days < 0) return null;
@@ -5512,75 +5663,57 @@ function Hoy({
         </span>
       </div>
 
-      {/* Tarjetas de macros */}
-      <Bar 
-        icon={Flame} 
-        label="Calorías" 
-        val={totals.kcal} 
-        max={target.kcal} 
-        unit="kcal" 
-        color="var(--accent-primary)"
-        onSettingsClick={() => {
-          setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
-          setShowNutritionModal(true);
-        }}
-      />
-      <Bar 
-        icon={Beef} 
-        label="Proteína" 
-        val={totals.p} 
-        max={target.p} 
-        unit="g" 
-        color="var(--accent-blue)"
-        onSettingsClick={() => {
-          setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
-          setShowNutritionModal(true);
-        }}
-      />
-      <Bar 
-        icon={Wheat} 
-        label="Carbohidratos" 
-        val={totals.c} 
-        max={target.c} 
-        unit="g" 
-        color="var(--accent-amber)"
-        onSettingsClick={() => {
-          setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
-          setShowNutritionModal(true);
-        }}
-      />
-      <Bar 
-        icon={Droplet} 
-        label="Grasas" 
-        val={totals.f} 
-        max={target.f} 
-        unit="g" 
-        color="var(--accent-cyan)"
-        onSettingsClick={() => {
-          setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
-          setShowNutritionModal(true);
-        }}
-      />
-
-      {/* Proporción de macros consumidos */}
-      {totals.p + totals.c + totals.f > 0 && (
-        <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"13px 15px", marginBottom:12}}>
-          <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8}}>
-            <span style={{fontSize:13, fontWeight:700}}>Distribución de Macros Consumidos</span>
-            <span style={{fontSize:11, color:C.muted}}>Total: {Math.round(totals.p + totals.c + totals.f)}g</span>
+      {/* Tarjetas de macros — anillos SVG */}
+      {(() => {
+        const PI = Math.PI;
+        const macros = [
+          { r: 62, sw: 12, color: C.lime,  label: "Kcal",     val: Math.round(totals.kcal), max: target.kcal, unit: "kcal" },
+          { r: 46, sw: 10, color: C.cyan,  label: "Proteína", val: Math.round(totals.p),    max: target.p,    unit: "g" },
+          { r: 30, sw: 10, color: C.amber, label: "Carbos",   val: Math.round(totals.c),    max: target.c,    unit: "g" },
+          { r: 15, sw: 8,  color: C.rose,  label: "Grasas",   val: Math.round(totals.f),    max: target.f,    unit: "g" },
+        ];
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:14, display:"flex", gap:16, alignItems:"center"}}>
+            <svg width={150} height={150} viewBox="0 0 150 150">
+              {macros.map(m => {
+                const circ = 2 * PI * m.r;
+                const pct = Math.min(1, m.max > 0 ? m.val / m.max : 0);
+                const offset = circ - pct * circ;
+                return (
+                  <g key={m.label} transform="rotate(-90 75 75)">
+                    <circle cx={75} cy={75} r={m.r} fill="none" stroke={m.color + "22"} strokeWidth={m.sw}/>
+                    <circle cx={75} cy={75} r={m.r} fill="none" stroke={m.color} strokeWidth={m.sw}
+                      strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
+                      style={{transition:"stroke-dashoffset 0.6s ease"}}/>
+                  </g>
+                );
+              })}
+              <text x={75} y={71} textAnchor="middle" style={{fontSize:15, fontWeight:900, fill:C.ink}}>{Math.round(totals.kcal)}</text>
+              <text x={75} y={85} textAnchor="middle" style={{fontSize:10, fill:C.muted}}>/ {target.kcal} kcal</text>
+            </svg>
+            <div style={{flex:1, display:"flex", flexDirection:"column", gap:7}}>
+              {macros.map(m => {
+                const pct = Math.min(1, m.max > 0 ? m.val / m.max : 0);
+                return (
+                  <div key={m.label} style={{display:"flex", flexDirection:"column", gap:2}}>
+                    <div style={{display:"flex", justifyContent:"space-between", fontSize:11}}>
+                      <span style={{color:m.color, fontWeight:700}}>{m.label}</span>
+                      <span style={{color:C.muted}}>{m.val}<span style={{color:C.muted, fontWeight:400}}>/{m.max}{m.unit}</span></span>
+                    </div>
+                    <div style={{height:5, background:C.panel2, borderRadius:4, overflow:"hidden"}}>
+                      <div style={{height:"100%", width:(pct*100)+"%", background:m.color, borderRadius:4, transition:"width 0.5s ease"}}/>
+                    </div>
+                  </div>
+                );
+              })}
+              <button
+                onClick={() => { setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f }); setShowNutritionModal(true); }}
+                style={{marginTop:4, padding:"5px 10px", background:"none", border:`1px solid ${C.line}`, borderRadius:8, fontSize:11, color:C.muted, cursor:"pointer", fontWeight:600, alignSelf:"flex-start"}}
+              >Ajustar objetivos</button>
+            </div>
           </div>
-          <div style={{height:10, background:C.panel2, borderRadius:6, overflow:"hidden", display:"flex"}}>
-            <div style={{width:pPct+"%", background:C.cyan, height:"100%"}} title={`Proteína: ${pPct}%`}/>
-            <div style={{width:cPct+"%", background:C.lime, height:"100%"}} title={`Carbohidratos: ${cPct}%`}/>
-            <div style={{width:fPct+"%", background:C.amber, height:"100%"}} title={`Grasas: ${fPct}%`}/>
-          </div>
-          <div style={{display:"flex", justifyContent:"space-between", fontSize:11, marginTop:6}}>
-            <span style={{color:C.cyan, fontWeight:600}}>P: {pPct}% ({Math.round(totals.p)}g)</span>
-            <span style={{color:C.lime, fontWeight:600}}>C: {cPct}% ({Math.round(totals.c)}g)</span>
-            <span style={{color:C.amber, fontWeight:600}}>G: {fPct}% ({Math.round(totals.f)}g)</span>
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Registro de comida — nuevo diseño */}
       <div style={{marginBottom:20}}>
@@ -6010,6 +6143,42 @@ function Hoy({
         </div>
       </div>
 
+      {/* Timing de comidas */}
+      {log.length > 0 && (() => {
+        const meals = [...log].sort((a, b) => (a.t || 0) - (b.t || 0));
+        const lastMeal = meals[meals.length - 1];
+        const lastT = lastMeal?.t || 0;
+        const nextIdeal = lastT ? new Date(lastT + 2.5 * 3600000) : null;
+        const now = Date.now();
+        const nextStr = nextIdeal ? nextIdeal.toLocaleTimeString("es", { hour:"2-digit", minute:"2-digit" }) : null;
+        const isInPast = nextIdeal && nextIdeal.getTime() < now;
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"12px 15px", marginBottom:14}}>
+            <div style={{fontSize:11, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", marginBottom:8}}>Timing de Comidas</div>
+            <div style={{display:"flex", flexDirection:"column", gap:5}}>
+              {meals.slice(-4).map((m) => (
+                <div key={m.id} style={{display:"flex", alignItems:"center", gap:8, fontSize:12}}>
+                  <div style={{width:6, height:6, borderRadius:"50%", background:C.lime, flexShrink:0}}/>
+                  <span style={{color:C.muted, fontVariantNumeric:"tabular-nums", flexShrink:0, minWidth:38}}>
+                    {m.t ? new Date(m.t).toLocaleTimeString("es", { hour:"2-digit", minute:"2-digit" }) : "—"}
+                  </span>
+                  <span style={{color:C.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1}}>{m.resumen}</span>
+                  <span style={{color:C.muted, fontSize:10.5, flexShrink:0}}>{Math.round(m.kcal)} kcal</span>
+                </div>
+              ))}
+            </div>
+            {nextStr && (
+              <div style={{marginTop:8, paddingTop:8, borderTop:`1px solid ${C.line}`, display:"flex", alignItems:"center", gap:6, fontSize:12}}>
+                <Clock size={13} color={isInPast ? C.amber : C.cyan}/>
+                <span style={{color: isInPast ? C.amber : C.cyan, fontWeight:700}}>
+                  {isInPast ? "Ya es hora de comer" : `Próxima comida ideal: ~${nextStr}`}
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Tarjeta de Suplementos del Día */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"13px 15px", marginBottom:14}}>
         <div style={{display:"flex", alignItems:"center", justifyTarget:"space-between", justifyContent:"space-between", marginBottom:10}}>
@@ -6107,20 +6276,48 @@ function Hoy({
         </div>
       </div>
 
-      {/* Botones de IA rápidos */}
-      <div style={{display:"flex", gap:7, marginBottom:7}}>
-        <button onClick={suggestDinner} style={chip(aiBusy==="Cena Sugerida")}><ChefHat size={14}/>Sugerir cena</button>
-        <button onClick={() => setShowMoments(v => !v)} style={chip(showMoments)}><Clock size={14}/>¿Qué como ahora?</button>
-      </div>
-      {showMoments && (
-        <div className="pop" style={{display:"flex", gap:7, flexWrap:"wrap", marginBottom:7}}>
-          {["Pre-entreno", "Post-entreno", "Desayuno rápido", "Snack saludable"].map(m => (
-            <button key={m} onClick={() => whatNow(m)} style={{...chip(false), flex:"1 1 45%", fontSize:11.5, padding:"8px 6px"}}>
-              {m}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Botones de IA contextuales según hora del día */}
+      {(() => {
+        const hour = new Date().getHours();
+        const greeting = hour >= 5 && hour < 12 ? "Buenos días 🌅" : hour >= 12 && hour < 18 ? "Buenas tardes ☀️" : "Buenas noches 🌙";
+        let contextChips;
+        if (hour >= 5 && hour < 10) {
+          contextChips = [
+            { label:"☀️ Desayuno", action: () => whatNow("Desayuno") },
+            { label:"🏃 Pre-entreno", action: () => whatNow("Pre-entreno") },
+          ];
+        } else if (hour >= 10 && hour < 14) {
+          contextChips = [
+            { label:"🥗 Almuerzo", action: () => whatNow("Almuerzo") },
+            { label:"🍎 Snack mañana", action: () => whatNow("Snack de media mañana") },
+          ];
+        } else if (hour >= 14 && hour < 17) {
+          contextChips = [
+            { label:"⚡ Merienda", action: () => whatNow("Merienda") },
+            { label:"🏋️ Post-entreno", action: () => whatNow("Post-entreno") },
+          ];
+        } else if (hour >= 17 && hour < 22) {
+          contextChips = [
+            { label:"🌙 Sugerir cena", action: suggestDinner },
+            { label:"📊 Resumen del día", action: daySummary },
+          ];
+        } else {
+          contextChips = [
+            { label:"📊 Resumen del día", action: daySummary },
+            { label:"😴 Prep. nocturna", action: () => run("Preparación nocturna", "Eres el coach de Bruno. Da una recomendación breve de rutina de sueño y recuperación.", "Dame consejos rápidos para optimizar mi recuperación esta noche según mi entreno y nutrición de hoy.") },
+          ];
+        }
+        return (
+          <div style={{marginBottom:8}}>
+            <div style={{fontSize:11.5, color:C.muted, marginBottom:6, textAlign:"center"}}>{greeting}</div>
+            <div style={{display:"flex", gap:7, marginBottom:7}}>
+              {contextChips.map(c => (
+                <button key={c.label} onClick={c.action} style={chip(false)}>{c.label}</button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
       <button onClick={daySummary} style={{...chip(aiBusy==="Resumen del Día"), width:"100%", marginBottom:2}}>
         <Sparkles size={14}/>Resumen IA del día
       </button>
@@ -6252,7 +6449,8 @@ function Hoy({
 
 /* ===== TAB COACH ===== */
 function Coach({
-  chat, setChat, target, totals, sendCoachMessage, chatBusy, sendDailyGreetingIfNeeded
+  chat, setChat, target, totals, sendCoachMessage, chatBusy, chatStreaming, sendDailyGreetingIfNeeded,
+  coachPersonality, setCoachPersonality, metricslog, foodlog, exlog
 }){
   // Simple markdown renderer for Coach responses
   const renderMarkdown = (text) => {
@@ -6305,13 +6503,56 @@ function Coach({
     setText(""); 
   };
 
+  const [showContext, setShowContext] = useState(false);
+
+  const contextSummary = React.useMemo(() => {
+    const nutritionDays = Object.keys(foodlog || {}).filter(d => (foodlog[d]||[]).length > 0).length;
+    const workoutSessions = Object.keys(exlog || {}).filter(d => (exlog[d]||[]).length > 0).length;
+    const latestMetrics = Object.entries(metricslog || {}).sort((a,b) => b[0].localeCompare(a[0]))[0];
+    const latestWeight = latestMetrics ? latestMetrics[1]?.weight : null;
+    return { nutritionDays, workoutSessions, latestWeight };
+  }, [foodlog, exlog, metricslog]);
+
+  const PERSONALITIES = [
+    { key:"técnico", label:"⚙️ Técnico", desc:"Análisis y datos" },
+    { key:"motivacional", label:"🔥 Motivador", desc:"Energía y logros" },
+    { key:"nutricionista", label:"🥗 Nutrición", desc:"Foco en comida" },
+    { key:"psicólogo", label:"🧠 Psicólogo", desc:"Mente y hábitos" },
+  ];
+
   return (
     <div className="pop chat-window">
-      
+
       {/* Cabecera del Chat con el Coach */}
-      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10, paddingBottom:8, borderBottom:`1px solid ${C.line}`}}>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, paddingBottom:8, borderBottom:`1px solid ${C.line}`}}>
         <div className="disp" style={{fontSize:22, color:C.lime}}>CHAT CON EL COACH</div>
+        <button onClick={() => setShowContext(v => !v)} style={{background:"none", border:`1px solid ${C.line}`, borderRadius:8, padding:"4px 8px", fontSize:11, color:C.muted, cursor:"pointer"}}>
+          {showContext ? "▲" : "▼"} Contexto
+        </button>
       </div>
+
+      {/* Modos de personalidad */}
+      <div style={{display:"flex", gap:6, overflowX:"auto", paddingBottom:4, marginBottom:8, scrollbarWidth:"none"}}>
+        {PERSONALITIES.map(p => (
+          <button key={p.key} onClick={() => setCoachPersonality(p.key)} style={{
+            flexShrink:0, padding:"5px 10px", borderRadius:20, fontSize:11, fontWeight:700, cursor:"pointer",
+            border:`1px solid ${coachPersonality===p.key ? C.lime : C.line}`,
+            background: coachPersonality===p.key ? `${C.lime}22` : "transparent",
+            color: coachPersonality===p.key ? C.lime : C.muted
+          }}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Barra de contexto colapsable */}
+      {showContext && (
+        <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:10, padding:"8px 12px", marginBottom:8, fontSize:11, color:C.muted, animation:"pop 0.2s ease"}}>
+          <span style={{fontWeight:700, color:C.ink}}>Basado en: </span>
+          {contextSummary.nutritionDays} días de nutrición · {contextSummary.workoutSessions} sesiones de entreno
+          {contextSummary.latestWeight ? ` · peso ${contextSummary.latestWeight} kg` : ""}
+        </div>
+      )}
 
       <div className="chat-bubble-container" style={{display:"flex", flexDirection:"column"}}>
         {chat.length === 0 ? (
@@ -6337,9 +6578,16 @@ function Coach({
         ))}
         
         {chatBusy && (
-          <div style={{display:"flex", gap:6, color:C.muted, fontSize:13, alignItems:"center", padding:"4px 2px"}}>
-            <Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>pensando…
-          </div>
+          chatStreaming ? (
+            <div className="chat-bubble assistant" style={{opacity:0.9}}>
+              {renderMarkdown(chatStreaming)}
+              <span style={{display:"inline-block", width:6, height:12, background:C.lime, marginLeft:2, animation:"blink 0.7s step-end infinite", verticalAlign:"middle"}}/>
+            </div>
+          ) : (
+            <div style={{display:"flex", gap:6, color:C.muted, fontSize:13, alignItems:"center", padding:"4px 2px"}}>
+              <Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>pensando…
+            </div>
+          )
         )}
         <div ref={endRef}/>
       </div>
@@ -7425,6 +7673,21 @@ function FocusMode({ onClose, splits, exlog }) {
   const circuitSplit = splits.find(s => s.key === "E") || DEFAULT_SPLITS.find(s => s.key === "E");
   const circuitExs = circuitSplit?.ex || [];
   const exDuration = 60;
+  const [formCues, setFormCues] = useState({});
+  const [formCueBusy, setFormCueBusy] = useState({});
+
+  const generateFormCue = async (exName) => {
+    if (formCues[exName] || formCueBusy[exName]) return;
+    setFormCueBusy(prev => ({ ...prev, [exName]: true }));
+    try {
+      const tip = await callGemini(
+        [{ role: "user", content: `Dame UN tip conciso de técnica de ejecución para: ${exName}. Máx 2 oraciones. Enfocate en el error más común y cómo corregirlo.` }],
+        "Eres un entrenador experto en biomecánica. Responde en español, directo y técnico. Sin preámbulos."
+      );
+      setFormCues(prev => ({ ...prev, [exName]: tip?.trim() || "" }));
+    } catch (_) {}
+    setFormCueBusy(prev => ({ ...prev, [exName]: false }));
+  };
 
   // --- WAKE LOCK: mantener pantalla encendida mientras el panel esté abierto ---
   const wakeLockRef = useRef(null);
@@ -7714,6 +7977,20 @@ function FocusMode({ onClose, splits, exlog }) {
                             color:C.lime, fontSize:11, fontWeight:800}}>
                           ▶ Descanso {restTotal}s
                         </button>
+
+                        {/* Form cue */}
+                        {formCues[exName] ? (
+                          <div style={{fontSize:10.5, color:C.amber, lineHeight:1.4, background:`${C.amber}11`, border:`1px solid ${C.amber}33`, borderRadius:7, padding:"6px 8px"}}>
+                            💡 {formCues[exName]}
+                          </div>
+                        ) : (
+                          <button onClick={() => generateFormCue(exName)}
+                            disabled={formCueBusy[exName]}
+                            style={{width:"100%", padding:"5px 0", borderRadius:7, cursor:"pointer", background:"transparent",
+                              border:`1px solid ${C.amber}44`, color:C.amber, fontSize:10, fontWeight:700}}>
+                            {formCueBusy[exName] ? "…" : "💡 Tip técnico"}
+                          </button>
+                        )}
                       </div>
                     );
                   })}
@@ -10095,9 +10372,13 @@ function Registro({
     }
     return null;
   }, [selectedDateStr, metricslog, statsPeriod]);
-  const [text, setText] = useState(""); 
+  const [text, setText] = useState("");
   const [weight, setWeight] = useState("");
-  
+  const [cmpOpen, setCmpOpen] = useState(false);
+  const [cmpDateA, setCmpDateA] = useState("");
+  const [cmpDateB, setCmpDateB] = useState("");
+  const photoFileRef = useRef(null);
+
   const [muscInput, setMuscInput] = useState("");
   const [fatInput, setFatInput] = useState("");
   const [viscInput, setViscInput] = useState("");
@@ -10120,7 +10401,7 @@ function Registro({
     setMuscInput(entry.musculo !== undefined ? String(entry.musculo) : "");
     setFatInput(entry.grasaPct !== undefined ? String(entry.grasaPct) : "");
     setViscInput(entry.visceral !== undefined ? String(entry.visceral) : "");
-    
+
     setBrazoDer(entry.brazoDer !== undefined ? String(entry.brazoDer) : "");
     setBrazoIzq(entry.brazoIzq !== undefined ? String(entry.brazoIzq) : "");
     setMusloDer(entry.musloDer !== undefined ? String(entry.musloDer) : "");
@@ -10129,6 +10410,10 @@ function Registro({
     setPantorrillaIzq(entry.pantorrillaIzq !== undefined ? String(entry.pantorrillaIzq) : "");
     setCintura(entry.cintura !== undefined ? String(entry.cintura) : "");
     setPecho(entry.pecho !== undefined ? String(entry.pecho) : "");
+
+    const allDates = Object.keys(metricslog).sort().reverse();
+    if (!cmpDateA && allDates.length >= 2) setCmpDateA(allDates[1]);
+    if (!cmpDateB && allDates.length >= 1) setCmpDateB(allDates[0]);
   }, [selectedDateStr, metricslog]);
 
   useEffect(() => {
@@ -11346,6 +11631,90 @@ function Registro({
         </div>
       </div>
 
+      {/* Radar chart de medidas corporales */}
+      {(() => {
+        const entry = metricslog[selectedDateStr] || {};
+        const prevDates = Object.keys(metricslog).filter(d => d < selectedDateStr).sort().slice(-1);
+        const prevEntry = prevDates.length > 0 ? (metricslog[prevDates[0]] || {}) : null;
+
+        const fields = [
+          { label:"Brazo", cur: entry.brazoDer ? (((+entry.brazoDer||0)+(+entry.brazoIzq||0))/2) : null, max:50 },
+          { label:"Muslo", cur: entry.musloDer ? (((+entry.musloDer||0)+(+entry.musloIzq||0))/2) : null, max:80 },
+          { label:"Pantorrilla", cur: entry.pantorrillaDer ? (((+entry.pantorrillaDer||0)+(+entry.pantorrillaIzq||0))/2) : null, max:50 },
+          { label:"Cintura", cur: entry.cintura ? (+entry.cintura||0) : null, max:120, invert:true },
+          { label:"Pecho", cur: entry.pecho ? (+entry.pecho||0) : null, max:130 },
+          { label:"Peso", cur: entry.weight ? (+entry.weight||0) : null, max:130 },
+        ];
+        const hasData = fields.some(f => f.cur !== null && f.cur > 0);
+        if (!hasData) return null;
+
+        const prevFields = prevEntry ? [
+          { cur: prevEntry.brazoDer ? (((+prevEntry.brazoDer||0)+(+prevEntry.brazoIzq||0))/2) : null, max:50 },
+          { cur: prevEntry.musloDer ? (((+prevEntry.musloDer||0)+(+prevEntry.musloIzq||0))/2) : null, max:80 },
+          { cur: prevEntry.pantorrillaDer ? (((+prevEntry.pantorrillaDer||0)+(+prevEntry.pantorrillaIzq||0))/2) : null, max:50 },
+          { cur: prevEntry.cintura ? (+prevEntry.cintura||0) : null, max:120, invert:true },
+          { cur: prevEntry.pecho ? (+prevEntry.pecho||0) : null, max:130 },
+          { cur: prevEntry.weight ? (+prevEntry.weight||0) : null, max:130 },
+        ] : null;
+
+        const N = fields.length;
+        const R = 75, cx = 95, cy = 90;
+        const angles = fields.map((_, i) => (2 * Math.PI * i / N) - Math.PI / 2);
+
+        const toXY = (r, angle) => [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
+
+        const polygon = (vals, fillColor, opacity) => {
+          const pts = vals.map((v, i) => {
+            const norm = v !== null ? Math.min(1, Math.max(0, v / (fields[i].max || 1))) : 0;
+            const r2 = norm * R;
+            return toXY(r2, angles[i]).map(x => x.toFixed(1)).join(",");
+          });
+          return <polygon points={pts.join(" ")} fill={fillColor} fillOpacity={opacity} stroke={fillColor} strokeWidth="1.5" strokeLinejoin="round"/>;
+        };
+
+        const curVals = fields.map(f => f.cur);
+        const prevVals = prevFields ? prevFields.map(f => f.cur) : null;
+
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
+            <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", gap:6}}>
+              <Activity size={15} color={C.cyan}/> Radar Corporal
+              {prevDates.length > 0 && <span style={{fontSize:10, color:C.muted, fontWeight:500}}>vs {prevDates[0]}</span>}
+            </div>
+            <svg width="100%" viewBox={`0 0 190 180`} style={{display:"block", maxWidth:260, margin:"0 auto"}}>
+              {[0.25, 0.5, 0.75, 1].map(scale => (
+                <polygon key={scale}
+                  points={angles.map(a => toXY(R*scale, a).map(x => x.toFixed(1)).join(",")).join(" ")}
+                  fill="none" stroke={C.line} strokeWidth="0.8"/>
+              ))}
+              {angles.map((a, i) => {
+                const [x1, y1] = toXY(0, a);
+                const [x2, y2] = toXY(R, a);
+                const [lx, ly] = toXY(R + 12, a);
+                return (
+                  <g key={i}>
+                    <line x1={x1.toFixed(1)} y1={y1.toFixed(1)} x2={x2.toFixed(1)} y2={y2.toFixed(1)} stroke={C.line} strokeWidth="0.8"/>
+                    <text x={lx.toFixed(1)} y={ly.toFixed(1)} textAnchor="middle" dominantBaseline="middle" fill={C.muted} fontSize="8">{fields[i].label}</text>
+                  </g>
+                );
+              })}
+              {prevVals && polygon(prevVals, C.amber, 0.15)}
+              {polygon(curVals, C.cyan, 0.25)}
+              {curVals.map((v, i) => {
+                if (v === null) return null;
+                const norm = Math.min(1, Math.max(0, v / (fields[i].max || 1)));
+                const [px, py] = toXY(norm * R, angles[i]);
+                return <circle key={i} cx={px.toFixed(1)} cy={py.toFixed(1)} r="3" fill={C.cyan} stroke={C.panel} strokeWidth="1.2"/>;
+              })}
+            </svg>
+            <div style={{display:"flex", gap:12, justifyContent:"center", fontSize:10, color:C.muted, marginTop:4}}>
+              <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:8, height:8, borderRadius:"50%", background:C.cyan}}/> Hoy</span>
+              {prevVals && <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:8, height:8, borderRadius:"50%", background:C.amber}}/> Anterior</span>}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Estadísticas Globales y Resúmenes */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
         <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12}}>
@@ -11460,6 +11829,128 @@ function Registro({
           <AIPanel title="Análisis de Tendencia" busy={busy} text={trend} color={C.cyan} onClose={() => { setTrend(""); saveKey("last_trend", ""); }}/>
         </>
       )}
+
+      {/* Comparador de fechas */}
+      {Object.keys(metricslog).length >= 2 && (() => {
+        const allDates = Object.keys(metricslog).sort().reverse();
+        const mA = cmpDateA ? (metricslog[cmpDateA] || {}) : {};
+        const mB = cmpDateB ? (metricslog[cmpDateB] || {}) : {};
+        const cmpFields = [
+          { label:"Peso (kg)", a: mA.weight, b: mB.weight },
+          { label:"Músculo (kg)", a: mA.musculo, b: mB.musculo },
+          { label:"Grasa (%)", a: mA.grasaPct, b: mB.grasaPct, lowerBetter:true },
+          { label:"Brazo D (cm)", a: mA.brazoDer, b: mB.brazoDer },
+          { label:"Muslo D (cm)", a: mA.musloDer, b: mB.musloDer },
+          { label:"Cintura (cm)", a: mA.cintura, b: mB.cintura, lowerBetter:true },
+          { label:"Pecho (cm)", a: mA.pecho, b: mB.pecho },
+        ].filter(f => f.a !== undefined || f.b !== undefined);
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
+            <button onClick={() => setCmpOpen(v => !v)} style={{background:"none", border:"none", cursor:"pointer", width:"100%", display:"flex", justifyContent:"space-between", alignItems:"center", padding:0}}>
+              <span style={{fontSize:12.5, fontWeight:800, display:"flex", alignItems:"center", gap:6}}>
+                <TrendingUp size={14} color={C.cyan}/> Comparar Fechas
+              </span>
+              <span style={{color:C.muted, fontSize:12}}>{cmpOpen ? "▲" : "▼"}</span>
+            </button>
+            {cmpOpen && (
+              <div style={{marginTop:10, animation:"pop 0.2s ease"}}>
+                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:10}}>
+                  <div>
+                    <label style={{fontSize:10, color:C.muted, fontWeight:700, display:"block", marginBottom:3}}>Fecha A (antes)</label>
+                    <select value={cmpDateA} onChange={e => setCmpDateA(e.target.value)} style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 8px", color:C.ink, fontSize:12}}>
+                      {allDates.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{fontSize:10, color:C.muted, fontWeight:700, display:"block", marginBottom:3}}>Fecha B (después)</label>
+                    <select value={cmpDateB} onChange={e => setCmpDateB(e.target.value)} style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 8px", color:C.ink, fontSize:12}}>
+                      {allDates.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
+                </div>
+                {cmpFields.length > 0 ? cmpFields.map(f => {
+                  const vA = parseFloat(f.a);
+                  const vB = parseFloat(f.b);
+                  const diff = (!isNaN(vA) && !isNaN(vB)) ? (vB - vA) : null;
+                  const improved = diff !== null && (f.lowerBetter ? diff < 0 : diff > 0);
+                  const deltaColor = diff === null ? C.muted : diff === 0 ? C.muted : improved ? C.lime : C.rose;
+                  return (
+                    <div key={f.label} style={{display:"grid", gridTemplateColumns:"1fr 60px 60px 64px", gap:4, alignItems:"center", fontSize:12, padding:"5px 0", borderBottom:`1px solid ${C.line}33`}}>
+                      <span style={{color:C.muted, fontSize:11}}>{f.label}</span>
+                      <span style={{textAlign:"right", color:C.ink}}>{!isNaN(vA) ? vA.toFixed(1) : "—"}</span>
+                      <span style={{textAlign:"right", color:C.ink, fontWeight:700}}>{!isNaN(vB) ? vB.toFixed(1) : "—"}</span>
+                      <span style={{textAlign:"right", fontWeight:800, color:deltaColor}}>
+                        {diff !== null ? `${diff > 0 ? "+" : ""}${diff.toFixed(1)}` : "—"}
+                      </span>
+                    </div>
+                  );
+                }) : <div style={{color:C.muted, fontSize:12, textAlign:"center", padding:"8px 0"}}>Sin datos en las fechas seleccionadas</div>}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Galería de fotos de progreso */}
+      {(() => {
+        const datesWithPhotos = Object.keys(metricslog).filter(d => metricslog[d]?.photo).sort().reverse();
+        const currentPhoto = metricslog[selectedDateStr]?.photo;
+        const handlePhotoUpload = (e) => {
+          const file = e.target.files && e.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            const img = new Image();
+            img.onload = () => {
+              const maxW = 600;
+              const scale = Math.min(1, maxW / img.width);
+              const canvas = document.createElement("canvas");
+              canvas.width = Math.round(img.width * scale);
+              canvas.height = Math.round(img.height * scale);
+              canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+              const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+              const updated = { ...(metricslog[selectedDateStr] || {}), photo: dataUrl };
+              setMetricslog({ ...metricslog, [selectedDateStr]: updated });
+              saveWeight(selectedDateStr, updated);
+            };
+            img.src = reader.result;
+          };
+          reader.readAsDataURL(file);
+          e.target.value = "";
+        };
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
+            <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+              <span style={{display:"flex", alignItems:"center", gap:6}}><Camera size={14} color={C.lime}/> Fotos de Progreso</span>
+              <button onClick={() => photoFileRef.current?.click()} style={{background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, padding:"4px 10px", fontSize:11, fontWeight:800, cursor:"pointer"}}>
+                + Foto hoy
+              </button>
+              <input ref={photoFileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handlePhotoUpload}/>
+            </div>
+            {currentPhoto && (
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:10, color:C.lime, fontWeight:700, marginBottom:4}}>HOY — {selectedDateStr}</div>
+                <img src={currentPhoto} alt="Progreso hoy" style={{width:"100%", maxHeight:220, objectFit:"cover", borderRadius:10, border:`1px solid ${C.line}`}}/>
+              </div>
+            )}
+            {datesWithPhotos.length > 0 && (
+              <div style={{display:"flex", gap:8, overflowX:"auto", paddingBottom:4, scrollbarWidth:"none"}}>
+                {datesWithPhotos.filter(d => d !== selectedDateStr).slice(0, 8).map(d => (
+                  <div key={d} style={{flexShrink:0, textAlign:"center"}}>
+                    <img src={metricslog[d].photo} alt={d} style={{width:72, height:72, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`, display:"block"}}/>
+                    <div style={{fontSize:9, color:C.muted, marginTop:2}}>{d.slice(5)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {datesWithPhotos.length === 0 && !currentPhoto && (
+              <div style={{textAlign:"center", color:C.muted, fontSize:12, padding:"12px 0"}}>
+                Sube tu primera foto de progreso hoy 📸
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {notes.length === 0 && <div style={{color:C.muted, fontSize:13, textAlign:"center", padding:"16px 0"}}>Tu bitácora está vacía.</div>}
       
