@@ -971,6 +971,7 @@ export default function App(){
   const [showTrainerAgent, setShowTrainerAgent] = useState(false);
   const [trainerAgentData, setTrainerAgentData] = useState(null);
   const [trainerAgentBusy, setTrainerAgentBusy] = useState(false);
+  const [showFocusMode, setShowFocusMode] = useState(false);
 
   // Elevated Calendar States & Helpers
   const [calMonth, setCalMonth] = useState(() => new Date());
@@ -3311,13 +3312,22 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
           {view === "entreno" && (
             <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
               <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Rutina de Hoy</div>
-              <button
-                onClick={() => setShowTrainerAgent(true)}
-                className="btn-active-scale"
-                style={{background:"rgba(205,255,74,0.08)", border:`1px solid rgba(205,255,74,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.lime, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
-              >
-                <Sparkles size={13}/><span>Agente</span>
-              </button>
+              <div style={{display:"flex", gap:6}}>
+                <button
+                  onClick={() => setShowFocusMode(true)}
+                  className="btn-active-scale"
+                  style={{background:"rgba(74,214,255,0.08)", border:`1px solid rgba(74,214,255,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.cyan, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
+                >
+                  <Clock size={13}/><span>Foco</span>
+                </button>
+                <button
+                  onClick={() => setShowTrainerAgent(true)}
+                  className="btn-active-scale"
+                  style={{background:"rgba(205,255,74,0.08)", border:`1px solid rgba(205,255,74,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.lime, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
+                >
+                  <Sparkles size={13}/><span>Agente</span>
+                </button>
+              </div>
             </div>
           )}
           {view === "reg" && (
@@ -3552,6 +3562,13 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
           plateauAlerts={plateauAlerts}
           overloadSuggestions={overloadSuggestions}
           muscleImbalances={muscleImbalances}
+        />
+      )}
+
+      {showFocusMode && (
+        <FocusMode
+          onClose={() => setShowFocusMode(false)}
+          splits={splits}
         />
       )}
 
@@ -7152,6 +7169,183 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, exlog, exercises, no
         >
           {busy ? <><Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/>Analizando...</> : <><Sparkles size={16}/>{data && !data._error ? "Actualizar Análisis" : "Analizar con IA"}</>}
         </button>
+
+      </div>
+    </div>
+  );
+}
+
+/* ===== MODO FOCO ===== */
+function FocusMode({ onClose, splits }) {
+  const circuitSplit = splits.find(s => s.key === "E") || DEFAULT_SPLITS.find(s => s.key === "E");
+  const circuitExs = circuitSplit?.ex || [];
+  const exDuration = 60;
+
+  // --- REST TIMER ---
+  const [restTotal, setRestTotal] = useState(90);
+  const [restElapsed, setRestElapsed] = useState(0);
+  const [restRunning, setRestRunning] = useState(false);
+  const restIntervalRef = useRef(null);
+  const restRemaining = Math.max(0, restTotal - restElapsed);
+
+  useEffect(() => {
+    if (!restRunning) { clearInterval(restIntervalRef.current); return; }
+    restIntervalRef.current = setInterval(() => {
+      setRestElapsed(prev => {
+        const next = prev + 1;
+        if (next >= restTotal) {
+          clearInterval(restIntervalRef.current);
+          setRestRunning(false);
+          if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+          return restTotal;
+        }
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(restIntervalRef.current);
+  }, [restRunning, restTotal]);
+
+  const startRest = () => { setRestElapsed(0); setRestRunning(true); };
+  const stopRest = () => { clearInterval(restIntervalRef.current); setRestRunning(false); setRestElapsed(0); };
+  const setPreset = (s) => { setRestTotal(s); setRestElapsed(0); setRestRunning(false); };
+
+  // --- CIRCUIT TIMER ---
+  const [circuitRunning, setCircuitRunning] = useState(false);
+  const [totalSecs, setTotalSecs] = useState(0);
+  const circuitIntervalRef = useRef(null);
+  const prevBoundaryRef = useRef(-1);
+
+  const currentExIdx = circuitExs.length > 0 ? Math.floor(totalSecs / exDuration) % circuitExs.length : 0;
+  const currentRound = circuitExs.length > 0 ? Math.floor(totalSecs / (exDuration * circuitExs.length)) + 1 : 1;
+  const secsInEx = exDuration - (totalSecs % exDuration);
+  const nextExIdx = (currentExIdx + 1) % circuitExs.length;
+
+  useEffect(() => {
+    if (!circuitRunning) { clearInterval(circuitIntervalRef.current); return; }
+    circuitIntervalRef.current = setInterval(() => {
+      setTotalSecs(prev => {
+        const next = prev + 1;
+        const boundary = Math.floor(next / exDuration);
+        if (boundary > prevBoundaryRef.current) {
+          prevBoundaryRef.current = boundary;
+          if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+        }
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(circuitIntervalRef.current);
+  }, [circuitRunning]);
+
+  const startCircuit = () => { setTotalSecs(0); prevBoundaryRef.current = -1; setCircuitRunning(true); };
+  const stopCircuit = () => { clearInterval(circuitIntervalRef.current); setCircuitRunning(false); setTotalSecs(0); prevBoundaryRef.current = -1; };
+
+  const fmtTime = (s) => `${Math.floor(s/60).toString().padStart(2,"0")}:${(s%60).toString().padStart(2,"0")}`;
+
+  const MUSCLE_COLORS = { "Cuádriceps":C.lime, "Glúteos":C.lime, "Isquios":C.lime, "Pectoral":C.cyan, "Tríceps":C.cyan, "Espalda":C.amber, "Deltoides":C.amber, "Bíceps":C.rose };
+  const exColor = (name) => MUSCLE_COLORS[(MUSCLES[name] || [])[0]] || C.muted;
+
+  return (
+    <div className="trainer-agent-sheet" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="trainer-agent-panel">
+
+        {/* Header */}
+        <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+          <div style={{display:"flex", alignItems:"center", gap:8}}>
+            <Clock size={16} color={C.cyan}/>
+            <span style={{fontFamily:"var(--font-display)", fontSize:20, letterSpacing:".05em", color:C.ink}}>MODO FOCO</span>
+          </div>
+          <button onClick={onClose} style={{background:"none", color:C.muted, cursor:"pointer", padding:4, display:"flex", border:"none"}}><X size={20}/></button>
+        </div>
+
+        {/* REST TIMER */}
+        <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:14, padding:16}}>
+          <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".08em", marginBottom:12}}>⏱ Timer de Descanso</div>
+
+          <div style={{textAlign:"center", marginBottom:8}}>
+            <span style={{fontFamily:"var(--font-display)", fontSize:60, lineHeight:1, color: restRunning ? C.lime : C.ink, transition:"color .3s"}}>
+              {fmtTime(restRemaining)}
+            </span>
+          </div>
+
+          <div style={{height:5, background:C.line, borderRadius:99, marginBottom:12, overflow:"hidden"}}>
+            <div style={{height:"100%", width:`${restTotal > 0 ? (restElapsed/restTotal)*100 : 0}%`, background:C.lime, borderRadius:99, transition:"width .8s linear"}}/>
+          </div>
+
+          <div style={{display:"flex", gap:5, marginBottom:8}}>
+            {[60,90,120,180].map(s => (
+              <button key={s} onClick={() => setPreset(s)}
+                style={{flex:1, padding:"5px 0", borderRadius:6, background: restTotal===s ? "rgba(205,255,74,0.12)" : C.panel, border:`1px solid ${restTotal===s ? "rgba(205,255,74,0.5)" : C.line}`, color: restTotal===s ? C.lime : C.muted, fontSize:11, fontWeight:800, cursor:"pointer"}}>
+                {s}s
+              </button>
+            ))}
+          </div>
+
+          <div style={{display:"flex", gap:6}}>
+            <button onClick={() => setPreset(Math.max(10, restTotal-10))}
+              style={{flex:1, padding:"9px 0", borderRadius:8, background:C.panel, border:`1px solid ${C.line}`, color:C.muted, fontSize:13, fontWeight:700, cursor:"pointer"}}>−10s</button>
+            <button onClick={restRunning ? stopRest : startRest}
+              style={{flex:2, padding:"9px 0", borderRadius:8, background: restRunning ? "rgba(255,107,138,0.12)" : "rgba(205,255,74,0.12)", border:`1px solid ${restRunning ? "rgba(255,107,138,0.4)" : "rgba(205,255,74,0.35)"}`, color: restRunning ? C.rose : C.lime, fontSize:14, fontWeight:800, cursor:"pointer"}}>
+              {restRunning ? "⏹ Parar" : "▶ Iniciar"}
+            </button>
+            <button onClick={() => setPreset(Math.min(300, restTotal+10))}
+              style={{flex:1, padding:"9px 0", borderRadius:8, background:C.panel, border:`1px solid ${C.line}`, color:C.muted, fontSize:13, fontWeight:700, cursor:"pointer"}}>+10s</button>
+          </div>
+        </div>
+
+        {/* CIRCUIT */}
+        <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:14, padding:16}}>
+          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10}}>
+            <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".08em"}}>🏃 Circuito Sin Equipo</div>
+            {circuitRunning && (
+              <div style={{fontSize:11, fontWeight:800, color:C.cyan, background:"rgba(74,214,255,0.1)", border:"1px solid rgba(74,214,255,0.25)", borderRadius:6, padding:"2px 8px"}}>
+                Ronda {currentRound}
+              </div>
+            )}
+          </div>
+
+          <div style={{fontSize:12, fontWeight:700, color:C.muted, marginBottom:10}}>
+            {circuitSplit?.name || "Sin equipo"} · {circuitExs.length} × {exDuration}s
+          </div>
+
+          {circuitRunning ? (
+            <div style={{textAlign:"center", paddingBottom:8}}>
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, letterSpacing:".08em", marginBottom:4}}>
+                EJERCICIO {currentExIdx+1} / {circuitExs.length}
+              </div>
+              <div style={{fontFamily:"var(--font-display)", fontSize:22, letterSpacing:".02em", color: exColor(circuitExs[currentExIdx]), marginBottom:6}}>
+                {circuitExs[currentExIdx]}
+              </div>
+              <div style={{fontFamily:"var(--font-display)", fontSize:72, lineHeight:1, color:C.ink, marginBottom:8}}>
+                {secsInEx}
+              </div>
+              <div style={{height:5, background:C.line, borderRadius:99, marginBottom:10, overflow:"hidden"}}>
+                <div style={{height:"100%", width:`${(secsInEx/exDuration)*100}%`, background: exColor(circuitExs[currentExIdx]), borderRadius:99, transition:"width .8s linear"}}/>
+              </div>
+              <div style={{fontSize:11, color:C.muted}}>
+                SIGUIENTE → <span style={{color: exColor(circuitExs[nextExIdx]), fontWeight:700}}>
+                  {circuitExs[nextExIdx]}{currentExIdx+1 === circuitExs.length ? ` · Ronda ${currentRound+1}` : ""}
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div style={{display:"flex", flexDirection:"column", gap:5, marginBottom:10}}>
+              {circuitExs.map((ex, i) => (
+                <div key={i} style={{display:"flex", alignItems:"center", justifyContent:"space-between", padding:"7px 10px", background:C.panel, border:`1px solid ${C.line}`, borderRadius:8}}>
+                  <div style={{display:"flex", alignItems:"center", gap:8}}>
+                    <span style={{fontFamily:"var(--font-display)", fontSize:17, color:C.lime, width:18, textAlign:"center"}}>{i+1}</span>
+                    <span style={{fontSize:13, fontWeight:600, color:C.ink}}>{ex}</span>
+                  </div>
+                  <span style={{fontSize:11, color:C.muted, fontWeight:700}}>60s</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button onClick={circuitRunning ? stopCircuit : startCircuit}
+            style={{width:"100%", padding:"13px 0", borderRadius:10, cursor:"pointer", background: circuitRunning ? "rgba(255,107,138,0.12)" : "linear-gradient(90deg,rgba(205,255,74,0.15),rgba(74,214,255,0.15))", border:`1px solid ${circuitRunning ? "rgba(255,107,138,0.4)" : "rgba(205,255,74,0.3)"}`, color: circuitRunning ? C.rose : C.lime, fontSize:14, fontWeight:800, letterSpacing:".03em"}}>
+            {circuitRunning ? "⏹ Detener Circuito" : "▶ Iniciar Circuito"}
+          </button>
+        </div>
 
       </div>
     </div>
