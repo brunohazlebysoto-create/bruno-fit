@@ -4897,6 +4897,208 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr) {
   return { score, label, color, factors };
 }
 
+function PlantaHidratacion({ water, waterGoal, isRestDay }) {
+  const wg = waterGoal || 14;
+  const pct = Math.min(1, Math.max(0, (water || 0) / wg));
+
+  const lerpColor = (a, b, t) => {
+    const h = s => [parseInt(s.slice(1,3),16), parseInt(s.slice(3,5),16), parseInt(s.slice(5,7),16)];
+    const hex = (r,g,bl) => `#${[r,g,bl].map(x => Math.round(Math.max(0,Math.min(255,x))).toString(16).padStart(2,'0')).join('')}`;
+    const [ar,ag,ab] = h(a), [br,bg,bb] = h(b);
+    return hex(ar+(br-ar)*t, ag+(bg-ag)*t, ab+(bb-ab)*t);
+  };
+
+  const leafColor = pct <= 0.3
+    ? lerpColor('#6b4218', '#8a7a12', pct / 0.3)
+    : pct <= 0.6
+      ? lerpColor('#8a7a12', '#5a9a1e', (pct - 0.3) / 0.3)
+      : lerpColor('#5a9a1e', '#52d010', (pct - 0.6) / 0.4);
+
+  const stemColor = pct < 0.3 ? '#5c3a18' : pct < 0.6 ? '#4a6a14' : '#2a7c08';
+  const droop = (1 - pct) * 32;
+  const showFlower = pct >= 0.82 && isRestDay;
+  const showDew = pct >= 0.60;
+  const uid = 'ph';
+
+  let statusText, statusColor;
+  if (pct >= 0.85) { statusText = "¡Floreciendo! 🌿"; statusColor = C.lime; }
+  else if (pct >= 0.6) { statusText = "Bien hidratada 💧"; statusColor = C.cyan; }
+  else if (pct >= 0.3) { statusText = "Sedienta… 🥤"; statusColor = C.amber; }
+  else { statusText = "¡Se marchita! 🥀"; statusColor = C.rose; }
+
+  const ts = 'all 0.85s cubic-bezier(0.4,0,0.2,1)';
+
+  // Leaf shape (medium)
+  const leafM = "M 0 0 C 4 -5 17 -19 29 -13 C 35 -9 33 2 25 6 C 15 12 3 6 0 0 Z";
+  const leafS = "M 0 0 C 3 -4 13 -15 21 -10 C 26 -7 24 1 18 5 C 11 9 2 5 0 0 Z";
+  const leafMid = "M 0 0 C 7 -3 15 -3 21 5"; // vein for medium leaf
+  const leafMidS = "M 0 0 C 6 -2 12 -2 18 5";
+
+  return (
+    <div style={{display:'flex', flexDirection:'column', alignItems:'center', gap:6, width:'100%'}}>
+      <svg viewBox="0 0 120 190" width={128} height={192} style={{overflow:'visible', display:'block'}}>
+        <defs>
+          <linearGradient id={`${uid}-body`} x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0%" stopColor="#7a3e1a"/>
+            <stop offset="42%" stopColor="#a05028"/>
+            <stop offset="100%" stopColor="#6a2e10"/>
+          </linearGradient>
+          <linearGradient id={`${uid}-rim`} x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0%" stopColor="#8a4820"/>
+            <stop offset="50%" stopColor="#b86030"/>
+            <stop offset="100%" stopColor="#7a3810"/>
+          </linearGradient>
+          <linearGradient id={`${uid}-soil`} x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#2e1e12"/>
+            <stop offset="100%" stopColor="#1a1008"/>
+          </linearGradient>
+          <linearGradient id={`${uid}-leaf`} x1="0" x2="1" y1="0" y2="1">
+            <stop offset="0%" stopColor={lerpColor(leafColor,'#ffffff',0.12)}/>
+            <stop offset="100%" stopColor={lerpColor(leafColor,'#000000',0.08)}/>
+          </linearGradient>
+          <linearGradient id={`${uid}-water`} x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#4ad6ff" stopOpacity="0.85"/>
+            <stop offset="100%" stopColor="#4ad6ff" stopOpacity="0.30"/>
+          </linearGradient>
+          <filter id={`${uid}-glow`}>
+            <feGaussianBlur stdDeviation="1.2" result="blur"/>
+            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+          </filter>
+        </defs>
+
+        {/* ── Pot ── */}
+        {/* Pot body */}
+        <path d="M 31 162 Q 28 187 40 188 L 80 188 Q 92 187 89 162 Z"
+          fill={`url(#${uid}-body)`}/>
+        {/* Pot rim */}
+        <rect x="26" y="154" width="68" height="11" rx="5.5" ry="5.5"
+          fill={`url(#${uid}-rim)`}/>
+        {/* Highlight stripe on rim */}
+        <rect x="30" y="155" width="30" height="3" rx="1.5" fill="rgba(255,255,255,0.12)"/>
+        {/* Soil */}
+        <ellipse cx="60" cy="158" rx="29" ry="7" fill={`url(#${uid}-soil)`}/>
+        {/* Soil pebbles */}
+        <circle cx="48" cy="157" r="1.8" fill="#3c2810" opacity="0.7"/>
+        <circle cx="64" cy="156" r="1.2" fill="#3c2810" opacity="0.7"/>
+        <circle cx="73" cy="158" r="1.6" fill="#3c2810" opacity="0.7"/>
+        {/* Water level gauge on pot side */}
+        <rect x="84" y={188 - 26*pct} width="5" height={26*pct} rx="2.5"
+          fill={`url(#${uid}-water)`} style={{transition:ts}}/>
+        <rect x="84" y="162" width="5" height="26" rx="2.5" fill="none"
+          stroke="rgba(74,214,255,0.3)" strokeWidth="0.8"/>
+
+        {/* ── Main stem ── */}
+        <path
+          d={`M 60 157 C ${60+droop*0.15} 138 ${59+droop*0.25} 115 ${58+droop*0.15} 65`}
+          stroke={stemColor} strokeWidth="3.8" fill="none" strokeLinecap="round"
+          style={{transition:ts}}/>
+
+        {/* ── Branch stems ── */}
+        {/* Bottom pair */}
+        <path d={`M ${59+droop*0.12} 137 C ${52-droop*0.3} 130 ${40-droop*0.5} 128 ${34-droop*0.45} 123`}
+          stroke={stemColor} strokeWidth="2.2" fill="none" strokeLinecap="round" style={{transition:ts}}/>
+        <path d={`M ${59+droop*0.12} 137 C ${66+droop*0.3} 130 ${78+droop*0.5} 128 ${84+droop*0.45} 123`}
+          stroke={stemColor} strokeWidth="2.2" fill="none" strokeLinecap="round" style={{transition:ts}}/>
+        {/* Middle pair */}
+        <path d={`M ${58+droop*0.1} 110 C ${50-droop*0.35} 103 ${39-droop*0.55} 101 ${33-droop*0.5} 96`}
+          stroke={stemColor} strokeWidth="2" fill="none" strokeLinecap="round" style={{transition:ts}}/>
+        <path d={`M ${58+droop*0.1} 110 C ${66+droop*0.35} 103 ${77+droop*0.55} 101 ${83+droop*0.5} 96`}
+          stroke={stemColor} strokeWidth="2" fill="none" strokeLinecap="round" style={{transition:ts}}/>
+        {/* Top pair */}
+        <path d={`M ${58+droop*0.05} 86 C ${51-droop*0.3} 79 ${42-droop*0.5} 77 ${37-droop*0.42} 72`}
+          stroke={stemColor} strokeWidth="1.7" fill="none" strokeLinecap="round" style={{transition:ts}}/>
+        <path d={`M ${58+droop*0.05} 86 C ${65+droop*0.3} 79 ${74+droop*0.5} 77 ${79+droop*0.42} 72`}
+          stroke={stemColor} strokeWidth="1.7" fill="none" strokeLinecap="round" style={{transition:ts}}/>
+
+        {/* ── Leaves ── */}
+        {/* Bottom left */}
+        <g transform={`translate(${34-droop*0.45}, 123)`} style={{transition:ts}}>
+          <g transform={`rotate(${-18 - droop*0.65})`}>
+            <path d={leafM} fill={`url(#${uid}-leaf)`}/>
+            <path d={leafMid} stroke={stemColor} strokeWidth="0.9" fill="none" opacity="0.55"/>
+          </g>
+        </g>
+        {/* Bottom right */}
+        <g transform={`translate(${84+droop*0.45}, 123)`} style={{transition:ts}}>
+          <g transform={`rotate(${197 + droop*0.65})`}>
+            <path d={leafM} fill={`url(#${uid}-leaf)`}/>
+            <path d={leafMid} stroke={stemColor} strokeWidth="0.9" fill="none" opacity="0.55"/>
+          </g>
+        </g>
+        {/* Middle left */}
+        <g transform={`translate(${33-droop*0.5}, 96)`} style={{transition:ts}}>
+          <g transform={`rotate(${-22 - droop*0.75})`}>
+            <path d={leafM} fill={`url(#${uid}-leaf)`}/>
+            <path d={leafMid} stroke={stemColor} strokeWidth="0.9" fill="none" opacity="0.55"/>
+          </g>
+        </g>
+        {/* Middle right */}
+        <g transform={`translate(${83+droop*0.5}, 96)`} style={{transition:ts}}>
+          <g transform={`rotate(${202 + droop*0.75})`}>
+            <path d={leafM} fill={`url(#${uid}-leaf)`}/>
+            <path d={leafMid} stroke={stemColor} strokeWidth="0.9" fill="none" opacity="0.55"/>
+          </g>
+        </g>
+        {/* Top left */}
+        <g transform={`translate(${37-droop*0.42}, 72)`} style={{transition:ts}}>
+          <g transform={`rotate(${-26 - droop*0.85})`}>
+            <path d={leafS} fill={`url(#${uid}-leaf)`}/>
+            <path d={leafMidS} stroke={stemColor} strokeWidth="0.8" fill="none" opacity="0.55"/>
+          </g>
+        </g>
+        {/* Top right */}
+        <g transform={`translate(${79+droop*0.42}, 72)`} style={{transition:ts}}>
+          <g transform={`rotate(${206 + droop*0.85})`}>
+            <path d={leafS} fill={`url(#${uid}-leaf)`}/>
+            <path d={leafMidS} stroke={stemColor} strokeWidth="0.8" fill="none" opacity="0.55"/>
+          </g>
+        </g>
+
+        {/* ── Dew drops ── */}
+        {showDew && (
+          <g style={{transition:'opacity 0.7s'}} opacity="1">
+            <ellipse cx={27-droop*0.4} cy={118} rx="2.8" ry="3.8"
+              fill="#4ad6ff" opacity="0.6" filter={`url(#${uid}-glow)`}/>
+            <ellipse cx={83+droop*0.45} cy={91} rx="2.2" ry="3.2"
+              fill="#4ad6ff" opacity="0.5" filter={`url(#${uid}-glow)`}/>
+            <ellipse cx={35-droop*0.3} cy={67} rx="2" ry="2.8"
+              fill="#4ad6ff" opacity="0.45" filter={`url(#${uid}-glow)`}/>
+          </g>
+        )}
+
+        {/* ── Apex bud or flower ── */}
+        {showFlower ? (
+          <g transform={`translate(${58+droop*0.05}, ${63-droop*0.4})`} style={{transition:ts}}>
+            {[0,52,103,155,206,257,309].map((angle, i) => (
+              <ellipse key={i} cx={0} cy={-7.5} rx="3.8" ry="6.5"
+                fill={i % 2 === 0 ? '#f9e068' : '#ffd235'} opacity="0.92"
+                transform={`rotate(${angle})`}/>
+            ))}
+            <circle cx={0} cy={0} r="5.5" fill="#f4a830"/>
+            <circle cx={0} cy={0} r="3.2" fill="#e88010"/>
+            <circle cx={-1} cy={-1} r="1" fill="#ffc040" opacity="0.7"/>
+          </g>
+        ) : (
+          <g transform={`translate(${58+droop*0.05}, ${65-droop*0.4})`} style={{transition:ts}}>
+            <ellipse cx={0} cy={-7} rx="4.5" ry="7"
+              fill={pct > 0.35 ? lerpColor('#5a6a10','#38c008',Math.min(1,(pct-0.35)/0.65)) : '#4a3a18'}
+              style={{transition:'fill 0.85s'}}/>
+            <ellipse cx={0} cy={-7} rx="2" ry="3"
+              fill="rgba(255,255,255,0.10)"/>
+          </g>
+        )}
+      </svg>
+
+      <div style={{
+        fontSize: 13, fontWeight: 700, color: statusColor,
+        textAlign: 'center', transition: 'color 0.7s', letterSpacing: '.01em'
+      }}>
+        {statusText}
+      </div>
+    </div>
+  );
+}
+
 function Hoy({
   target, totals, log, setLog, loaded, water, setWater, geminiKey, supplements, handleUpdateSupplements,
   activeSplitKey, suppsInventory, setSuppsInventory, selectedDateStr, setSelectedDateStr,
@@ -6138,33 +6340,56 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
         </div>
       )}
 
-      {/* Tarjeta de Hidratación */}
-      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"13px 15px", marginBottom:14}}>
-        <div style={{display:"flex", alignItems:"center", justifyTarget:"space-between", justifyContent:"space-between", marginBottom:8}}>
-          <span style={{display:"flex", alignItems:"center", gap:8, fontSize:13, fontWeight:700}}>
-            <GlassWater size={16} color={C.cyan}/>Hidratación
-          </span>
-          <span style={{fontSize:13, color:C.muted}}>
-            <b style={{color:C.ink, fontSize:15}}>{liters}</b> / {(waterGoal * 0.25).toFixed(1)} L
-          </span>
-        </div>
-        <div style={{display:"flex", alignItems:"center", gap:8}}>
-          <button onClick={() => setWater(water - 1)} style={{width:38, height:38, borderRadius:10, border:`1px solid ${C.line}`, background:C.panel2, color:C.ink, cursor:"pointer", display:"grid", placeItems:"center"}}><Minus size={16}/></button>
-          <div style={{flex:1, display:"flex", gap:3, overflow:"hidden"}}>
-            {Array.from({length: waterGoal}).map((_,i) => (
-              <div key={i} style={{
-                flex:1, 
-                height:22, 
-                borderRadius:5, 
-                background: i < water ? C.cyan : C.panel2, 
-                border: `1px solid ${i < water ? C.cyan : C.line}`,
-                transition: "all .2s"
-              }}/>
-            ))}
+      {/* Tarjeta de Hidratación — con PlantaHidratacion */}
+      {(() => {
+        const isRestDay = !Object.values(exlog||{}).some(sets =>
+          (sets||[]).some(s => (s?.date||'').slice(0,10) === selectedDateStr)
+        );
+        const hydPctDisplay = Math.round(Math.min(1, (water||0) / waterGoal) * 100);
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 15px 12px", marginBottom:14}}>
+            {/* Header row */}
+            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8}}>
+              <span style={{display:"flex", alignItems:"center", gap:7, fontSize:13, fontWeight:700}}>
+                <GlassWater size={15} color={C.cyan}/>Hidratación
+              </span>
+              <span style={{fontSize:12, color:C.muted, display:'flex', alignItems:'center', gap:5}}>
+                {isRestDay && <span style={{fontSize:10, background:`${C.lime}22`, color:C.lime, borderRadius:6, padding:'1px 6px', fontWeight:700}}>Descanso</span>}
+                <b style={{color:C.ink, fontSize:14}}>{liters}</b>
+                <span>/ {(waterGoal * 0.25).toFixed(1)} L</span>
+                <span style={{color:C.muted}}>({hydPctDisplay}%)</span>
+              </span>
+            </div>
+
+            {/* Plant visual */}
+            <div style={{display:'flex', justifyContent:'center', marginBottom:6}}>
+              <PlantaHidratacion water={water} waterGoal={waterGoal} isRestDay={isRestDay}/>
+            </div>
+
+            {/* Controls row */}
+            <div style={{display:"flex", alignItems:"center", gap:8}}>
+              <button
+                onClick={() => setWater(Math.max(0, water - 1))}
+                style={{width:40, height:40, borderRadius:11, border:`1px solid ${C.line}`, background:C.panel2, color:C.ink, cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
+              ><Minus size={17}/></button>
+              <div style={{flex:1, display:"flex", gap:2, overflow:"hidden"}}>
+                {Array.from({length: waterGoal}).map((_,i) => (
+                  <div key={i} style={{
+                    flex:1, height:20, borderRadius:4,
+                    background: i < water ? C.cyan : C.panel2,
+                    border: `1px solid ${i < water ? C.cyan : C.line}`,
+                    transition: "all .25s"
+                  }}/>
+                ))}
+              </div>
+              <button
+                onClick={() => setWater(water + 1)}
+                style={{width:40, height:40, borderRadius:11, border:"none", background:C.cyan, color:"#04212b", cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
+              ><Plus size={17}/></button>
+            </div>
           </div>
-          <button onClick={() => setWater(water + 1)} style={{width:38, height:38, borderRadius:10, border:"none", background:C.cyan, color:"#04212b", cursor:"pointer", display:"grid", placeItems:"center"}}><Plus size={16}/></button>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Timing de comidas */}
       {log.length > 0 && (() => {
