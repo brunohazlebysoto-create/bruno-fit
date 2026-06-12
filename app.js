@@ -537,7 +537,11 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
       }
     } catch (e) {
       lastError = e;
+      const is429 = e.message && (e.message.includes("429") || e.message.includes("RESOURCE_EXHAUSTED") || e.message.includes("quota") || e.message.includes("limit"));
       console.warn(`Error con la API Key ${idx + 1}/${orderedKeys.length}: ${e.message}. Intentando con la siguiente...`);
+      if (is429 && idx < orderedKeys.length - 1) {
+        await new Promise(r => setTimeout(r, 1500));
+      }
     }
   }
 
@@ -3248,14 +3252,8 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
       Ejercicios válidos para ADD_SET: ${exerciseNamesStr}.`;
       
       setChatStreaming("");
-      const [out, streamedText] = await Promise.all([
-        callGemini(nextChat.slice(-12), sys, COACH_SCHEMA),
-        callGeminiStream(
-          nextChat.slice(-12),
-          sys + "\nResponde SOLO con texto conversacional en español. No uses formato JSON.",
-          (partial) => setChatStreaming(partial)
-        ).catch(() => "")
-      ]);
+      // Una sola llamada estructurada (sin streaming paralelo — ahorra cuota)
+      const out = await callGemini(nextChat.slice(-12), sys, COACH_SCHEMA);
       setChatStreaming("");
       const parsed = cleanAndParseJSON(out);
 
@@ -3269,7 +3267,7 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
         }
       }
 
-      const finalChat = [...nextChat, { role: "assistant", content: (parsed && parsed.chatResponse) || streamedText || "..." }];
+      const finalChat = [...nextChat, { role: "assistant", content: (parsed && parsed.chatResponse) || "..." }];
       setChat(finalChat);
       await saveState({ chat: finalChat });
     } catch(e) {
