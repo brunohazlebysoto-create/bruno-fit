@@ -7190,21 +7190,6 @@ function FocusMode({ onClose, splits, exlog }) {
     return () => { if (wakeLockRef.current) { wakeLockRef.current.release(); wakeLockRef.current = null; } };
   }, []);
 
-  // --- EJERCICIOS FRECUENTES ---
-  const topExercises = useMemo(() => {
-    if (!exlog || Object.keys(exlog).length === 0) return [];
-    return Object.entries(exlog)
-      .map(([name, sets]) => {
-        const work = (sets || []).filter(s => s.type !== "warmup");
-        if (work.length === 0) return null;
-        const last = [...work].sort((a, b) => new Date(b.date) - new Date(a.date))[0];
-        return { name, count: work.length, lastW: last.w, lastReps: last.reps, muscles: (MUSCLES[name] || []).slice(0, 2) };
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 6);
-  }, [exlog]);
-
   // --- REST TIMER ---
   const [restTotal, setRestTotal] = useState(90);
   const [restElapsed, setRestElapsed] = useState(0);
@@ -7267,6 +7252,27 @@ function FocusMode({ onClose, splits, exlog }) {
 
   const MUSCLE_COLORS = { "Cuádriceps":C.lime, "Glúteos":C.lime, "Isquios":C.lime, "Pectoral":C.cyan, "Tríceps":C.cyan, "Espalda":C.amber, "Deltoides":C.amber, "Bíceps":C.rose };
   const exColor = (name) => MUSCLE_COLORS[(MUSCLES[name] || [])[0]] || C.muted;
+
+  // --- CARRUSEL POR SPLIT ---
+  const [focusSplit, setFocusSplit] = useState(splits[0]?.key || "A");
+  const [overrides, setOverrides] = useState({});
+
+  const getLastEntry = (exName) => {
+    const work = (exlog[exName] || []).filter(s => s.type !== "warmup");
+    if (work.length === 0) return { w: 0, reps: "8" };
+    const last = [...work].sort((a,b) => new Date(b.date) - new Date(a.date))[0];
+    return { w: parseFloat(last.w) || 0, reps: String(parseInt(last.reps) || 8) };
+  };
+  const getVals = (exName) => overrides[exName] || getLastEntry(exName);
+  const adjWeight = (exName, delta) => {
+    const cur = getVals(exName);
+    setOverrides(prev => ({ ...prev, [exName]: { ...cur, w: Math.max(0, (cur.w||0) + delta) } }));
+  };
+  const adjReps = (exName, delta) => {
+    const cur = getVals(exName);
+    setOverrides(prev => ({ ...prev, [exName]: { ...cur, reps: String(Math.max(1, (parseInt(cur.reps)||8) + delta)) } }));
+  };
+  const triggerRest = () => { stopRest(); setRestElapsed(0); setRestRunning(true); };
 
   return (
     <div className="trainer-agent-sheet" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -7371,49 +7377,110 @@ function FocusMode({ onClose, splits, exlog }) {
           </button>
         </div>
 
-        {/* EJERCICIOS FRECUENTES */}
-        {topExercises.length > 0 && (
-          <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:14, padding:16}}>
-            <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".08em", marginBottom:12}}>
-              🔥 Tus Ejercicios Frecuentes
-            </div>
-            <div style={{display:"flex", flexDirection:"column", gap:6}}>
-              {topExercises.map(ex => {
-                const col = exColor(ex.name);
-                const lastLabel = ex.lastW ? `${ex.lastW} kg × ${ex.lastReps}` : ex.lastReps || "—";
-                return (
-                  <div key={ex.name} style={{display:"flex", alignItems:"center", gap:10, padding:"9px 12px", background:C.panel, border:`1px solid ${C.line}`, borderRadius:10}}>
-                    <div style={{flex:1, minWidth:0}}>
-                      <div style={{fontSize:13, fontWeight:700, color:C.ink, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{ex.name}</div>
-                      <div style={{display:"flex", gap:8, marginTop:2, flexWrap:"wrap"}}>
-                        <span style={{fontSize:11, fontWeight:800, color:col}}>{lastLabel}</span>
-                        <span style={{fontSize:11, color:C.muted}}>{ex.count} series</span>
-                        {ex.muscles.length > 0 && (
-                          <span style={{fontSize:10, color:C.muted, fontStyle:"italic"}}>{ex.muscles.join(", ")}</span>
-                        )}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => { stopRest(); setRestElapsed(0); setRestRunning(true); }}
-                      className="btn-active-scale"
-                      style={{background:"rgba(205,255,74,0.1)", border:"1px solid rgba(205,255,74,0.3)", borderRadius:8, padding:"7px 10px", color:C.lime, fontSize:11, fontWeight:800, cursor:"pointer", flexShrink:0, whiteSpace:"nowrap"}}>
-                      ▶ {restTotal}s
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-            <div style={{fontSize:10, color:C.muted, marginTop:8, textAlign:"center"}}>
-              Toca ▶ para iniciar el timer de descanso después de cada serie
-            </div>
+        {/* CARRUSEL DE EJERCICIOS POR SPLIT */}
+        <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:14, padding:16}}>
+          <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".08em", marginBottom:12}}>
+            💪 Ejercicios por Split
           </div>
-        )}
 
-        {topExercises.length === 0 && (
-          <div style={{textAlign:"center", padding:"12px 0", color:C.muted, fontSize:12}}>
-            Registrá series en el tab Entreno para ver tus ejercicios frecuentes aquí.
+          {/* Split tabs */}
+          <div style={{display:"flex", gap:5, marginBottom:14, overflowX:"auto", paddingBottom:2}}>
+            {splits.map(sp => {
+              const active = focusSplit === sp.key;
+              return (
+                <button key={sp.key} onClick={() => setFocusSplit(sp.key)}
+                  className="btn-active-scale"
+                  style={{flexShrink:0, padding:"5px 11px", borderRadius:20, fontSize:11, fontWeight:800, cursor:"pointer",
+                    background: active ? "rgba(205,255,74,0.15)" : C.panel,
+                    border: `1px solid ${active ? "rgba(205,255,74,0.5)" : C.line}`,
+                    color: active ? C.lime : C.muted}}>
+                  {sp.key} · {sp.name.split("+")[0].split(" ").slice(0,2).join(" ")}
+                </button>
+              );
+            })}
           </div>
-        )}
+
+          {/* Horizontal card carousel */}
+          {(() => {
+            const spExs = splits.find(s => s.key === focusSplit)?.ex || [];
+            if (spExs.length === 0) return <div style={{fontSize:12, color:C.muted, textAlign:"center", padding:"12px 0"}}>Sin ejercicios en este split.</div>;
+            return (
+              <>
+                <div style={{display:"flex", gap:10, overflowX:"auto", paddingBottom:10, scrollSnapType:"x mandatory", WebkitOverflowScrolling:"touch"}}>
+                  {spExs.map(exName => {
+                    const vals = getVals(exName);
+                    const last = getLastEntry(exName);
+                    const seriesTotal = (exlog[exName] || []).filter(s => s.type !== "warmup").length;
+                    const col = exColor(exName);
+                    const muscles = (MUSCLES[exName] || []).slice(0,2);
+                    const hasHistory = last.w > 0;
+                    const btnStyle = (active) => ({
+                      width:32, height:32, borderRadius:7, cursor:"pointer", fontSize:18, fontWeight:700,
+                      display:"flex", alignItems:"center", justifyContent:"center",
+                      background: active ? "rgba(205,255,74,0.12)" : C.panel2,
+                      border: `1px solid ${active ? "rgba(205,255,74,0.4)" : C.line}`,
+                      color: active ? C.lime : C.muted
+                    });
+                    return (
+                      <div key={exName} style={{
+                        flexShrink:0, width:188, background:C.panel, border:`1px solid ${C.line}`,
+                        borderRadius:13, padding:13, scrollSnapAlign:"start",
+                        display:"flex", flexDirection:"column", gap:9
+                      }}>
+                        {/* Name */}
+                        <div style={{fontSize:12.5, fontWeight:800, color:C.ink, lineHeight:1.25, minHeight:32}}>{exName}</div>
+
+                        {/* Muscle chips + history */}
+                        <div style={{display:"flex", gap:4, flexWrap:"wrap", alignItems:"center"}}>
+                          {muscles.map(m => (
+                            <span key={m} style={{fontSize:9, fontWeight:700, color:col, background:`${col}18`, border:`1px solid ${col}30`, borderRadius:4, padding:"1px 5px"}}>{m}</span>
+                          ))}
+                          {seriesTotal > 0 && <span style={{fontSize:9, color:C.muted, marginLeft:"auto"}}>{seriesTotal} series</span>}
+                        </div>
+
+                        {/* Last record hint */}
+                        {hasHistory && (
+                          <div style={{fontSize:10, color:C.muted}}>Última: <span style={{color:col, fontWeight:700}}>{last.w}kg × {last.reps}</span></div>
+                        )}
+
+                        {/* Weight control */}
+                        <div>
+                          <div style={{fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:5}}>Peso (kg)</div>
+                          <div style={{display:"flex", alignItems:"center", gap:5}}>
+                            <button onClick={() => adjWeight(exName, -2.5)} style={btnStyle(false)}>−</button>
+                            <span style={{flex:1, textAlign:"center", fontFamily:"var(--font-display)", fontSize:24, color:C.ink, lineHeight:1}}>{vals.w || 0}</span>
+                            <button onClick={() => adjWeight(exName, 2.5)} style={btnStyle(true)}>+</button>
+                          </div>
+                        </div>
+
+                        {/* Reps control */}
+                        <div>
+                          <div style={{fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:5}}>Reps</div>
+                          <div style={{display:"flex", alignItems:"center", gap:5}}>
+                            <button onClick={() => adjReps(exName, -1)} style={btnStyle(false)}>−</button>
+                            <span style={{flex:1, textAlign:"center", fontFamily:"var(--font-display)", fontSize:24, color:C.ink, lineHeight:1}}>{parseInt(vals.reps)||8}</span>
+                            <button onClick={() => adjReps(exName, 1)} style={btnStyle(true)}>+</button>
+                          </div>
+                        </div>
+
+                        {/* Rest button */}
+                        <button onClick={triggerRest} className="btn-active-scale"
+                          style={{width:"100%", padding:"8px 0", borderRadius:8, cursor:"pointer",
+                            background:"rgba(205,255,74,0.1)", border:"1px solid rgba(205,255,74,0.28)",
+                            color:C.lime, fontSize:11, fontWeight:800}}>
+                          ▶ Descanso {restTotal}s
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{fontSize:10, color:C.muted, textAlign:"center"}}>
+                  ← Deslizá para ver todos los ejercicios →
+                </div>
+              </>
+            );
+          })()}
+        </div>
 
       </div>
     </div>
