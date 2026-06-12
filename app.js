@@ -534,12 +534,81 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
   throw lastError || new Error("No se pudo conectar con ninguna API Key.");
 }
 
-function seedExercises(){ 
-  const o={}; 
-  DEFAULT_SPLITS.forEach(d=>{ 
-    o[d.key]=d.ex.map(n=>({name:n,tecnico:"",musculos:MUSCLES[n]||[]})); 
-  }); 
-  return o; 
+const SEED_TECNICO = {
+  "Press banca":"Press de pectoral con barra plano",
+  "Press inclinado mancuerna":"Press de pectoral inclinado con mancuernas",
+  "Aperturas":"Apertura de pectoral con mancuernas",
+  "Curl inclinado":"Curl de bíceps inclinado con mancuernas",
+  "Curl martillo":"Curl de bíceps en agarre martillo",
+  "Curl prono barra":"Curl reverso con barra recta",
+  "Sentadilla":"Sentadilla con barra libre",
+  "Prensa 45°":"Prensa de pierna a 45 grados",
+  "Sentadilla búlgara":"Sentadilla split búlgara con mancuernas",
+  "Sentadilla ciclista Smith":"Sentadilla ciclista en máquina Smith",
+  "Extensión cuádriceps":"Extensión de rodilla en máquina",
+  "Press Arnold":"Press Arnold con mancuernas",
+  "Vuelos laterales":"Abducción lateral de hombro con mancuernas",
+  "Vuelos posteriores polea":"Abducción posterior de hombro en polea",
+  "Dominadas / Jalón":"Jalón frontal en polea alta o dominadas",
+  "Remo barra":"Remo con barra inclinado hacia adelante",
+  "Remo máquina":"Remo sentado en máquina",
+  "Pullover polea":"Pullover de espalda en polea alta",
+  "Face pull":"Face pull en polea alta con cuerda",
+  "Press cerrado":"Press de tríceps con agarre cerrado en barra",
+  "Extensión polea":"Extensión de tríceps en polea alta",
+  "Extensión sobre cabeza":"Extensión de tríceps sobre la cabeza",
+  "Peso muerto":"Peso muerto convencional con barra",
+  "Leg curl sentado":"Flexión de rodilla en máquina sentada",
+  "Puente glúteos":"Puente de glúteos con barra",
+  "Estocada atrás Smith":"Estocada posterior en máquina Smith",
+  "Sentadillas con pulso":"Sentadilla con pulso al frente sin equipo",
+  "Flexiones de brazos":"Flexión de pecho en suelo",
+  "Remo Delfín":"Remo invertido con apoyo en el suelo",
+  "Curl con Auto-Resistencia":"Curl de bíceps con autorresistencia manual",
+};
+
+const SEED_EQUIPO = {
+  "Press banca":"peso libre",
+  "Press inclinado mancuerna":"peso libre",
+  "Aperturas":"peso libre",
+  "Curl inclinado":"peso libre",
+  "Curl martillo":"peso libre",
+  "Curl prono barra":"peso libre",
+  "Sentadilla":"peso libre",
+  "Prensa 45°":"máquina",
+  "Sentadilla búlgara":"peso libre",
+  "Sentadilla ciclista Smith":"máquina",
+  "Extensión cuádriceps":"máquina",
+  "Press Arnold":"peso libre",
+  "Vuelos laterales":"peso libre",
+  "Vuelos posteriores polea":"polea",
+  "Dominadas / Jalón":"peso libre",
+  "Remo barra":"peso libre",
+  "Remo máquina":"máquina",
+  "Pullover polea":"polea",
+  "Face pull":"polea",
+  "Press cerrado":"peso libre",
+  "Extensión polea":"polea",
+  "Extensión sobre cabeza":"peso libre",
+  "Peso muerto":"peso libre",
+  "Leg curl sentado":"máquina",
+  "Puente glúteos":"peso libre",
+  "Estocada atrás Smith":"máquina",
+  "Sentadillas con pulso":"cuerpo libre",
+  "Flexiones de brazos":"cuerpo libre",
+  "Remo Delfín":"cuerpo libre",
+  "Curl con Auto-Resistencia":"cuerpo libre",
+};
+
+const EQUIPO_ORDER = ["peso libre","máquina","polea","cuerpo libre"];
+const EQUIPO_LABEL = { "peso libre":"🏋️ Peso libre", "máquina":"⚙️ Máquina", "polea":"🔗 Polea", "cuerpo libre":"🤸 Cuerpo libre" };
+
+function seedExercises(){
+  const o={};
+  DEFAULT_SPLITS.forEach(d=>{
+    o[d.key]=d.ex.map(n=>({name:n, tecnico:SEED_TECNICO[n]||"", equipo:SEED_EQUIPO[n]||"peso libre", musculos:MUSCLES[n]||[]}));
+  });
+  return o;
 }
 
 /* ===== GRÁFICO SVG COMPARTIDO ===== */
@@ -7817,6 +7886,13 @@ function Entreno({
   };
 
   const allExistingExercises = Object.values(exercises || {}).flat().map(e => e.name);
+  const allExerciseObjects = (() => {
+    const seen = new Set();
+    return Object.values(exercises || {}).flat().filter(e => {
+      if (seen.has(e.name)) return false;
+      seen.add(e.name); return true;
+    }).map(e => ({ ...e, equipo: e.equipo || SEED_EQUIPO[e.name] || "peso libre", tecnico: e.tecnico || SEED_TECNICO[e.name] || "" }));
+  })();
 
   const findBestMatch = (name, existingList) => {
     const clean = (s) => s.toLowerCase().trim().replace(/s$/, "");
@@ -8057,47 +8133,45 @@ function Entreno({
     setAddErr("");
     try{
       if(addMode === "nombre"){
-        const sys = "Eres un entrenador personal experto. Analiza el ejercicio brindado, identifica su nombre técnico e identifica obligatoriamente al menos los 3 músculos principales involucrados (por ejemplo, para Sentadilla podrías listar Cuádriceps femoral, Glúteo mayor, e Isquiotibiales). Devuelve un JSON. Ejemplo:\n" +
+        const sys = "Eres un entrenador personal experto. Analiza el ejercicio brindado, identifica su nombre técnico, el tipo de equipo usado y al menos los 3 músculos principales. Devuelve un JSON. Ejemplo:\n" +
                     "{\n" +
                     "  \"tecnico\": \"Extensión de rodilla en máquina\",\n" +
+                    "  \"equipo\": \"máquina\",\n" +
                     "  \"musculos\": [\"Cuádriceps femoral\", \"Vasto lateral\", \"Vasto medial\"]\n" +
-                    "}";
+                    "}\n" +
+                    "Valores válidos para equipo: \"peso libre\", \"máquina\", \"polea\", \"cuerpo libre\".";
         const schema = {
           type: "OBJECT",
           properties: {
             tecnico: { type: "STRING" },
-            musculos: {
-              type: "ARRAY",
-              items: { type: "STRING" },
-              description: "Lista con al menos 3 músculos principales trabajados"
-            }
+            equipo: { type: "STRING" },
+            musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Al menos 3 músculos principales" }
           },
-          required: ["tecnico", "musculos"]
+          required: ["tecnico", "equipo", "musculos"]
         };
         const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
-        setExercises({...exercises, [sel]: [...dayExs, {name: addText.trim(), tecnico: o.tecnico || "", musculos: o.musculos || []}]});
+        setExercises({...exercises, [sel]: [...dayExs, {name: addText.trim(), tecnico: o.tecnico || "", equipo: o.equipo || "peso libre", musculos: o.musculos || []}]});
       } else {
-        const sys = "El usuario describe un ejercicio físico. Identifícalo, indica su nombre técnico e identifica obligatoriamente al menos los 3 músculos principales involucrados (por ejemplo, para Vuelos laterales podrías listar Deltoides lateral, Supraespinoso, e Hombro anterior). Devuelve un JSON. Ejemplo:\n" +
+        const sys = "El usuario describe un ejercicio físico. Identifícalo, indica su nombre técnico, el tipo de equipo y al menos los 3 músculos principales. Devuelve un JSON. Ejemplo:\n" +
                     "{\n" +
                     "  \"nombre\": \"Vuelos laterales en polea\",\n" +
                     "  \"tecnico\": \"Abducción de hombro en polea baja\",\n" +
+                    "  \"equipo\": \"polea\",\n" +
                     "  \"musculos\": [\"Deltoides lateral\", \"Supraespinoso\", \"Trapecio\"]\n" +
-                    "}";
+                    "}\n" +
+                    "Valores válidos para equipo: \"peso libre\", \"máquina\", \"polea\", \"cuerpo libre\".";
         const schema = {
           type: "OBJECT",
           properties: {
             nombre: { type: "STRING" },
             tecnico: { type: "STRING" },
-            musculos: {
-              type: "ARRAY",
-              items: { type: "STRING" },
-              description: "Lista con al menos 3 músculos principales trabajados"
-            }
+            equipo: { type: "STRING" },
+            musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Al menos 3 músculos principales" }
           },
-          required: ["nombre", "tecnico", "musculos"]
+          required: ["nombre", "tecnico", "equipo", "musculos"]
         };
         const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
-        setExercises({...exercises, [sel]: [...dayExs, {name: o.nombre || addText.trim(), tecnico: o.tecnico || "", musculos: o.musculos || []}]});
+        setExercises({...exercises, [sel]: [...dayExs, {name: o.nombre || addText.trim(), tecnico: o.tecnico || "", equipo: o.equipo || "peso libre", musculos: o.musculos || []}]});
       }
       setAddText(""); 
       setAdding(false);
@@ -9234,28 +9308,81 @@ function Entreno({
         ) : (
           <div>
             <div style={{display:"flex", gap:7, marginBottom:10}}>
-              <button onClick={() => setAddMode("nombre")} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "nombre" ? C.lime : C.line}`, background: addMode === "nombre" ? "rgba(107,78,255,.12)" : "transparent", color: addMode === "nombre" ? C.lime : C.muted}}>
+              <button onClick={() => { setAddMode("nombre"); setAddText(""); }} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "nombre" ? C.lime : C.line}`, background: addMode === "nombre" ? "rgba(107,78,255,.12)" : "transparent", color: addMode === "nombre" ? C.lime : C.muted}}>
                 Sé el nombre
               </button>
-              <button onClick={() => setAddMode("describir")} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "describir" ? C.lime : C.line}`, background: addMode === "describir" ? "rgba(107,78,255,.12)" : "transparent", color: addMode === "describir" ? C.lime : C.muted}}>
+              <button onClick={() => { setAddMode("describir"); setAddText(""); }} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "describir" ? C.lime : C.line}`, background: addMode === "describir" ? "rgba(107,78,255,.12)" : "transparent", color: addMode === "describir" ? C.lime : C.muted}}>
                 Describirlo
               </button>
             </div>
-            <textarea 
-              value={addText} 
-              onChange={e => setAddText(e.target.value)} 
-              rows={addMode === "describir" ? 3 : 1} 
-              className="ph" 
-              placeholder={addMode === "nombre" ? "Ej: Hip thrust con barra" : "Ej: En máquina sentado, empujo los agarres hacia afuera separando los muslos..."} 
-              style={{width:"100%", resize:"none", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none"}}
-            />
+
+            {addMode === "nombre" ? (
+              <div style={{position:"relative"}}>
+                <input
+                  value={addText}
+                  onChange={e => setAddText(e.target.value)}
+                  className="ph"
+                  placeholder="Buscar ejercicio… ej: Hip thrust, Curl"
+                  style={{width:"100%", boxSizing:"border-box", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none"}}
+                />
+                {(() => {
+                  const q = addText.trim().toLowerCase();
+                  if (!q) return null;
+                  const filtered = allExerciseObjects.filter(e => e.name.toLowerCase().includes(q));
+                  if (!filtered.length) return null;
+                  const groups = {};
+                  filtered.forEach(e => { const eq = e.equipo || "peso libre"; (groups[eq] = groups[eq]||[]).push(e); });
+                  EQUIPO_ORDER.forEach(eq => { if (groups[eq]) groups[eq].sort((a,b) => a.name.localeCompare(b,"es")); });
+                  return (
+                    <div style={{position:"absolute", top:"calc(100% + 4px)", left:0, right:0, background:C.bg, border:`1px solid ${C.line}`, borderRadius:12, zIndex:60, overflow:"hidden", boxShadow:"0 8px 28px rgba(0,0,0,0.45)", maxHeight:320, overflowY:"auto"}}>
+                      {EQUIPO_ORDER.filter(eq => groups[eq]).map(eq => (
+                        <div key={eq}>
+                          <div style={{padding:"6px 12px 4px", fontSize:9.5, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", background:"rgba(0,0,0,0.18)", position:"sticky", top:0}}>
+                            {EQUIPO_LABEL[eq]}
+                          </div>
+                          {groups[eq].map(ex => (
+                            <div key={ex.name}
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={() => {
+                                const existing = allExerciseObjects.find(o => o.name === ex.name);
+                                if (existing) {
+                                  const alreadyInDay = dayExs.some(d => d.name === existing.name);
+                                  if (!alreadyInDay) setExercises({...exercises, [sel]: [...dayExs, {name:existing.name, tecnico:existing.tecnico||"", equipo:existing.equipo||"peso libre", musculos:existing.musculos||[]}]});
+                                  setAddText(""); setAdding(false);
+                                } else {
+                                  setAddText(ex.name);
+                                }
+                              }}
+                              className="btn-active-scale"
+                              style={{padding:"9px 12px", cursor:"pointer", borderTop:`1px solid ${C.line}`}}>
+                              <div style={{fontSize:13, color:C.ink, fontWeight:600}}>{ex.name}</div>
+                              {ex.tecnico && <div style={{fontSize:11, color:C.muted, marginTop:2, lineHeight:1.3}}>{ex.tecnico}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            ) : (
+              <textarea
+                value={addText}
+                onChange={e => setAddText(e.target.value)}
+                rows={3}
+                className="ph"
+                placeholder="Ej: En máquina sentado, empujo los agarres hacia afuera separando los muslos..."
+                style={{width:"100%", resize:"none", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none"}}
+              />
+            )}
+
             <div style={{display:"flex", gap:8, marginTop:8}}>
-              <button 
-                onClick={addExercise} 
-                disabled={addBusy} 
-                style={{flex:1, padding:"10px", borderRadius:10, border:"none", background: addBusy ? C.panel2 : C.lime, color: addBusy ? C.muted : "#0c0e0b", cursor:"pointer", fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:6}}
+              <button
+                onClick={addExercise}
+                disabled={addBusy}
+                style={{flex:1, padding:"10px", borderRadius:10, border:"none", background: addBusy ? C.panel2 : C.lime, color: addBusy ? C.muted : "#0c0e0b", cursor:"pointer", fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
               >
-                {addBusy ? <><Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/>Procesando…</> : (addMode === "nombre" ? "Añadir ejercicio" : "Identificar y añadir")}
+                {addBusy ? <><Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/>Procesando…</> : (addMode === "nombre" ? "Añadir ejercicio nuevo" : "Identificar y añadir")}
               </button>
             </div>
             {addErr && <div style={{color:C.rose, fontSize:12, marginTop:8}}>{addErr}</div>}
