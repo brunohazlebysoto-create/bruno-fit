@@ -5549,6 +5549,18 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
         </button>
       </div>
 
+      {/* Planta de hidratación — lo primero que ves */}
+      {(() => {
+        const isRestDay = !Object.values(exlog||{}).some(sets =>
+          (sets||[]).some(s => (s?.date||'').slice(0,10) === selectedDateStr)
+        );
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"16px 15px 12px", marginBottom:12, display:'flex', flexDirection:'column', alignItems:'center', gap:0}}>
+            <PlantaHidratacion water={water} waterGoal={waterGoal} isRestDay={isRestDay}/>
+          </div>
+        );
+      })()}
+
       {(() => {
         const readiness = predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr);
         return (
@@ -6340,56 +6352,31 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
         </div>
       )}
 
-      {/* Tarjeta de Hidratación — con PlantaHidratacion */}
-      {(() => {
-        const isRestDay = !Object.values(exlog||{}).some(sets =>
-          (sets||[]).some(s => (s?.date||'').slice(0,10) === selectedDateStr)
-        );
-        const hydPctDisplay = Math.round(Math.min(1, (water||0) / waterGoal) * 100);
-        return (
-          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 15px 12px", marginBottom:14}}>
-            {/* Header row */}
-            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8}}>
-              <span style={{display:"flex", alignItems:"center", gap:7, fontSize:13, fontWeight:700}}>
-                <GlassWater size={15} color={C.cyan}/>Hidratación
-              </span>
-              <span style={{fontSize:12, color:C.muted, display:'flex', alignItems:'center', gap:5}}>
-                {isRestDay && <span style={{fontSize:10, background:`${C.lime}22`, color:C.lime, borderRadius:6, padding:'1px 6px', fontWeight:700}}>Descanso</span>}
-                <b style={{color:C.ink, fontSize:14}}>{liters}</b>
-                <span>/ {(waterGoal * 0.25).toFixed(1)} L</span>
-                <span style={{color:C.muted}}>({hydPctDisplay}%)</span>
-              </span>
-            </div>
-
-            {/* Plant visual */}
-            <div style={{display:'flex', justifyContent:'center', marginBottom:6}}>
-              <PlantaHidratacion water={water} waterGoal={waterGoal} isRestDay={isRestDay}/>
-            </div>
-
-            {/* Controls row */}
-            <div style={{display:"flex", alignItems:"center", gap:8}}>
-              <button
-                onClick={() => setWater(Math.max(0, water - 1))}
-                style={{width:40, height:40, borderRadius:11, border:`1px solid ${C.line}`, background:C.panel2, color:C.ink, cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
-              ><Minus size={17}/></button>
-              <div style={{flex:1, display:"flex", gap:2, overflow:"hidden"}}>
-                {Array.from({length: waterGoal}).map((_,i) => (
-                  <div key={i} style={{
-                    flex:1, height:20, borderRadius:4,
-                    background: i < water ? C.cyan : C.panel2,
-                    border: `1px solid ${i < water ? C.cyan : C.line}`,
-                    transition: "all .25s"
-                  }}/>
-                ))}
-              </div>
-              <button
-                onClick={() => setWater(water + 1)}
-                style={{width:40, height:40, borderRadius:11, border:"none", background:C.cyan, color:"#04212b", cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
-              ><Plus size={17}/></button>
-            </div>
+      {/* Tarjeta de Hidratación — contador de vasos */}
+      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"12px 15px", marginBottom:14}}>
+        <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8}}>
+          <span style={{display:"flex", alignItems:"center", gap:8, fontSize:13, fontWeight:700}}>
+            <GlassWater size={15} color={C.cyan}/>Hidratación
+          </span>
+          <span style={{fontSize:13, color:C.muted}}>
+            <b style={{color:C.ink, fontSize:14}}>{liters}</b> / {(waterGoal * 0.25).toFixed(1)} L
+          </span>
+        </div>
+        <div style={{display:"flex", alignItems:"center", gap:8}}>
+          <button onClick={() => setWater(Math.max(0, water - 1))} style={{width:38, height:38, borderRadius:10, border:`1px solid ${C.line}`, background:C.panel2, color:C.ink, cursor:"pointer", display:"grid", placeItems:"center"}}><Minus size={16}/></button>
+          <div style={{flex:1, display:"flex", gap:2, overflow:"hidden"}}>
+            {Array.from({length: waterGoal}).map((_,i) => (
+              <div key={i} style={{
+                flex:1, height:21, borderRadius:4,
+                background: i < water ? C.cyan : C.panel2,
+                border: `1px solid ${i < water ? C.cyan : C.line}`,
+                transition: "all .2s"
+              }}/>
+            ))}
           </div>
-        );
-      })()}
+          <button onClick={() => setWater(water + 1)} style={{width:38, height:38, borderRadius:10, border:"none", background:C.cyan, color:"#04212b", cursor:"pointer", display:"grid", placeItems:"center"}}><Plus size={16}/></button>
+        </div>
+      </div>
 
       {/* Timing de comidas */}
       {log.length > 0 && (() => {
@@ -10625,6 +10612,8 @@ function Registro({
   const [cmpOpen, setCmpOpen] = useState(false);
   const [cmpDateA, setCmpDateA] = useState("");
   const [cmpDateB, setCmpDateB] = useState("");
+  const [cmpPhotoAnalysis, setCmpPhotoAnalysis] = useState("");
+  const [cmpPhotoBusy, setCmpPhotoBusy] = useState(false);
   const photoFileRef = useRef(null);
 
   const [muscInput, setMuscInput] = useState("");
@@ -12256,9 +12245,121 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         );
       })()}
 
+      {/* Comparador de fotos corporales con IA */}
+      {(() => {
+        const datesWithPhotos = Object.keys(metricslog).filter(d => metricslog[d]?.photo).sort().reverse();
+        if (datesWithPhotos.length < 2) return null;
+
+        const photoA = cmpDateA && metricslog[cmpDateA]?.photo;
+        const photoB = cmpDateB && metricslog[cmpDateB]?.photo;
+
+        const analyzePhotos = async () => {
+          if (!photoA || !photoB || cmpPhotoBusy) return;
+          setCmpPhotoBusy(true);
+          setCmpPhotoAnalysis("");
+          try {
+            const strip = url => url.split(",")[1] || url;
+            const mime = url => url.startsWith("data:image/png") ? "image/png" : "image/jpeg";
+            const msg = {
+              role: "user",
+              content: [
+                { type: "image", source: { media_type: mime(photoA), data: strip(photoA) } },
+                { type: "image", source: { media_type: mime(photoB), data: strip(photoB) } },
+                { type: "text", text: `Compara estas dos fotos de progreso corporal. La primera (izquierda) es del ${cmpDateA} y la segunda (derecha) del ${cmpDateB}. Analiza visualmente: cambios en composición corporal (músculo/grasa visible), definición, volumen, postura y cualquier progreso notable. Sé específico y constructivo. Máximo 5 oraciones en español.` }
+              ]
+            };
+            const result = await callGemini([msg], "Eres un coach experto en composición corporal. Analiza fotos de progreso con criterio profesional, siendo honesto y motivador. Responde en español.");
+            setCmpPhotoAnalysis(result?.trim() || "Sin análisis disponible.");
+          } catch(e) {
+            setCmpPhotoAnalysis("⚠️ " + aiErr(e));
+          }
+          setCmpPhotoBusy(false);
+        };
+
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
+            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: cmpOpen ? 12 : 0}}>
+              <span style={{display:"flex", alignItems:"center", gap:6, fontSize:12.5, fontWeight:800}}>
+                <Camera size={14} color={C.cyan}/> Comparar Fotos
+              </span>
+              <button onClick={() => { setCmpOpen(!cmpOpen); setCmpPhotoAnalysis(""); }} style={{
+                background: cmpOpen ? C.panel2 : `${C.cyan}22`,
+                border: `1px solid ${cmpOpen ? C.line : C.cyan}`,
+                borderRadius:8, padding:"4px 12px", fontSize:11, fontWeight:800,
+                cursor:"pointer", color: cmpOpen ? C.muted : C.cyan
+              }}>
+                {cmpOpen ? "Cerrar" : "Comparar →"}
+              </button>
+            </div>
+
+            {cmpOpen && (
+              <>
+                {/* Side-by-side selectors + photos */}
+                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:10}}>
+                  {/* A */}
+                  <div style={{display:"flex", flexDirection:"column", gap:5}}>
+                    <select value={cmpDateA} onChange={e => { setCmpDateA(e.target.value); setCmpPhotoAnalysis(""); }}
+                      style={{fontSize:11, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"5px 6px", color:C.ink, width:"100%"}}>
+                      <option value="">— Fecha A —</option>
+                      {datesWithPhotos.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                    {photoA ? (
+                      <div style={{position:"relative"}}>
+                        <img src={photoA} alt={cmpDateA} style={{width:"100%", aspectRatio:"3/4", objectFit:"cover", borderRadius:10, border:`2px solid ${C.cyan}`, display:"block"}}/>
+                        <div style={{position:"absolute", bottom:4, left:4, fontSize:9, fontWeight:800, color:"#fff", background:"rgba(0,0,0,0.65)", borderRadius:4, padding:"1px 5px"}}>{cmpDateA}</div>
+                      </div>
+                    ) : (
+                      <div style={{aspectRatio:"3/4", borderRadius:10, border:`1px dashed ${C.line}`, display:"flex", alignItems:"center", justifyContent:"center", color:C.muted, fontSize:10}}>Sin foto</div>
+                    )}
+                  </div>
+                  {/* B */}
+                  <div style={{display:"flex", flexDirection:"column", gap:5}}>
+                    <select value={cmpDateB} onChange={e => { setCmpDateB(e.target.value); setCmpPhotoAnalysis(""); }}
+                      style={{fontSize:11, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"5px 6px", color:C.ink, width:"100%"}}>
+                      <option value="">— Fecha B —</option>
+                      {datesWithPhotos.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                    {photoB ? (
+                      <div style={{position:"relative"}}>
+                        <img src={photoB} alt={cmpDateB} style={{width:"100%", aspectRatio:"3/4", objectFit:"cover", borderRadius:10, border:`2px solid ${C.lime}`, display:"block"}}/>
+                        <div style={{position:"absolute", bottom:4, left:4, fontSize:9, fontWeight:800, color:"#fff", background:"rgba(0,0,0,0.65)", borderRadius:4, padding:"1px 5px"}}>{cmpDateB}</div>
+                      </div>
+                    ) : (
+                      <div style={{aspectRatio:"3/4", borderRadius:10, border:`1px dashed ${C.line}`, display:"flex", alignItems:"center", justifyContent:"center", color:C.muted, fontSize:10}}>Sin foto</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* AI analyze button */}
+                {photoA && photoB && (
+                  <button onClick={analyzePhotos} disabled={cmpPhotoBusy} style={{
+                    width:"100%", height:42, borderRadius:11, border:"none",
+                    background: cmpPhotoBusy ? C.panel2 : `linear-gradient(135deg,${C.cyan},${C.lime})`,
+                    color: cmpPhotoBusy ? C.muted : "#0c0e0b",
+                    fontSize:13, fontWeight:800, cursor: cmpPhotoBusy ? "default" : "pointer",
+                    display:"flex", alignItems:"center", justifyContent:"center", gap:7, marginBottom:10
+                  }}>
+                    {cmpPhotoBusy
+                      ? <><Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/> Analizando…</>
+                      : <><Sparkles size={15}/> Analizar con IA</>}
+                  </button>
+                )}
+
+                {/* Result */}
+                {cmpPhotoAnalysis && (
+                  <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:11, padding:"11px 13px", fontSize:12.5, color:C.ink, lineHeight:1.6}}>
+                    {cmpPhotoAnalysis}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })()}
+
       {notes.length === 0 && <div style={{color:C.muted, fontSize:13, textAlign:"center", padding:"16px 0"}}>Tu bitácora está vacía.</div>}
-      
-      {notes.map(n => { 
+
+      {notes.map(n => {
         const col = (TYPES[n.type] || ["", C.muted])[1]; 
         const d = new Date(n.date);
         return (
