@@ -10701,46 +10701,228 @@ function Registro({
         </button>
       </div>
 
-      {/* Caja de Composición Corporal InBody (Barras de Objetivo) */}
-      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
-        <div style={{fontSize:12.5, fontWeight:800, marginBottom:12, display:"flex", alignItems:"center", gap:6}}>
-          <Activity size={15} color={C.lime}/> Panel de Composición Corporal Inteligente
-        </div>
-        
-        {renderGoalBar("Peso Corporal", lastW, "kg", 60, 110, 75, 88, C.cyan)}
-        {renderGoalBar("Masa Muscular", activeMetrics.musculo, "kg", 45, 85, 55, 66, C.lime)}
-        {renderGoalBar("Masa Grasa Corporal", parseFloat(fatWeight), "kg", 5, 35, 8, 15, C.amber)}
-        
-        <div style={{height:9, background:C.panel2, borderRadius:6, overflow:"hidden", display:"flex", marginTop:16, marginBottom:10}}>
-          <div style={{width:muscPct+"%", background:C.cyan, height:"100%"}} title="Músculo"/>
-          <div style={{width:fatBarPct+"%", background:C.amber, height:"100%"}} title="Grasa"/>
-          <div style={{width:remPct+"%", background:C.line, height:"100%"}} title="Otros (Agua/Huesos)"/>
-        </div>
-        <div style={{display:"flex", justifyContent:"space-between", fontSize:10.5, color:C.muted}}>
-          <span>Músculo: {muscPct}%</span>
-          <span>Grasa: {fatBarPct}%</span>
-          <span>Otros: {remPct}%</span>
-        </div>
+      {/* ===== INFORME DE COMPOSICIÓN CORPORAL ===== */}
+      {(() => {
+        const H = 1.80, AGE = 34;
+        const W = lastW || 93.9;
+        const M = activeMetrics.musculo || 64.7;
+        const G = activeMetrics.grasaPct || 26.2;
+        const V = activeMetrics.visceral || 9;
 
-        {/* Indicador de grasa visceral */}
-        <div style={{fontSize:11, color:C.muted, display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:14}}>
-          <span>Grasa Visceral: <b style={{color:C.rose}}>Grado {activeMetrics.visceral}</b></span>
-          <span style={{color: activeMetrics.visceral >= 10 ? C.rose : activeMetrics.visceral >= 6 ? C.amber : C.lime, fontWeight:700}}>
-            {activeMetrics.visceral >= 10 ? "Alerta" : activeMetrics.visceral >= 6 ? "Moderado" : "Saludable"}
-          </span>
-        </div>
-        <div className="visceral-indicator">
-          {Array.from({length: 12}).map((_, i) => {
-            let color = C.line;
-            if (i < activeMetrics.visceral) {
-              color = activeMetrics.visceral >= 10 ? C.rose : activeMetrics.visceral >= 6 ? C.amber : C.lime;
-            }
-            return (
-              <div key={i} className="visceral-dot" style={{ backgroundColor: color }}/>
-            );
-          })}
-        </div>
-      </div>
+        const fatKg   = W * G / 100;
+        const leanKg  = W - fatKg;
+        const bmi     = W / (H * H);
+        const bmr     = Math.round(10 * W + 6.25 * 180 - 5 * AGE + 5);
+        const skelM   = M * 0.615; // músculo esquelético ≈ 61.5% del total
+        const smi     = skelM / (H * H);
+        const waterEst  = leanKg * 0.73;
+        const boneEst   = leanKg * 0.068;
+        const subcutFat = fatKg * 0.82;
+
+        // Porcentajes barra segmentada
+        const pMusc = Math.round(M / W * 100);
+        const pAgua = Math.round(waterEst / W * 100);
+        const pGras = Math.round(fatKg / W * 100);
+        const pHues = Math.max(0, 100 - pMusc - pAgua - pGras);
+
+        // Puntuación corporal (25 pts cada dimensión)
+        const sBmi  = bmi>=18.5&&bmi<25?25:bmi<27?17:bmi<30?10:5;
+        const sFat  = G<=13?25:G<=17?21:G<=20?17:G<=25?11:G<=30?6:2;
+        const sVisc = V<=4?25:V<=6?20:V<=9?13:V<=11?7:3;
+        const sMusc = smi>=12?25:smi>=10?21:smi>=8?16:smi>=6?10:6;
+        const score = sBmi + sFat + sVisc + sMusc;
+        const scoreCol = score>=75?C.lime:score>=55?C.amber:C.rose;
+        const scoreLabel = score>=80?"Composición excelente":score>=65?"Progreso sólido":score>=50?"En proceso de mejora":"Prioriza hábitos";
+
+        // Clasificaciones
+        const bmiLabel  = bmi<18.5?["Bajo peso",C.cyan]:bmi<25?["Normal",C.lime]:bmi<30?["Sobrepeso",C.amber]:["Obesidad",C.rose];
+        const fatLabel  = G<6?["Muy bajo",C.cyan]:G<14?["Atlético",C.lime]:G<18?["Fitness",C.lime]:G<25?["Aceptable",C.amber]:["Alto",C.rose];
+        const viscLabel = V<=4?["Saludable",C.lime]:V<=9?["Moderado",C.amber]:["Alerta",C.rose];
+
+        // Tipo de cuerpo (2 señales: grasa % y relación músculo/peso)
+        const mRatio = M / W;
+        const bodyTypeInfo = (() => {
+          if (G > 28) return ["Obeso", C.rose];
+          if (G > 22 && mRatio < 0.65) return ["Sobrepeso", C.amber];
+          if (G < 13 && mRatio < 0.63) return ["Delgado", C.cyan];
+          if (G > 20 && mRatio < 0.63) return ["Delgado-Gordo", C.amber];
+          if (G < 15 && smi >= 11) return ["Atlético", C.lime];
+          if (mRatio >= 0.68 && G < 20) return ["Musculoso", C.lime];
+          return ["Estándar", C.muted];
+        })();
+
+        // Control de peso
+        const targetFatPct = 15;
+        const fatToLose = Math.max(0, fatKg - W * targetFatPct / 100);
+        const muscToGain = Math.max(0, 70 - M);
+        const optWMin = (18.5 * H * H).toFixed(1);
+        const optWMax = (24.9 * H * H).toFixed(1);
+
+        // Edad corporal estimada (corrección vs edad real)
+        const bodyAge = Math.max(18, Math.round(AGE + (bmi - 22) * 1.1 + (G - 15) * 0.7 + (V - 4) * 1.3 - (smi - 9) * 1.8));
+
+        const chip = (label, col) => (
+          <span style={{fontSize:10, fontWeight:700, color:col, background:`${col}1a`, border:`1px solid ${col}40`, borderRadius:20, padding:"2px 9px"}}>{label}</span>
+        );
+
+        const miniCard = (label, val, hint, col=C.ink) => (
+          <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px"}}>
+            <div style={{fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em", marginBottom:3}}>{label}</div>
+            <div style={{fontFamily:"var(--font-display)", fontSize:21, color:col, lineHeight:1}}>{val}</div>
+            {hint && <div style={{fontSize:9, color:C.muted, marginTop:2}}>{hint}</div>}
+          </div>
+        );
+
+        return (
+          <div style={{display:"flex", flexDirection:"column", gap:10, marginBottom:12}}>
+
+            {/* === BLOQUE 1: Puntuación === */}
+            <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
+              <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12}}>
+                <div style={{display:"flex", alignItems:"center", gap:7}}>
+                  <Activity size={14} color={C.lime}/>
+                  <span style={{fontSize:11, fontWeight:800, color:C.ink, textTransform:"uppercase", letterSpacing:".06em"}}>Informe de Composición Corporal</span>
+                </div>
+                <span style={{fontSize:10, color:C.muted}}>Bruno · 34a · 180cm</span>
+              </div>
+
+              <div style={{display:"flex", gap:14, alignItems:"flex-start"}}>
+                {/* Score big number */}
+                <div style={{textAlign:"center", flexShrink:0}}>
+                  <div style={{fontFamily:"var(--font-display)", fontSize:60, lineHeight:1, color:scoreCol}}>{score}</div>
+                  <div style={{fontSize:10, color:C.muted, fontWeight:700}}>/ 100 pts</div>
+                  <div style={{fontSize:10, color:scoreCol, fontWeight:700, marginTop:4}}>{scoreLabel}</div>
+                </div>
+                {/* Sub-scores */}
+                <div style={{flex:1, display:"flex", flexDirection:"column", gap:5, paddingTop:4}}>
+                  {[["IMC", sBmi, bmiLabel[1]],["Grasa", sFat, fatLabel[1]],["Visceral", sVisc, viscLabel[1]],["Músculo", sMusc, smi>=10?C.lime:smi>=8?C.amber:C.rose]].map(([lbl,s,col]) => (
+                    <div key={lbl} style={{display:"flex", alignItems:"center", gap:6}}>
+                      <span style={{width:46, fontSize:10, color:C.muted, textAlign:"right"}}>{lbl}</span>
+                      <div style={{flex:1, height:4, background:C.line, borderRadius:99, overflow:"hidden"}}>
+                        <div style={{height:"100%", width:`${(s/25)*100}%`, background:col, borderRadius:99}}/>
+                      </div>
+                      <span style={{width:22, fontSize:10, color:col, fontWeight:800, textAlign:"right"}}>{s}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* === BLOQUE 2: Composición principal === */}
+            <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10}}>Análisis de Composición (kg)</div>
+
+              <div style={{display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6, marginBottom:12}}>
+                {[["PESO",W.toFixed(1),"kg",C.ink],["MAGRA",leanKg.toFixed(1),"kg",C.cyan],["GRASA",fatKg.toFixed(1),"kg",G>25?C.rose:C.amber],["MÚSCULO",M.toFixed(1),"kg",C.lime]].map(([lbl,v,u,col]) => (
+                  <div key={lbl} style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"8px 6px", textAlign:"center"}}>
+                    <div style={{fontSize:8.5, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em", marginBottom:3}}>{lbl}</div>
+                    <div style={{fontFamily:"var(--font-display)", fontSize:20, color:col, lineHeight:1}}>{v}</div>
+                    <div style={{fontSize:9, color:C.muted, marginTop:1}}>{u}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Barra segmentada */}
+              <div style={{height:8, borderRadius:6, overflow:"hidden", display:"flex"}}>
+                <div style={{width:`${pMusc}%`, background:C.lime}} title="Músculo"/>
+                <div style={{width:`${pAgua}%`, background:C.cyan, opacity:.7}} title="Agua"/>
+                <div style={{width:`${pGras}%`, background:G>25?C.rose:C.amber}} title="Grasa"/>
+                <div style={{width:`${pHues}%`, background:C.line}} title="Hueso"/>
+              </div>
+              <div style={{display:"flex", gap:8, fontSize:9, color:C.muted, marginTop:5, flexWrap:"wrap"}}>
+                <span><span style={{color:C.lime}}>■</span> Músculo {pMusc}%</span>
+                <span><span style={{color:C.cyan}}>■</span> Agua {pAgua}%</span>
+                <span><span style={{color:G>25?C.rose:C.amber}}>■</span> Grasa {pGras}%</span>
+                <span><span style={{color:C.muted}}>■</span> Hueso ~{pHues}%</span>
+              </div>
+            </div>
+
+            {/* === BLOQUE 3: Tabla análisis general === */}
+            <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10}}>Análisis General</div>
+              <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, overflow:"hidden"}}>
+                <div style={{display:"grid", gridTemplateColumns:"1fr 55px 88px 55px 64px", padding:"6px 10px", borderBottom:`1px solid ${C.line}`, fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase"}}>
+                  <span>Métrica</span><span style={{textAlign:"center"}}>Bajo</span><span style={{textAlign:"center"}}>Óptimo</span><span style={{textAlign:"center"}}>Alto</span><span style={{textAlign:"center"}}>Tu valor</span>
+                </div>
+                {[
+                  {lbl:"Masa muscular",  v:`${M.toFixed(1)} kg`, lo:"<50 kg", op:"55–70 kg",  hi:">75 kg",  col:M>=55&&M<=70?C.lime:M>=50?C.amber:C.rose},
+                  {lbl:"Grasa corporal", v:`${G.toFixed(1)} %`,  lo:"<6 %",   op:"10–20 %",   hi:">25 %",  col:G>=10&&G<=20?C.lime:G<25?C.amber:C.rose},
+                  {lbl:"IMC",            v:bmi.toFixed(1),        lo:"<18.5",  op:"18.5–24.9", hi:">25",    col:bmiLabel[1]},
+                  {lbl:"Grasa visceral", v:`G${V}`,               lo:"—",      op:"< 5",        hi:">10",   col:viscLabel[1]},
+                ].map((row, i, arr) => (
+                  <div key={row.lbl} style={{display:"grid", gridTemplateColumns:"1fr 55px 88px 55px 64px", padding:"7px 10px", borderBottom:i<arr.length-1?`1px solid ${C.line}`:"none", fontSize:11}}>
+                    <span style={{fontWeight:700, color:C.ink}}>{row.lbl}</span>
+                    <span style={{textAlign:"center", color:C.muted}}>{row.lo}</span>
+                    <span style={{textAlign:"center", color:C.lime, fontWeight:700}}>{row.op}</span>
+                    <span style={{textAlign:"center", color:C.muted}}>{row.hi}</span>
+                    <span style={{textAlign:"center", color:row.col, fontWeight:800}}>{row.v}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* === BLOQUE 4: Indicadores derivados === */}
+            <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10}}>Otros Indicadores</div>
+              <div style={{display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6}}>
+                {miniCard("TMB", `${bmr}`, "kcal/día · basal", C.cyan)}
+                {miniCard("Masa magra", `${leanKg.toFixed(1)} kg`, "Peso sin grasa")}
+                {miniCard("G. subcutánea", `${subcutFat.toFixed(1)} kg`, "~82% grasa total", G>25?C.rose:C.amber)}
+                {miniCard("Agua estimada", `${waterEst.toFixed(1)} kg`, "73% masa magra", C.cyan)}
+                {miniCard("SMI", smi.toFixed(1), "Musc. esq. / talla²", smi>=10?C.lime:smi>=8?C.amber:C.rose)}
+                {miniCard("Edad corporal", `${bodyAge} a`, `Real: 34 a · Δ ${bodyAge-34>0?"+"+(bodyAge-34):bodyAge-34}`, bodyAge<=AGE?C.lime:bodyAge<=AGE+5?C.amber:C.rose)}
+              </div>
+            </div>
+
+            {/* === BLOQUE 5: Control de peso + Tipo de cuerpo === */}
+            <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10}}>Control de Peso</div>
+              <div style={{background:`rgba(205,255,74,0.05)`, border:`1px solid rgba(205,255,74,0.18)`, borderRadius:10, padding:"12px 14px", marginBottom:12}}>
+                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:10}}>
+                  {[
+                    ["Peso recomendado", `${GOAL_W}–82 kg`],
+                    ["Grasa a perder", `−${fatToLose.toFixed(1)} kg`],
+                    ["Músculo a ganar", `+${muscToGain.toFixed(1)} kg`],
+                    ["Rango IMC óptimo", `${optWMin}–${optWMax} kg`],
+                  ].map(([k,v]) => (
+                    <div key={k}>
+                      <div style={{fontSize:10, color:C.muted, fontWeight:600, marginBottom:2}}>{k}</div>
+                      <div style={{fontSize:15, fontWeight:800, color:C.lime}}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:8}}>Tipo de Cuerpo</div>
+              <div style={{display:"flex", gap:6, flexWrap:"wrap", alignItems:"center"}}>
+                {chip(bodyTypeInfo[0], bodyTypeInfo[1])}
+                {chip(bmiLabel[0], bmiLabel[1])}
+                {chip(`Grasa: ${fatLabel[0]}`, fatLabel[1])}
+                {chip(`Visceral: ${viscLabel[0]}`, viscLabel[1])}
+              </div>
+            </div>
+
+            {/* === BLOQUE 6: Barras objetivo + visceral === */}
+            <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:12}}>Barras de Objetivo</div>
+              {renderGoalBar("Peso Corporal", lastW, "kg", 60, 110, 75, 88, C.cyan)}
+              {renderGoalBar("Masa Muscular", M, "kg", 45, 85, 55, 70, C.lime)}
+              {renderGoalBar("Masa Grasa Corporal", fatKg, "kg", 5, 35, 8, 15, C.amber)}
+
+              <div style={{fontSize:11, color:C.muted, display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:14}}>
+                <span>Grasa Visceral: <b style={{color:V>=10?C.rose:V>=6?C.amber:C.lime}}>Grado {V}</b></span>
+                <span style={{color:viscLabel[1], fontWeight:700}}>{viscLabel[0]}</span>
+              </div>
+              <div className="visceral-indicator">
+                {Array.from({length:12}).map((_,i) => (
+                  <div key={i} className="visceral-dot" style={{backgroundColor: i<V?(V>=10?C.rose:V>=6?C.amber:C.lime):C.line}}/>
+                ))}
+              </div>
+            </div>
+
+          </div>
+        );
+      })()}
 
       {/* Gráfico Histórico de Masa Magra vs Masa Grasa */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
