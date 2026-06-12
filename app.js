@@ -6978,65 +6978,171 @@ function MuscleHeatmap({ exlog, days, onChangeDays }) {
     return { fill: `rgba(255,107,138,${a.toFixed(2)})`, stroke: `rgba(255,150,160,${Math.min(1,a+0.1).toFixed(2)})` };
   };
 
-  const B = { fill:"rgba(35,48,28,0.7)", stroke:"rgba(65,82,50,0.6)", strokeWidth:"1.2" };
+  const S = { fill:"rgba(24,36,18,0.9)", stroke:"rgba(56,76,42,0.75)", strokeWidth:"1.2" };
 
-  // Silueta base compartida (función, no componente, para evitar re-mount)
+  // Silueta base con curvas bezier orgánicas (función, no componente, para evitar re-mount)
   const silhouette = () => (
     <>
-      <circle cx="65" cy="16" r="13" {...B}/>
-      <rect x="59" y="29" width="12" height="10" rx="2" {...B}/>
-      <path d="M 41 38 L 89 38 L 86 146 L 44 146 Z" {...B}/>
-      <path d="M 41 38 L 22 50 L 17 110 L 25 113 L 30 56 L 45 46 Z" {...B}/>
-      <path d="M 89 38 L 108 50 L 113 110 L 105 113 L 100 56 L 85 46 Z" {...B}/>
-      <path d="M 17 110 L 12 162 L 22 164 L 25 113 Z" {...B}/>
-      <path d="M 113 110 L 118 162 L 108 164 L 105 113 Z" {...B}/>
-      <path d="M 44 146 L 86 146 L 90 167 L 40 167 Z" {...B}/>
-      <path d="M 40 167 L 61 167 L 62 252 L 38 252 Z" {...B}/>
-      <path d="M 69 167 L 90 167 L 92 252 L 68 252 Z" {...B}/>
-      <path d="M 38 252 L 62 252 L 63 290 L 37 290 Z" {...B}/>
-      <path d="M 68 252 L 92 252 L 93 290 L 67 290 Z" {...B}/>
+      {/* Head */}
+      <circle cx="65" cy="14" r="12" {...S}/>
+      {/* Neck */}
+      <path d="M 60,25 C 59,29 58,33 57,38 L 73,38 C 72,33 71,29 70,25 Z" {...S}/>
+      {/* Torso — hourglass with bezier curves */}
+      <path d="M 57,38 C 48,38 36,40 28,46 C 20,52 18,62 18,72 C 18,82 21,90 24,100
+               C 26,108 26,116 24,124 C 22,132 22,140 26,146 C 30,152 38,156 48,158
+               C 54,160 60,162 65,162 C 70,162 76,160 82,158
+               C 92,156 100,152 104,146 C 108,140 108,132 106,124
+               C 104,116 104,108 106,100 C 109,90 112,82 112,72
+               C 112,62 110,52 102,46 C 94,40 82,38 73,38 Z" {...S}/>
+      {/* Left upper arm */}
+      <path d="M 20,50 C 12,54 8,68 8,84 C 8,98 10,110 13,120
+               C 15,128 16,136 15,144 L 26,146
+               C 27,138 26,130 24,122 C 21,112 19,100 19,86
+               C 19,72 22,58 29,50 Z" {...S}/>
+      {/* Right upper arm */}
+      <path d="M 110,50 C 118,54 122,68 122,84 C 122,98 120,110 117,120
+               C 115,128 114,136 115,144 L 104,146
+               C 103,138 104,130 106,122 C 109,112 111,100 111,86
+               C 111,72 108,58 101,50 Z" {...S}/>
+      {/* Left forearm */}
+      <path d="M 13,122 C 9,132 7,146 8,158 C 9,166 12,172 16,170
+               L 26,168 C 23,162 21,156 21,147 C 21,136 23,124 27,116 Z" {...S}/>
+      {/* Right forearm */}
+      <path d="M 117,122 C 121,132 123,146 122,158 C 121,166 118,172 114,170
+               L 104,168 C 107,162 109,156 109,147 C 109,136 107,124 103,116 Z" {...S}/>
+      {/* Left thigh */}
+      <path d="M 30,166 C 24,172 20,186 19,202 C 18,216 19,230 22,242
+               C 24,250 27,255 30,258 L 58,258
+               C 60,255 62,250 62,242 C 63,230 62,216 59,202
+               C 57,186 52,172 46,166 Z" {...S}/>
+      {/* Right thigh */}
+      <path d="M 100,166 C 106,172 110,186 111,202 C 112,216 111,230 108,242
+               C 106,250 103,255 100,258 L 72,258
+               C 70,255 68,250 68,242 C 67,230 68,216 71,202
+               C 73,186 78,172 84,166 Z" {...S}/>
+      {/* Left shin */}
+      <path d="M 30,258 C 27,266 26,276 28,284 C 30,290 36,293 42,291
+               C 50,289 55,281 56,272 C 57,264 55,257 53,253 L 33,253 Z" {...S}/>
+      {/* Right shin */}
+      <path d="M 100,258 C 103,266 104,276 102,284 C 100,290 94,293 88,291
+               C 80,289 75,281 74,272 C 73,264 75,257 77,253 L 97,253 Z" {...S}/>
     </>
   );
 
   const frontMuscles = () => (
     <>
-      <ellipse cx="55" cy="68" rx="14" ry="12" strokeWidth="1" {...heat("Pectoral")}/>
-      <ellipse cx="75" cy="68" rx="14" ry="12" strokeWidth="1" {...heat("Pectoral")}/>
-      <ellipse cx="39" cy="51" rx="10" ry="9" strokeWidth="1" {...heat("Deltoides")}/>
-      <ellipse cx="91" cy="51" rx="10" ry="9" strokeWidth="1" {...heat("Deltoides")}/>
-      <ellipse cx="21" cy="84" rx="7" ry="18" strokeWidth="1" {...heat("Bíceps")}/>
-      <ellipse cx="109" cy="84" rx="7" ry="18" strokeWidth="1" {...heat("Bíceps")}/>
-      <ellipse cx="14" cy="138" rx="5" ry="19" strokeWidth="1" {...heat("Antebrazo")}/>
-      <ellipse cx="116" cy="138" rx="5" ry="19" strokeWidth="1" {...heat("Antebrazo")}/>
-      {[106,120,133].map(y => (
-        <React.Fragment key={y}>
-          <ellipse cx="58" cy={y} rx="9" ry="6" strokeWidth="1" {...heat("Abdominales")}/>
-          <ellipse cx="72" cy={y} rx="9" ry="6" strokeWidth="1" {...heat("Abdominales")}/>
+      {/* PECTORALS — fan shapes diverging from sternum */}
+      <path d="M 65,48 C 58,48 48,53 42,62 C 38,70 40,80 46,84
+               C 52,87 60,85 64,78 C 65,72 65,58 65,48 Z"
+            strokeWidth="1.2" {...heat("Pectoral")}/>
+      <path d="M 65,48 C 72,48 82,53 88,62 C 92,70 90,80 84,84
+               C 78,87 70,85 66,78 C 65,72 65,58 65,48 Z"
+            strokeWidth="1.2" {...heat("Pectoral")}/>
+      {/* DELTOIDS — rounded shoulder caps */}
+      <path d="M 21,52 C 14,56 11,65 13,73 C 15,80 22,83 29,79
+               C 36,75 39,66 37,58 C 35,50 29,47 21,52 Z"
+            strokeWidth="1.2" {...heat("Deltoides")}/>
+      <path d="M 109,52 C 116,56 119,65 117,73 C 115,80 108,83 101,79
+               C 94,75 91,66 93,58 C 95,50 101,47 109,52 Z"
+            strokeWidth="1.2" {...heat("Deltoides")}/>
+      {/* BICEPS — spindle along front upper arm */}
+      <path d="M 10,72 C 6,82 6,98 9,112 C 11,120 17,124 22,119
+               C 27,114 27,98 24,84 C 22,74 16,66 10,72 Z"
+            strokeWidth="1.2" {...heat("Bíceps")}/>
+      <path d="M 120,72 C 124,82 124,98 121,112 C 119,120 113,124 108,119
+               C 103,114 103,98 106,84 C 108,74 114,66 120,72 Z"
+            strokeWidth="1.2" {...heat("Bíceps")}/>
+      {/* FOREARMS */}
+      <path d="M 8,124 C 5,136 5,150 7,160 C 9,167 14,170 18,168
+               C 22,165 23,152 21,141 C 19,131 14,121 8,124 Z"
+            strokeWidth="1.2" {...heat("Antebrazo")}/>
+      <path d="M 122,124 C 125,136 125,150 123,160 C 121,167 116,170 112,168
+               C 108,165 107,152 109,141 C 111,131 116,121 122,124 Z"
+            strokeWidth="1.2" {...heat("Antebrazo")}/>
+      {/* ABS — 3 paired segments with slight curves */}
+      {[90,104,118].map((y,i) => (
+        <React.Fragment key={i}>
+          <path d={`M 55,${y} C 53,${y+1} 52,${y+4} 53,${y+8} C 54,${y+11} 57,${y+12} 61,${y+10} C 63,${y+8} 64,${y+4} 63,${y+1} Z`}
+                strokeWidth="1" {...heat("Abdominales")}/>
+          <path d={`M 75,${y} C 73,${y+1} 72,${y+4} 73,${y+8} C 74,${y+11} 77,${y+12} 81,${y+10} C 83,${y+8} 84,${y+4} 83,${y+1} Z`}
+                strokeWidth="1" {...heat("Abdominales")}/>
         </React.Fragment>
       ))}
-      <ellipse cx="49" cy="203" rx="13" ry="30" strokeWidth="1" {...heat("Cuádriceps")}/>
-      <ellipse cx="81" cy="203" rx="13" ry="30" strokeWidth="1" {...heat("Cuádriceps")}/>
-      <ellipse cx="47" cy="270" rx="10" ry="16" strokeWidth="1" {...heat("Gemelos")}/>
-      <ellipse cx="83" cy="270" rx="10" ry="16" strokeWidth="1" {...heat("Gemelos")}/>
+      {/* QUADRICEPS — wide front thighs */}
+      <path d="M 21,172 C 16,184 14,202 15,218 C 16,232 20,244 28,250
+               C 36,255 47,253 54,244 C 60,236 61,220 59,205
+               C 57,190 52,176 46,170 Z"
+            strokeWidth="1.2" {...heat("Cuádriceps")}/>
+      <path d="M 109,172 C 114,184 116,202 115,218 C 114,232 110,244 102,250
+               C 94,255 83,253 76,244 C 70,236 69,220 71,205
+               C 73,190 78,176 84,170 Z"
+            strokeWidth="1.2" {...heat("Cuádriceps")}/>
+      {/* CALVES — medial gastrocnemius head */}
+      <path d="M 29,260 C 24,270 24,280 27,287 C 30,292 36,293 42,291
+               C 49,288 53,279 52,271 C 51,263 47,256 41,254 Z"
+            strokeWidth="1.2" {...heat("Gemelos")}/>
+      <path d="M 101,260 C 106,270 106,280 103,287 C 100,292 94,293 88,291
+               C 81,288 77,279 78,271 C 79,263 83,256 89,254 Z"
+            strokeWidth="1.2" {...heat("Gemelos")}/>
     </>
   );
 
   const backMuscles = () => (
     <>
-      <path d="M 52 34 L 78 34 L 88 70 L 42 70 Z" strokeWidth="1" {...heat("Espalda")}/>
-      <ellipse cx="39" cy="51" rx="10" ry="9" strokeWidth="1" {...heat("Deltoides")}/>
-      <ellipse cx="91" cy="51" rx="10" ry="9" strokeWidth="1" {...heat("Deltoides")}/>
-      <path d="M 44 68 L 35 128 L 56 148 L 63 108 L 58 68 Z" strokeWidth="1" {...heat("Espalda")}/>
-      <path d="M 86 68 L 95 128 L 74 148 L 67 108 L 72 68 Z" strokeWidth="1" {...heat("Espalda")}/>
-      <ellipse cx="65" cy="133" rx="20" ry="10" strokeWidth="1" {...heat("Espalda")}/>
-      <ellipse cx="21" cy="89" rx="7" ry="18" strokeWidth="1" {...heat("Tríceps")}/>
-      <ellipse cx="109" cy="89" rx="7" ry="18" strokeWidth="1" {...heat("Tríceps")}/>
-      <ellipse cx="49" cy="163" rx="16" ry="14" strokeWidth="1" {...heat("Glúteos")}/>
-      <ellipse cx="81" cy="163" rx="16" ry="14" strokeWidth="1" {...heat("Glúteos")}/>
-      <ellipse cx="49" cy="206" rx="13" ry="30" strokeWidth="1" {...heat("Isquios")}/>
-      <ellipse cx="81" cy="206" rx="13" ry="30" strokeWidth="1" {...heat("Isquios")}/>
-      <ellipse cx="47" cy="270" rx="10" ry="16" strokeWidth="1" {...heat("Gemelos")}/>
-      <ellipse cx="83" cy="270" rx="10" ry="16" strokeWidth="1" {...heat("Gemelos")}/>
+      {/* TRAPEZIUS — diamond/hood shape */}
+      <path d="M 65,30 C 55,32 44,38 38,48 C 34,56 36,64 44,68
+               C 52,72 60,68 65,62 C 70,68 78,72 86,68
+               C 94,64 96,56 92,48 C 86,38 75,32 65,30 Z"
+            strokeWidth="1.2" {...heat("Espalda")}/>
+      {/* REAR DELTOIDS */}
+      <path d="M 21,52 C 14,56 11,65 13,73 C 15,80 22,83 29,79
+               C 36,75 39,66 37,58 C 35,50 29,47 21,52 Z"
+            strokeWidth="1.2" {...heat("Deltoides")}/>
+      <path d="M 109,52 C 116,56 119,65 117,73 C 115,80 108,83 101,79
+               C 94,75 91,66 93,58 C 95,50 101,47 109,52 Z"
+            strokeWidth="1.2" {...heat("Deltoides")}/>
+      {/* LATS — V-fans from armpit tapering to lower back */}
+      <path d="M 37,66 C 26,76 22,96 24,118 C 26,132 34,142 44,142
+               C 52,142 58,134 59,124 C 60,112 55,92 46,76 Z"
+            strokeWidth="1.2" {...heat("Espalda")}/>
+      <path d="M 93,66 C 104,76 108,96 106,118 C 104,132 96,142 86,142
+               C 78,142 72,134 71,124 C 70,112 75,92 84,76 Z"
+            strokeWidth="1.2" {...heat("Espalda")}/>
+      {/* ERECTOR SPINAE — two narrow columns along spine */}
+      <path d="M 59,70 C 57,88 56,108 58,126 C 59,132 61,136 63,134
+               C 64,132 64,128 63,120 C 61,104 61,84 63,70 Z"
+            strokeWidth="1" {...heat("Espalda")}/>
+      <path d="M 71,70 C 73,88 74,108 72,126 C 71,132 69,136 67,134
+               C 66,132 66,128 67,120 C 69,104 69,84 67,70 Z"
+            strokeWidth="1" {...heat("Espalda")}/>
+      {/* TRICEPS — horseshoe shape back of upper arm */}
+      <path d="M 10,70 C 6,80 6,98 9,114 C 11,122 17,126 22,121
+               C 27,116 27,98 24,82 C 22,72 16,64 10,70 Z"
+            strokeWidth="1.2" {...heat("Tríceps")}/>
+      <path d="M 120,70 C 124,80 124,98 121,114 C 119,122 113,126 108,121
+               C 103,116 103,98 106,82 C 108,72 114,64 120,70 Z"
+            strokeWidth="1.2" {...heat("Tríceps")}/>
+      {/* GLUTES — large bilateral rounded shapes */}
+      <path d="M 26,162 C 20,170 18,182 21,194 C 24,204 34,212 46,210
+               C 56,208 63,198 62,186 C 61,174 54,162 44,160 Z"
+            strokeWidth="1.2" {...heat("Glúteos")}/>
+      <path d="M 104,162 C 110,170 112,182 109,194 C 106,204 96,212 84,210
+               C 74,208 67,198 68,186 C 69,174 76,162 86,160 Z"
+            strokeWidth="1.2" {...heat("Glúteos")}/>
+      {/* HAMSTRINGS — back thigh spindle */}
+      <path d="M 22,212 C 18,226 16,240 18,252 C 20,260 26,264 34,262
+               C 44,258 50,246 49,232 C 48,220 43,208 36,206 Z"
+            strokeWidth="1.2" {...heat("Isquios")}/>
+      <path d="M 108,212 C 112,226 114,240 112,252 C 110,260 104,264 96,262
+               C 86,258 80,246 81,232 C 82,220 87,208 94,206 Z"
+            strokeWidth="1.2" {...heat("Isquios")}/>
+      {/* CALVES — lateral gastrocnemius head */}
+      <path d="M 29,260 C 24,270 24,280 27,287 C 30,292 36,293 42,291
+               C 49,288 53,279 52,271 C 51,263 47,256 41,254 Z"
+            strokeWidth="1.2" {...heat("Gemelos")}/>
+      <path d="M 101,260 C 106,270 106,280 103,287 C 100,292 94,293 88,291
+               C 81,288 77,279 78,271 C 79,263 83,256 89,254 Z"
+            strokeWidth="1.2" {...heat("Gemelos")}/>
     </>
   );
 
