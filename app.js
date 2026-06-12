@@ -8639,56 +8639,75 @@ function Entreno({
     }
   };
 
-  const addExercise = async() => { 
-    if(!addText.trim() || addBusy) return; 
-    setAddBusy(true); 
+  const addExercise = async() => {
+    if(!addText.trim() || addBusy) return;
+    setAddBusy(true);
     setAddErr("");
     try{
       if(addMode === "nombre"){
-        const sys = "Eres un entrenador personal experto. Analiza el ejercicio brindado, identifica su nombre técnico, el tipo de equipo usado y al menos los 3 músculos principales. Devuelve un JSON. Ejemplo:\n" +
-                    "{\n" +
-                    "  \"tecnico\": \"Extensión de rodilla en máquina\",\n" +
-                    "  \"equipo\": \"máquina\",\n" +
-                    "  \"musculos\": [\"Cuádriceps femoral\", \"Vasto lateral\", \"Vasto medial\"]\n" +
-                    "}\n" +
-                    "Valores válidos para equipo: \"peso libre\", \"máquina\", \"polea\", \"cuerpo libre\".";
-        const schema = {
-          type: "OBJECT",
-          properties: {
-            tecnico: { type: "STRING" },
-            equipo: { type: "STRING" },
-            musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Al menos 3 músculos principales" }
-          },
-          required: ["tecnico", "equipo", "musculos"]
-        };
-        const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
-        setExercises({...exercises, [sel]: [...dayExs, {name: addText.trim(), tecnico: o.tecnico || "", equipo: o.equipo || "peso libre", musculos: o.musculos || []}]});
+        let tecnico = "", equipo = "peso libre", musculos = [];
+        try {
+          const sys = "Eres un entrenador personal experto. Analiza el ejercicio brindado, identifica su nombre técnico, el tipo de equipo usado y al menos los 3 músculos principales. Devuelve un JSON. Ejemplo:\n" +
+                      "{\n" +
+                      "  \"tecnico\": \"Extensión de rodilla en máquina\",\n" +
+                      "  \"equipo\": \"máquina\",\n" +
+                      "  \"musculos\": [\"Cuádriceps femoral\", \"Vasto lateral\", \"Vasto medial\"]\n" +
+                      "}\n" +
+                      "Valores válidos para equipo: \"peso libre\", \"máquina\", \"polea\", \"cuerpo libre\".";
+          const schema = {
+            type: "OBJECT",
+            properties: {
+              tecnico: { type: "STRING" },
+              equipo: { type: "STRING" },
+              musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Al menos 3 músculos principales" }
+            },
+            required: ["tecnico", "equipo", "musculos"]
+          };
+          const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
+          tecnico = o.tecnico || "";
+          equipo = o.equipo || "peso libre";
+          musculos = o.musculos || [];
+        } catch(aiE) {
+          // Fallback: add with name only, no AI metadata
+          setAddErr("⚠️ " + aiErr(aiE) + " — ejercicio añadido sin metadatos.");
+        }
+        setExercises({...exercises, [sel]: [...dayExs, {name: addText.trim(), tecnico, equipo, musculos}]});
       } else {
-        const sys = "El usuario describe un ejercicio físico. Identifícalo, indica su nombre técnico, el tipo de equipo y al menos los 3 músculos principales. Devuelve un JSON. Ejemplo:\n" +
-                    "{\n" +
-                    "  \"nombre\": \"Vuelos laterales en polea\",\n" +
-                    "  \"tecnico\": \"Abducción de hombro en polea baja\",\n" +
-                    "  \"equipo\": \"polea\",\n" +
-                    "  \"musculos\": [\"Deltoides lateral\", \"Supraespinoso\", \"Trapecio\"]\n" +
-                    "}\n" +
-                    "Valores válidos para equipo: \"peso libre\", \"máquina\", \"polea\", \"cuerpo libre\".";
-        const schema = {
-          type: "OBJECT",
-          properties: {
-            nombre: { type: "STRING" },
-            tecnico: { type: "STRING" },
-            equipo: { type: "STRING" },
-            musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Al menos 3 músculos principales" }
-          },
-          required: ["nombre", "tecnico", "equipo", "musculos"]
-        };
-        const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
-        setExercises({...exercises, [sel]: [...dayExs, {name: o.nombre || addText.trim(), tecnico: o.tecnico || "", equipo: o.equipo || "peso libre", musculos: o.musculos || []}]});
+        let nombre = addText.trim(), tecnico = "", equipo = "peso libre", musculos = [];
+        try {
+          const sys = "El usuario describe un ejercicio físico. Identifícalo, indica su nombre técnico, el tipo de equipo y al menos los 3 músculos principales. Devuelve un JSON. Ejemplo:\n" +
+                      "{\n" +
+                      "  \"nombre\": \"Vuelos laterales en polea\",\n" +
+                      "  \"tecnico\": \"Abducción de hombro en polea baja\",\n" +
+                      "  \"equipo\": \"polea\",\n" +
+                      "  \"musculos\": [\"Deltoides lateral\", \"Supraespinoso\", \"Trapecio\"]\n" +
+                      "}\n" +
+                      "Valores válidos para equipo: \"peso libre\", \"máquina\", \"polea\", \"cuerpo libre\".";
+          const schema = {
+            type: "OBJECT",
+            properties: {
+              nombre: { type: "STRING" },
+              tecnico: { type: "STRING" },
+              equipo: { type: "STRING" },
+              musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Al menos 3 músculos principales" }
+            },
+            required: ["nombre", "tecnico", "equipo", "musculos"]
+          };
+          const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
+          nombre = o.nombre || addText.trim();
+          tecnico = o.tecnico || "";
+          equipo = o.equipo || "peso libre";
+          musculos = o.musculos || [];
+        } catch(aiE) {
+          // Fallback: add with description as name, no AI metadata
+          setAddErr("⚠️ " + aiErr(aiE) + " — añadido sin identificar, puedes editar el nombre después.");
+        }
+        setExercises({...exercises, [sel]: [...dayExs, {name: nombre, tecnico, equipo, musculos}]});
       }
-      setAddText(""); 
+      setAddText("");
       setAdding(false);
-    } catch(e){ 
-      setAddErr("No pude procesar el ejercicio. Intenta con una descripción más directa."); 
+    } catch(e){
+      setAddErr("⚠️ " + aiErr(e));
     }
     setAddBusy(false);
   };
