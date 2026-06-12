@@ -3569,6 +3569,7 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
         <FocusMode
           onClose={() => setShowFocusMode(false)}
           splits={splits}
+          exlog={exlog}
         />
       )}
 
@@ -7176,10 +7177,33 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, exlog, exercises, no
 }
 
 /* ===== MODO FOCO ===== */
-function FocusMode({ onClose, splits }) {
+function FocusMode({ onClose, splits, exlog }) {
   const circuitSplit = splits.find(s => s.key === "E") || DEFAULT_SPLITS.find(s => s.key === "E");
   const circuitExs = circuitSplit?.ex || [];
   const exDuration = 60;
+
+  // --- WAKE LOCK: mantener pantalla encendida mientras el panel esté abierto ---
+  const wakeLockRef = useRef(null);
+  useEffect(() => {
+    if (!("wakeLock" in navigator)) return;
+    navigator.wakeLock.request("screen").then(wl => { wakeLockRef.current = wl; }).catch(() => {});
+    return () => { if (wakeLockRef.current) { wakeLockRef.current.release(); wakeLockRef.current = null; } };
+  }, []);
+
+  // --- EJERCICIOS FRECUENTES ---
+  const topExercises = useMemo(() => {
+    if (!exlog || Object.keys(exlog).length === 0) return [];
+    return Object.entries(exlog)
+      .map(([name, sets]) => {
+        const work = (sets || []).filter(s => s.type !== "warmup");
+        if (work.length === 0) return null;
+        const last = [...work].sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+        return { name, count: work.length, lastW: last.w, lastReps: last.reps, muscles: (MUSCLES[name] || []).slice(0, 2) };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6);
+  }, [exlog]);
 
   // --- REST TIMER ---
   const [restTotal, setRestTotal] = useState(90);
@@ -7346,6 +7370,50 @@ function FocusMode({ onClose, splits }) {
             {circuitRunning ? "⏹ Detener Circuito" : "▶ Iniciar Circuito"}
           </button>
         </div>
+
+        {/* EJERCICIOS FRECUENTES */}
+        {topExercises.length > 0 && (
+          <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:14, padding:16}}>
+            <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".08em", marginBottom:12}}>
+              🔥 Tus Ejercicios Frecuentes
+            </div>
+            <div style={{display:"flex", flexDirection:"column", gap:6}}>
+              {topExercises.map(ex => {
+                const col = exColor(ex.name);
+                const lastLabel = ex.lastW ? `${ex.lastW} kg × ${ex.lastReps}` : ex.lastReps || "—";
+                return (
+                  <div key={ex.name} style={{display:"flex", alignItems:"center", gap:10, padding:"9px 12px", background:C.panel, border:`1px solid ${C.line}`, borderRadius:10}}>
+                    <div style={{flex:1, minWidth:0}}>
+                      <div style={{fontSize:13, fontWeight:700, color:C.ink, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{ex.name}</div>
+                      <div style={{display:"flex", gap:8, marginTop:2, flexWrap:"wrap"}}>
+                        <span style={{fontSize:11, fontWeight:800, color:col}}>{lastLabel}</span>
+                        <span style={{fontSize:11, color:C.muted}}>{ex.count} series</span>
+                        {ex.muscles.length > 0 && (
+                          <span style={{fontSize:10, color:C.muted, fontStyle:"italic"}}>{ex.muscles.join(", ")}</span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => { stopRest(); setRestElapsed(0); setRestRunning(true); }}
+                      className="btn-active-scale"
+                      style={{background:"rgba(205,255,74,0.1)", border:"1px solid rgba(205,255,74,0.3)", borderRadius:8, padding:"7px 10px", color:C.lime, fontSize:11, fontWeight:800, cursor:"pointer", flexShrink:0, whiteSpace:"nowrap"}}>
+                      ▶ {restTotal}s
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{fontSize:10, color:C.muted, marginTop:8, textAlign:"center"}}>
+              Toca ▶ para iniciar el timer de descanso después de cada serie
+            </div>
+          </div>
+        )}
+
+        {topExercises.length === 0 && (
+          <div style={{textAlign:"center", padding:"12px 0", color:C.muted, fontSize:12}}>
+            Registrá series en el tab Entreno para ver tus ejercicios frecuentes aquí.
+          </div>
+        )}
 
       </div>
     </div>
