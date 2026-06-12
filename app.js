@@ -3043,14 +3043,19 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
   // Resumen del entrenamiento realizado hoy
   const getTodayWorkoutSummary = () => {
+    const todayStr = selectedDateStr || new Date().toISOString().slice(0, 10);
     let summary = [];
     Object.entries(exlog || {}).forEach(([name, sets]) => {
-      const todayStr = new Date().toISOString().slice(0, 10);
-      const todaySets = (sets || []).filter(s => s && s.date && s.date.slice(0, 10) === todayStr);
+      const todaySets = (sets || []).filter(s => s && s.date && s.date.slice(0, 10) === todayStr && s.type !== "warmup");
       if (todaySets.length > 0) {
-        const sorted = [...todaySets].reverse();
-        const setsText = sorted.map((s, idx) => s ? `Serie ${idx + 1}: ${s.w} kg x ${s.reps}` : "").filter(Boolean).join(", ");
-        summary.push(`- ${name}: ${setsText}`);
+        const sorted = [...todaySets];
+        const setsText = sorted.map((s, idx) => {
+          let txt = `S${idx + 1}: ${s.w}kg×${s.reps}`;
+          if (s.rir !== undefined && s.rir !== null) txt += ` @RIR${s.rir}`;
+          return txt;
+        }).join(", ");
+        const vol = sorted.reduce((a, s) => a + (parseFloat(s.w) || 0) * (parseFloat(s.reps) || 1), 0);
+        summary.push(`- ${name} (${sorted.length} series, ${Math.round(vol)} kg vol): ${setsText}`);
       }
     });
     if (summary.length === 0) return "Ninguno registrado hoy.";
@@ -3287,7 +3292,34 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
 
   const handleAnalyzeWorkout = async () => {
     setView("coach");
-    const msg = "He terminado de entrenar. Por favor, analiza mi entrenamiento de hoy y dame sugerencias. Pregúntame sobre mis sensaciones, fallos u otros detalles relevantes.";
+    const todayWorkout = getTodayWorkoutSummary();
+    if (todayWorkout === "Ninguno registrado hoy.") {
+      // Sin datos aún — solo abrir Coach
+      return;
+    }
+    // Construir resumen nutricional de hoy
+    const todayLog = (foodlog || {})[selectedDateStr] || [];
+    const todayTotals = todayLog.reduce((a, e) => ({
+      kcal: a.kcal + (+e.kcal || 0), p: a.p + (+e.proteina || 0),
+      c: a.c + (+e.carbo || 0), f: a.f + (+e.grasa || 0)
+    }), { kcal:0, p:0, c:0, f:0 });
+    const nutritionLine = todayLog.length > 0
+      ? `Nutrición hoy: ${Math.round(todayTotals.kcal)} kcal | P: ${Math.round(todayTotals.p)}g C: ${Math.round(todayTotals.c)}g G: ${Math.round(todayTotals.f)}g`
+      : "Sin registros nutricionales hoy.";
+    // Notas de sensaciones del día
+    const todaySensations = (notes || [])
+      .filter(n => (n.date || "").slice(0,10) === selectedDateStr)
+      .map(n => n.text).join(" / ") || "Sin notas de sensaciones.";
+
+    const msg = `[ANÁLISIS DE ENTRENAMIENTO — todos los datos ya están cargados en tu sistema]
+
+Ejercicios completados hoy (${selectedDateStr}):
+${todayWorkout}
+
+${nutritionLine}
+Sensaciones/notas del día: ${todaySensations}
+
+Analiza este entrenamiento directamente con los datos anteriores y con mi historial que ya tenés. Evalúa: progresión vs semanas previas, si el volumen y los pesos fueron adecuados, y dá 2-3 recomendaciones concretas para la próxima sesión. No me pidas que registre datos — todo ya está en tu sistema.`;
     await sendCoachMessage(msg);
   };
 
