@@ -6,7 +6,7 @@ import {
   MessageSquare, NotebookPen, Loader2, Scale, Camera, Clock, ChefHat, 
   Sparkles, LineChart, Dumbbell, ClipboardList, GlassWater, Target, 
   CalendarDays, ShoppingCart, Activity, Eye, EyeOff, CheckSquare, Square, ShieldAlert,
-  RefreshCw, Link2, Copy, Check, Settings, Pill, X
+  RefreshCw, Link2, Copy, Check, Settings, Pill, X, TrendingUp
 } from "lucide-react";
 
 /* ===== CONSTANTES Y PRESETS ===== */
@@ -301,12 +301,18 @@ async function fetchStateFromCloud(syncCode) {
 
 /* ===== INTEGRACIÓN DE LA API DE GEMINI (1.5 FLASH) ===== */
 const aiErr = (e) => {
-  if (!e) return "No se pudo conectar con la IA. Verifica tu API Key o conexión.";
+  if (!e) return "⚠️ Sin clave API. Ve a Perfil → Ajustes y agrega tu clave de Google AI Studio (gemini.google.com) — es gratuita.";
   const msg = e.message || "";
-  if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota") || msg.includes("limit")) {
-    return "Límite de la API superado (Error 429 / Quota Exceeded). Si usas la versión gratuita de Google AI Studio, espera unos segundos para restablecer el límite por minuto. Para evitar esto, puedes agregar múltiples API Keys separadas por comas en Ajustes (se rotarán automáticamente) o habilitar el pago por uso (Pay-as-you-go) en Google AI Studio, que cuesta centavos para uso personal.";
+  if (msg.includes("No se pudo conectar") || msg.includes("No API Key")) {
+    return "⚠️ Sin clave API configurada. Ve a Perfil → Ajustes → Clave Gemini y agrega tu clave gratuita de gemini.google.com";
   }
-  return "No se pudo conectar con la IA. Detalle: " + msg;
+  if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota") || msg.includes("limit")) {
+    return "⏱️ Límite de API superado. Espera unos segundos o agrega más claves en Perfil → Ajustes (se rotan automáticamente).";
+  }
+  if (msg.includes("401") || msg.includes("403") || msg.includes("API_KEY") || msg.includes("invalid")) {
+    return "❌ Clave API inválida. Ve a Perfil → Ajustes y verifica tu clave Gemini.";
+  }
+  return "⚠️ Error IA: " + msg;
 };
 const getProfileStr = (weight = 93.9, musculo = 64.7, grasaPct = 26.2, visceral = 9) => {
   return `Bruno: hombre, 34 años, 180 cm, ${weight} kg. Objetivo: definición (bajar grasa manteniendo músculo; ${musculo} kg de músculo, ${grasaPct}% grasa, visceral grado ${visceral}). Dieta hiperproteica.`;
@@ -369,6 +375,10 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
       apiKeys.push(dk);
     }
   });
+
+  if (apiKeys.length === 0) {
+    throw new Error("No API Key configurada. Ve a Perfil → Ajustes y agrega tu clave Gemini gratuita de gemini.google.com");
+  }
 
   // Priorizar las llaves de Gemini nativas primero y usar las de OpenRouter como respaldo/fallback
   const geminiKeys = apiKeys.filter(k => !k.startsWith("sk-or-"));
@@ -5237,11 +5247,24 @@ function Hoy({
     run("¿Qué como ahora?", sys, user);
   };
 
-  const daySummary = () => { 
-    const det = log.map(e => `${e.resumen} (${Math.round(e.kcal)}kcal P${Math.round(e.proteina)})`).join("; ") || "nada registrado"; 
-    const sys = `Eres el coach nutricional de Bruno. Dashboard diario. Resumen directo, honesto y constructivo.`;
-    const user = `El ${formatSelectedDate(selectedDateStr)}, Bruno consumió: ${det}. Totales: ${Math.round(totals.kcal)} kcal, P:${Math.round(totals.p)}g C:${Math.round(totals.c)}g G:${Math.round(totals.f)}g. Brinda un análisis corto de adherencia a los objetivos y consejo rápido de timings.`;
-    run("Resumen del Día", sys, user); 
+  const daySummary = () => {
+    const det = log.map(e => `${e.resumen} (${Math.round(e.kcal)}kcal P:${Math.round(e.proteina)}g C:${Math.round(e.carbo)}g G:${Math.round(e.grasa)}g)`).join("; ") || "nada registrado";
+    const pct = target.kcal > 0 ? Math.round((totals.kcal / target.kcal) * 100) : 0;
+    const remP = Math.max(0, target.p - totals.p);
+    const remC = Math.max(0, target.c - totals.c);
+    const remF = Math.max(0, target.f - totals.f);
+    const hydrPct = Math.round((water / 14) * 100);
+    const activeSplit = (splits || DEFAULT_SPLITS).find(s => s.key === activeSplitKey) || DEFAULT_SPLITS[0];
+    const sys = `Eres el coach nutricional y de fuerza de Bruno. Plan: ${target.kcal} kcal (${target.label}), objetivo P:${target.p}g C:${target.c}g G:${target.f}g. Split hoy: ${activeSplit?.name || "no definido"} (${activeSplit?.fuel || ""}). Responde con análisis honesto y 2-3 acciones concretas para el resto del día.`;
+    const user = `RESUMEN DEL DÍA — ${formatSelectedDate(selectedDateStr)}:
+
+Comidas: ${det}
+Totales: ${Math.round(totals.kcal)} kcal (${pct}% del objetivo) | P:${Math.round(totals.p)}g | C:${Math.round(totals.c)}g | G:${Math.round(totals.f)}g
+Restante: ${Math.round(target.kcal - totals.kcal)} kcal | P:${remP}g | C:${remC}g | G:${remF}g
+Hidratación: ${(water * 0.25).toFixed(1)}L (${hydrPct}% del objetivo diario)
+
+Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concretas para completar el día de forma óptima.`;
+    run("Resumen del Día", sys, user);
   };
 
   const chip = (a) => ({
@@ -10806,15 +10829,71 @@ function Registro({
       ? `Promedio nutricional de los últimos 7 días: ${Math.round(totalKcal / loggedDays)} kcal/día (P: ${Math.round(totalP / loggedDays)}g, C: ${Math.round(totalC / loggedDays)}g, G: ${Math.round(totalF / loggedDays)}g).`
       : "Sin registros nutricionales recientes.";
 
-    try{ 
-      const sys = `Eres el coach de Bruno. ${getProfileStr(metricsToUse.weight, metricsToUse.musculo, metricsToUse.grasaPct, metricsToUse.visceral)} Déficit de grasa progresivo, manteniendo masa muscular magra. Corto y al grano.`;
-      const out = await callGemini([{role:"user", content:`Historial de peso de Bruno: ${series}. Composición actual: Músculo ${metricsToUse.musculo}kg, Grasa ${metricsToUse.grasaPct}%, Visceral Grado ${metricsToUse.visceral}. ${nutAvgText} Analiza la tendencia y da sugerencias calóricas.`}], sys);
-      setTrend(out); 
+    // Historial de composición corporal (últimas mediciones)
+    const compHistory = Object.entries(metricslog || {})
+      .filter(([, m]) => m && (m.musculo || m.grasaPct))
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(-6)
+      .map(([d, m]) => `${d}: ${m.musculo ? m.musculo + 'kg músculo' : ''} ${m.grasaPct ? m.grasaPct + '% grasa' : ''}`.trim())
+      .join(" → ");
+
+    // Historial de perímetros (últimas 3 mediciones)
+    const perimHistory = Object.entries(metricslog || {})
+      .filter(([, m]) => m && (m.brazoDer || m.cintura || m.pecho))
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(-3)
+      .map(([d, m]) => `${d}: brazo ${m.brazoDer || '?'}cm, cintura ${m.cintura || '?'}cm, pecho ${m.pecho || '?'}cm`)
+      .join(" | ");
+
+    // Top PRs de entrenamiento
+    const prs = {};
+    Object.entries(exlog || {}).forEach(([name, sets]) => {
+      (sets || []).forEach(s => {
+        if (s && s.w && s.type !== "warmup") {
+          if (!prs[name] || s.w > prs[name]) prs[name] = s.w;
+        }
+      });
+    });
+    const prText = Object.entries(prs).slice(0, 8).map(([n, w]) => `${n}: ${w}kg`).join(", ") || "Sin datos";
+
+    // Días entrenados últimas 4 semanas
+    const recentWorkoutDays = new Set();
+    Object.values(exlog || {}).forEach(sets => {
+      (sets || []).forEach(s => {
+        if (s && s.date) {
+          const d = new Date(s.date);
+          const daysAgo = (Date.now() - d.getTime()) / 86400000;
+          if (daysAgo <= 28) recentWorkoutDays.add(s.date.slice(0, 10));
+        }
+      });
+    });
+
+    try{
+      const sys = `Eres el coach personal de Bruno. ${getProfileStr(metricsToUse.weight, metricsToUse.musculo, metricsToUse.grasaPct, metricsToUse.visceral)}
+Objetivo principal: reducción de grasa corporal manteniendo masa muscular. Dieta hiperproteica.
+Responde en español con análisis específico y 3-5 sugerencias concretas y accionables basadas en los datos reales. Formato: 1 párrafo de análisis + lista de sugerencias numeradas.`;
+      const userMsg = `DATOS DE BRUNO para análisis completo:
+
+📊 HISTORIAL DE PESO (cronológico): ${series}
+
+💪 COMPOSICIÓN CORPORAL (historial): ${compHistory || "Sin datos previos"}
+Actual → Músculo: ${metricsToUse.musculo}kg | Grasa: ${metricsToUse.grasaPct}% | Visceral: Grado ${metricsToUse.visceral}
+
+📏 PERÍMETROS CORPORALES: ${perimHistory || "Sin datos"}
+
+🍽️ NUTRICIÓN: ${nutAvgText}
+
+🏋️ ENTRENAMIENTO: ${recentWorkoutDays.size} días entrenados en últimas 4 semanas
+PRs actuales: ${prText}
+
+Analiza la tendencia de peso y composición corporal, identifica si está progresando hacia su objetivo de definición, y da sugerencias ESPECÍFICAS de calorías, macros y frecuencia de entrenamiento basadas en estos datos reales.`;
+      const out = await callGemini([{role:"user", content:userMsg}], sys);
+      setTrend(out);
       saveKey("last_trend", out);
-    } catch(e){ 
-      setTrend(aiErr(e)); 
-    } 
-    setBusy(false); 
+    } catch(e){
+      setTrend(aiErr(e));
+    }
+    setBusy(false);
   };
 
   const renderGoalBar = (title, val, unit, min, max, idealMin, idealMax, valColor) => {
