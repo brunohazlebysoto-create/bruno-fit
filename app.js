@@ -6956,6 +6956,161 @@ function Perfil({
   );
 }
 
+/* ===== MAPA DE CALOR MUSCULAR ===== */
+function MuscleHeatmap({ exlog, days, onChangeDays }) {
+  const muscleSets = useMemo(() => {
+    const cutoff = days >= 999 ? 0 : Date.now() - days * 86400000;
+    const counts = {};
+    Object.entries(exlog || {}).forEach(([exName, sets]) => {
+      const muscles = (MUSCLES[exName] || []).map(m => m === "Deltoide ant." ? "Deltoides" : m);
+      (sets || [])
+        .filter(s => s.type !== "warmup" && (days >= 999 || new Date(s.date).getTime() >= cutoff))
+        .forEach(() => muscles.forEach(m => { counts[m] = (counts[m] || 0) + 1; }));
+    });
+    return counts;
+  }, [exlog, days]);
+
+  const heat = (name) => {
+    const s = muscleSets[name] || 0;
+    if (!s) return { fill: "rgba(255,107,138,0.06)", stroke: "rgba(255,107,138,0.2)" };
+    const pct = Math.min(1, s / 21);
+    const a = 0.18 + pct * 0.82;
+    return { fill: `rgba(255,107,138,${a.toFixed(2)})`, stroke: `rgba(255,150,160,${Math.min(1,a+0.1).toFixed(2)})` };
+  };
+
+  const B = { fill:"rgba(35,48,28,0.7)", stroke:"rgba(65,82,50,0.6)", strokeWidth:"1.2" };
+
+  // Silueta base compartida (función, no componente, para evitar re-mount)
+  const silhouette = () => (
+    <>
+      <circle cx="65" cy="16" r="13" {...B}/>
+      <rect x="59" y="29" width="12" height="10" rx="2" {...B}/>
+      <path d="M 41 38 L 89 38 L 86 146 L 44 146 Z" {...B}/>
+      <path d="M 41 38 L 22 50 L 17 110 L 25 113 L 30 56 L 45 46 Z" {...B}/>
+      <path d="M 89 38 L 108 50 L 113 110 L 105 113 L 100 56 L 85 46 Z" {...B}/>
+      <path d="M 17 110 L 12 162 L 22 164 L 25 113 Z" {...B}/>
+      <path d="M 113 110 L 118 162 L 108 164 L 105 113 Z" {...B}/>
+      <path d="M 44 146 L 86 146 L 90 167 L 40 167 Z" {...B}/>
+      <path d="M 40 167 L 61 167 L 62 252 L 38 252 Z" {...B}/>
+      <path d="M 69 167 L 90 167 L 92 252 L 68 252 Z" {...B}/>
+      <path d="M 38 252 L 62 252 L 63 290 L 37 290 Z" {...B}/>
+      <path d="M 68 252 L 92 252 L 93 290 L 67 290 Z" {...B}/>
+    </>
+  );
+
+  const frontMuscles = () => (
+    <>
+      <ellipse cx="55" cy="68" rx="14" ry="12" strokeWidth="1" {...heat("Pectoral")}/>
+      <ellipse cx="75" cy="68" rx="14" ry="12" strokeWidth="1" {...heat("Pectoral")}/>
+      <ellipse cx="39" cy="51" rx="10" ry="9" strokeWidth="1" {...heat("Deltoides")}/>
+      <ellipse cx="91" cy="51" rx="10" ry="9" strokeWidth="1" {...heat("Deltoides")}/>
+      <ellipse cx="21" cy="84" rx="7" ry="18" strokeWidth="1" {...heat("Bíceps")}/>
+      <ellipse cx="109" cy="84" rx="7" ry="18" strokeWidth="1" {...heat("Bíceps")}/>
+      <ellipse cx="14" cy="138" rx="5" ry="19" strokeWidth="1" {...heat("Antebrazo")}/>
+      <ellipse cx="116" cy="138" rx="5" ry="19" strokeWidth="1" {...heat("Antebrazo")}/>
+      {[106,120,133].map(y => (
+        <React.Fragment key={y}>
+          <ellipse cx="58" cy={y} rx="9" ry="6" strokeWidth="1" {...heat("Abdominales")}/>
+          <ellipse cx="72" cy={y} rx="9" ry="6" strokeWidth="1" {...heat("Abdominales")}/>
+        </React.Fragment>
+      ))}
+      <ellipse cx="49" cy="203" rx="13" ry="30" strokeWidth="1" {...heat("Cuádriceps")}/>
+      <ellipse cx="81" cy="203" rx="13" ry="30" strokeWidth="1" {...heat("Cuádriceps")}/>
+      <ellipse cx="47" cy="270" rx="10" ry="16" strokeWidth="1" {...heat("Gemelos")}/>
+      <ellipse cx="83" cy="270" rx="10" ry="16" strokeWidth="1" {...heat("Gemelos")}/>
+    </>
+  );
+
+  const backMuscles = () => (
+    <>
+      <path d="M 52 34 L 78 34 L 88 70 L 42 70 Z" strokeWidth="1" {...heat("Espalda")}/>
+      <ellipse cx="39" cy="51" rx="10" ry="9" strokeWidth="1" {...heat("Deltoides")}/>
+      <ellipse cx="91" cy="51" rx="10" ry="9" strokeWidth="1" {...heat("Deltoides")}/>
+      <path d="M 44 68 L 35 128 L 56 148 L 63 108 L 58 68 Z" strokeWidth="1" {...heat("Espalda")}/>
+      <path d="M 86 68 L 95 128 L 74 148 L 67 108 L 72 68 Z" strokeWidth="1" {...heat("Espalda")}/>
+      <ellipse cx="65" cy="133" rx="20" ry="10" strokeWidth="1" {...heat("Espalda")}/>
+      <ellipse cx="21" cy="89" rx="7" ry="18" strokeWidth="1" {...heat("Tríceps")}/>
+      <ellipse cx="109" cy="89" rx="7" ry="18" strokeWidth="1" {...heat("Tríceps")}/>
+      <ellipse cx="49" cy="163" rx="16" ry="14" strokeWidth="1" {...heat("Glúteos")}/>
+      <ellipse cx="81" cy="163" rx="16" ry="14" strokeWidth="1" {...heat("Glúteos")}/>
+      <ellipse cx="49" cy="206" rx="13" ry="30" strokeWidth="1" {...heat("Isquios")}/>
+      <ellipse cx="81" cy="206" rx="13" ry="30" strokeWidth="1" {...heat("Isquios")}/>
+      <ellipse cx="47" cy="270" rx="10" ry="16" strokeWidth="1" {...heat("Gemelos")}/>
+      <ellipse cx="83" cy="270" rx="10" ry="16" strokeWidth="1" {...heat("Gemelos")}/>
+    </>
+  );
+
+  const sorted = Object.entries(muscleSets).sort(([,a],[,b]) => b - a);
+  const total = Object.values(muscleSets).reduce((s,v) => s+v, 0);
+
+  return (
+    <div style={{background:"var(--panel-bg-sec)", border:"1px solid var(--line-color)", borderRadius:14, padding:14}}>
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12}}>
+        <div style={{fontSize:11, fontWeight:700, color:"var(--text-muted)", textTransform:"uppercase", letterSpacing:".08em"}}>
+          🔥 Mapa Muscular
+        </div>
+        <div style={{display:"flex", gap:4}}>
+          {[[7,"7 días"],[30,"30 días"],[999,"Todo"]].map(([d,lbl]) => (
+            <button key={d} onClick={() => onChangeDays(d)} className="btn-active-scale"
+              style={{padding:"3px 9px", borderRadius:20, fontSize:10, fontWeight:800, cursor:"pointer",
+                background: days===d ? "rgba(205,255,74,0.15)" : "var(--panel-bg)",
+                border: `1px solid ${days===d ? "rgba(205,255,74,0.5)" : "var(--line-color)"}`,
+                color: days===d ? "var(--accent-primary)" : "var(--text-muted)"}}>
+              {lbl}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {total === 0 ? (
+        <div style={{textAlign:"center", padding:"18px 0", fontSize:11, color:"var(--text-muted)"}}>
+          Registra series en el tab Entreno para activar el mapa de calor.
+        </div>
+      ) : (
+        <>
+          <div style={{display:"flex", justifyContent:"center", gap:8}}>
+            <div style={{textAlign:"center"}}>
+              <svg viewBox="0 0 130 294" style={{width:130, height:278, display:"block"}}>
+                {silhouette()}{frontMuscles()}
+              </svg>
+              <div style={{fontSize:9, fontWeight:700, color:"var(--text-muted)", letterSpacing:".07em"}}>FRENTE</div>
+            </div>
+            <div style={{textAlign:"center"}}>
+              <svg viewBox="0 0 130 294" style={{width:130, height:278, display:"block"}}>
+                {silhouette()}{backMuscles()}
+              </svg>
+              <div style={{fontSize:9, fontWeight:700, color:"var(--text-muted)", letterSpacing:".07em"}}>ESPALDA</div>
+            </div>
+          </div>
+
+          {/* Barra leyenda */}
+          <div style={{padding:"8px 4px 0"}}>
+            <div style={{height:7, borderRadius:99, background:"linear-gradient(to right,rgba(255,107,138,0.08),rgba(255,107,138,0.5),rgba(255,107,138,1))"}}/>
+            <div style={{display:"flex", justifyContent:"space-between", fontSize:9, color:"var(--text-muted)", marginTop:3}}>
+              <span>0</span><span>Series / período</span><span>≥21</span>
+            </div>
+          </div>
+
+          {/* Chips de músculos más trabajados */}
+          <div style={{marginTop:10, display:"flex", gap:5, flexWrap:"wrap"}}>
+            {sorted.slice(0,7).map(([m,s]) => {
+              const a = Math.min(1, 0.2 + (s/21)*0.8);
+              return (
+                <span key={m} style={{fontSize:10, fontWeight:700, padding:"2px 9px", borderRadius:20,
+                  background:`rgba(255,107,138,${(a*0.22).toFixed(2)})`,
+                  border:`1px solid rgba(255,107,138,${(a*0.55).toFixed(2)})`,
+                  color:`rgba(255,107,138,${a.toFixed(2)})`}}>
+                  {m} · {s}
+                </span>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ===== AGENTE ENTRENADOR ===== */
 function TrainerAgent({ onClose, data, busy, onRunAnalysis, exlog, exercises, notes, metricslog, splits, plateauAlerts, overloadSuggestions, muscleImbalances }) {
   const local = data?._local || null;
@@ -6967,6 +7122,8 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, exlog, exercises, no
 
   const weeklyLoad = React.useMemo(() => local?.weeklyLoad || calcWeeklyTrainingLoad(exlog), [local, exlog]);
   const deloadCheck = React.useMemo(() => local?.deloadCheck || detectDeloadNeed(exlog, notes, metricslog), [local, exlog, notes, metricslog]);
+
+  const [heatmapDays, setHeatmapDays] = useState(7);
 
   const STATUS_COLORS = {
     neglected: { bg:"rgba(244,63,94,0.12)", border:"rgba(244,63,94,0.3)", text:"#f43f5e" },
@@ -6997,6 +7154,9 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, exlog, exercises, no
           </div>
           <button onClick={onClose} style={{background:"none", border:"none", color:"#9aa088", cursor:"pointer", padding:4}}><X size={20}/></button>
         </div>
+
+        {/* Muscle Heatmap */}
+        <MuscleHeatmap exlog={exlog} days={heatmapDays} onChangeDays={setHeatmapDays}/>
 
         {/* Phase Indicator */}
         <div className="pop" style={{padding:"12px 14px", display:"flex", alignItems:"center", justifyContent:"space-between"}}>
