@@ -269,10 +269,16 @@ function setAICache(kind, input, value){
     let store = raw ? JSON.parse(raw) : {};
     const key = kind + ":" + _aiHash((input||"").toLowerCase().trim());
     store[key] = { v: value, t: Date.now() };
-    const keys = Object.keys(store);
+    let keys = Object.keys(store);
     if(keys.length > AI_CACHE_MAX){
       keys.sort((a,b)=>store[a].t - store[b].t);
       for(let i=0;i<keys.length - AI_CACHE_MAX;i++) delete store[keys[i]];
+      keys = Object.keys(store);
+    }
+    const blob = JSON.stringify(store);
+    if(blob.length > 480000){
+      keys.sort((a,b)=>store[a].t - store[b].t);
+      keys.slice(0, Math.floor(keys.length / 2)).forEach(k => delete store[k]);
     }
     localStorage.setItem(AI_CACHE_KEY, JSON.stringify(store));
   }catch(_){}
@@ -3555,6 +3561,7 @@ Analiza este entrenamiento directamente con los datos anteriores y con mi histor
             exlog={exlog}
             notes={notes}
             foodlog={foodlog}
+            sendCoachMessage={sendCoachMessage}
           />
         )}
         {view === "coach" && (
@@ -5257,13 +5264,87 @@ const PlantaHidratacion = React.memo(function PlantaHidratacion({ water, waterGo
   );
 });
 
+const DailyGreetingCard = React.memo(function DailyGreetingCard({
+  todayKcal, exlog, splits, activeSplitKey, selectedDateStr, setView, sendCoachMessage, isRestDay
+}) {
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Buenos días" : hour < 19 ? "Buenas tardes" : "Buenas noches";
+  const greetingIcon = hour < 12 ? "🌅" : hour < 19 ? "☀️" : "🌙";
+
+  const hasTrainedToday = React.useMemo(() =>
+    Object.values(exlog || {}).some(sets =>
+      (sets || []).some(s => (s?.date || '').slice(0, 10) === selectedDateStr)
+    ), [exlog, selectedDateStr]);
+
+  const contextButtons = [];
+  if (hour >= 6 && hour < 11) {
+    contextButtons.push({ icon: "🌞", label: "Desayuno", action: () => setView("addfood") });
+  } else if (hour >= 11 && hour < 15) {
+    contextButtons.push({ icon: "🍽️", label: "Almuerzo", action: () => setView("addfood") });
+  } else if (hour >= 15 && hour < 18) {
+    contextButtons.push({ icon: "🫐", label: "Merienda", action: () => setView("addfood") });
+  } else if (hour >= 18 && hour < 22) {
+    contextButtons.push({ icon: "🌆", label: "Cena", action: () => setView("addfood") });
+  }
+
+  if (!hasTrainedToday && !isRestDay) {
+    contextButtons.push({ icon: "🏋️", label: "Pre-entreno", action: () => setView("entreno") });
+  } else if (hasTrainedToday) {
+    contextButtons.push({ icon: "💪", label: "Post-entreno", action: () => {
+      setView("coach");
+      setTimeout(() => sendCoachMessage?.("[AUTO] Acabo de terminar mi entrenamiento de hoy. Dame un análisis rápido de la sesión y qué comer en las próximas 2 horas para optimizar la recuperación."), 200);
+    }});
+  }
+
+  const handleResumen = () => {
+    setView("coach");
+    const msg = hour >= 20 || hour < 5
+      ? `[Resumen nocturno ${selectedDateStr}] Hazme un resumen de mi día completo: nutrición, entrenamiento, hidratación y qué mejorar mañana.`
+      : hour < 11
+      ? `[Plan matutino ${selectedDateStr}] Dame un plan concreto para hoy: qué comer según mis macros, si toca entrenar y cuál es mi prioridad del día.`
+      : `[Seguimiento ${selectedDateStr}] ¿Cómo voy con mi plan de hoy? Analiza lo registrado y dame sugerencias para el resto del día.`;
+    setTimeout(() => sendCoachMessage?.(msg), 200);
+  };
+
+  return (
+    <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"20px 16px 14px", marginBottom:12}}>
+      <div style={{fontSize:34, fontWeight:900, color:C.ink, marginBottom:14, letterSpacing:"-0.5px"}}>
+        {greeting} <span style={{fontSize:28}}>{greetingIcon}</span>
+      </div>
+      {contextButtons.length > 0 && (
+        <div style={{display:"flex", gap:8, marginBottom:10, flexWrap:"wrap"}}>
+          {contextButtons.map((btn, i) => (
+            <button key={i} onClick={btn.action} style={{
+              flex:1, minWidth:120,
+              background:C.panel2, border:`1px solid ${C.line}`,
+              borderRadius:12, padding:"11px 10px",
+              fontSize:13.5, fontWeight:700, color:C.ink,
+              cursor:"pointer", display:"flex", alignItems:"center", gap:7, justifyContent:"center"
+            }}>
+              <span style={{fontSize:16}}>{btn.icon}</span> {btn.label}
+            </button>
+          ))}
+        </div>
+      )}
+      <button onClick={handleResumen} style={{
+        width:"100%", background:C.panel2, border:`1px solid ${C.line}`,
+        borderRadius:12, padding:"11px 16px",
+        fontSize:13.5, fontWeight:700, color:C.ink,
+        cursor:"pointer", display:"flex", alignItems:"center", gap:8, justifyContent:"center"
+      }}>
+        <Sparkles size={15} color={C.lime}/> Resumen IA del día
+      </button>
+    </div>
+  );
+});
+
 function Hoy({
   target, totals, log, setLog, loaded, water, setWater, geminiKey, supplements, handleUpdateSupplements,
   activeSplitKey, suppsInventory, setSuppsInventory, selectedDateStr, setSelectedDateStr,
   proactiveMsg, aiNotifications, setAiNotifications, macroAdjustSuggestion, setMacroAdjustSuggestion, saveState, customPresets,
   weeklyInsight, smartGoals, challenges, updateChallengeProgress, upcomingEvent, experiments, setExperiments, splits,
   setView, setShowNutritionModal, setModalVals, addFoodInputText, setAddFoodInputText, customSuggestions,
-  exlog, notes, foodlog
+  exlog, notes, foodlog, sendCoachMessage
 }){
   const [text, setText] = useState(""); 
   const [busy, setBusy] = useState(false); 
@@ -5719,7 +5800,19 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
         </button>
       </div>
 
-      {/* Planta de hidratación — lo primero que ves */}
+      {/* Saludo contextual del día */}
+      <DailyGreetingCard
+        todayKcal={totals?.kcal || 0}
+        exlog={exlog}
+        splits={splits}
+        activeSplitKey={activeSplitKey}
+        selectedDateStr={selectedDateStr}
+        setView={setView}
+        sendCoachMessage={sendCoachMessage}
+        isRestDay={isRestDay}
+      />
+
+      {/* Planta de hidratación */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"16px 15px 12px", marginBottom:12, display:'flex', flexDirection:'column', alignItems:'center', gap:0}}>
         <PlantaHidratacion water={water} waterGoal={waterGoal} isRestDay={isRestDay}/>
       </div>
@@ -8031,10 +8124,19 @@ function FocusMode({ onClose, splits, exlog }) {
   const exDuration = 60;
   const [formCues, setFormCues] = useState({});
   const [formCueBusy, setFormCueBusy] = useState({});
-  const [setsDone, setSetsDone] = useState({}); // { [exName]: number }
+  const today = new Date().toISOString().slice(0, 10);
+  const [setsDone, setSetsDone] = useState({});
+  useEffect(() => {
+    loadKey("focus_sets_" + today, {}).then(saved => {
+      if (saved && Object.keys(saved).length) setSetsDone(saved);
+    });
+  }, [today]);
+  useEffect(() => {
+    if (Object.keys(setsDone).length) saveKey("focus_sets_" + today, setsDone);
+  }, [setsDone, today]);
   const markSetDone = (exName) => {
     setSetsDone(prev => ({ ...prev, [exName]: (prev[exName] || 0) + 1 }));
-    startRest(); // descanso automático al completar serie
+    startRest();
   };
   const resetSets = (exName) => setSetsDone(prev => ({ ...prev, [exName]: 0 }));
 
@@ -12442,6 +12544,9 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
 
         const analyzePhotos = async () => {
           if (!photoA || !photoB || cmpPhotoBusy) return;
+          const cacheKey = [cmpDateA, cmpDateB].sort().join("|");
+          const cached = getAICache("photo_cmp", cacheKey);
+          if (cached) { setCmpPhotoAnalysis(cached); return; }
           setCmpPhotoBusy(true);
           setCmpPhotoAnalysis("");
           try {
@@ -12456,7 +12561,9 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               ]
             };
             const result = await callGemini([msg], "Eres un coach experto en composición corporal. Analiza fotos de progreso con criterio profesional, siendo honesto y motivador. Responde en español.");
-            setCmpPhotoAnalysis(result?.trim() || "Sin análisis disponible.");
+            const text = result?.trim() || "Sin análisis disponible.";
+            setAICache("photo_cmp", cacheKey, text);
+            setCmpPhotoAnalysis(text);
           } catch(e) {
             setCmpPhotoAnalysis("⚠️ " + aiErr(e));
           }
