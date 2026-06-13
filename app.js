@@ -3241,6 +3241,7 @@ ${workoutHistory}
 --- FIN HISTORIAL ---
 
 Español. ${coachPersonality==="motivacional" ? "Tono motivacional, empático y energético. Celebra logros, usa frases inspiradoras, motiva a Bruno a superar sus límites." : coachPersonality==="nutricionista" ? "Enfócate principalmente en nutrición, timing de comidas, macros y estrategias alimentarias. Profundiza en el aspecto nutricional sobre el entrenamiento." : coachPersonality==="psicólogo" ? "Tono empático, comprensivo y de apoyo. Atiende el aspecto mental y emocional del fitness. Ayuda a manejar el estrés, la motivación y los hábitos." : "Directo, técnico y basado en datos. Prioriza análisis de progresión, volumen, PRs y optimización del rendimiento."}
+FORMATO DE RESPUESTA (chatResponse): Texto limpio y legible para chat móvil. PERMITIDO: párrafos cortos, listas con "• item" (un ítem por línea), **negrita** para datos clave, emojis puntuales para separar secciones. PROHIBIDO: ### headers, listas con * en medio de una frase, párrafos de más de 4 líneas. Máximo 4 ítems por lista; si hay más datos, agrúpalos. Separá las secciones con una línea en blanco.
 Usa el historial para dar recomendaciones personalizadas y basadas en datos reales (PRs, progresión, volumen). Si detectás estancamiento o regresión en algún ejercicio, mencionalo proactivamente.
 REGLA DE CALCULADORA INVERSA: Si Bruno te pregunta qué cenar o comer para cerrar el día o cómo completar sus macros restantes (ej. 'me quedan 600 calorías y 50g de proteína...'), calcula con precisión matemática una combinación rápida de alimentos (ej. claras, huevo entero, gramos exactos de pechuga de pollo, scoop de whey) para cuadrar sus números de forma exacta.
 REGLA CRÍTICA DE PORCIONES E INGREDIENTES: Cuando recomiendes porciones, alimentos o comidas en el chat, debes ajustar estrictamente las porciones (detallando gramos exactos) al plan nutricional seleccionado por Bruno (${target.label}) y a las necesidades energéticas del split del día (${activeSplit.fuel}). No recomiendes las mismas porciones por defecto. Si está en "Volumen" o día de "Carbo alto", propón porciones abundantes de carbohidratos. Si está en "Definición" o día de "Carbo medio", sé sumamente estricto y reduce las porciones de carbohidratos, sugiriendo fuentes de proteína magra más saciantes.
@@ -3999,6 +4000,116 @@ Analiza este entrenamiento directamente con los datos anteriores y con mi histor
   );
 }
 
+/* ===== MARKDOWN TEXT RENDERER ===== */
+function MarkdownText({ text, style = {} }) {
+  if (!text) return null;
+
+  const renderInline = (str) => {
+    if (!str) return null;
+    const parts = str.split(/(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`)/g);
+    return parts.map((p, i) => {
+      if (p.startsWith('**') && p.endsWith('**') && p.length > 4)
+        return <strong key={i} style={{ fontWeight: 700 }}>{p.slice(2, -2)}</strong>;
+      if (p.startsWith('*') && p.endsWith('*') && p.length > 2 && !p.startsWith('**'))
+        return <span key={i} style={{ color: C.cyan }}>{p.slice(1, -1)}</span>;
+      if (p.startsWith('`') && p.endsWith('`'))
+        return <code key={i} style={{ background: 'rgba(255,255,255,0.09)', borderRadius: 4, padding: '1px 5px', fontSize: '0.88em' }}>{p.slice(1, -1)}</code>;
+      return p;
+    });
+  };
+
+  const lines = text.split('\n');
+  const out = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const tr = lines[i].trim();
+
+    if (!tr) { i++; continue; }
+
+    // ### / ## / # headers
+    const hm = tr.match(/^(#{1,3})\s+(.*)/);
+    if (hm) {
+      const lvl = hm[1].length;
+      out.push(
+        <div key={i} style={{ fontSize: lvl === 1 ? 15 : lvl === 2 ? 13.5 : 13, fontWeight: 800, color: C.lime, marginTop: 10, marginBottom: 3, lineHeight: 1.3 }}>
+          {renderInline(hm[2])}
+        </div>
+      );
+      i++; continue;
+    }
+
+    // Standalone **Title** line → section header
+    if (/^\*\*[^*]+\*\*\s*:?\s*$/.test(tr)) {
+      out.push(
+        <div key={i} style={{ fontSize: 13, fontWeight: 800, color: C.lime, marginTop: 10, marginBottom: 2 }}>
+          {tr.replace(/\*\*/g, '').replace(/:$/, '')}
+        </div>
+      );
+      i++; continue;
+    }
+
+    // Bullet list (•, -, * at line start)
+    if (/^[•\-\*]\s/.test(tr)) {
+      const items = [];
+      while (i < lines.length && /^[•\-\*]\s/.test(lines[i].trim())) {
+        const itemText = lines[i].trim().replace(/^[•\-\*]\s+/, '');
+        items.push(
+          <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', marginBottom: 3 }}>
+            <span style={{ color: C.lime, flexShrink: 0, fontSize: 14, lineHeight: '1.55' }}>·</span>
+            <span style={{ flex: 1, lineHeight: 1.55 }}>{renderInline(itemText)}</span>
+          </div>
+        );
+        i++;
+      }
+      out.push(<div key={`bl${i}`} style={{ margin: '5px 0' }}>{items}</div>);
+      continue;
+    }
+
+    // Numbered list
+    if (/^\d+[.)]\s/.test(tr)) {
+      const items = [];
+      let n = 1;
+      while (i < lines.length && /^\d+[.)]\s/.test(lines[i].trim())) {
+        const itemText = lines[i].trim().replace(/^\d+[.)]\s+/, '');
+        items.push(
+          <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', marginBottom: 3 }}>
+            <span style={{ color: C.lime, flexShrink: 0, fontWeight: 700, fontSize: 12, minWidth: 16, lineHeight: '1.7' }}>{n}.</span>
+            <span style={{ flex: 1, lineHeight: 1.55 }}>{renderInline(itemText)}</span>
+          </div>
+        );
+        i++; n++;
+      }
+      out.push(<div key={`nl${i}`} style={{ margin: '5px 0' }}>{items}</div>);
+      continue;
+    }
+
+    // Inline "* item * item" pattern → split into vertical bullets
+    if (/\*\s[A-ZÁÉÍÓÚ0-9\*]/.test(tr) && (tr.match(/\*\s/g) || []).length >= 2) {
+      const parts = tr.split(/\s*\*\s+/).filter(Boolean);
+      if (parts.length > 1) {
+        out.push(
+          <div key={i} style={{ margin: '5px 0' }}>
+            {parts.map((p, pi) => (
+              <div key={pi} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', marginBottom: 3 }}>
+                <span style={{ color: C.lime, flexShrink: 0, fontSize: 14, lineHeight: '1.55' }}>·</span>
+                <span style={{ flex: 1, lineHeight: 1.55 }}>{renderInline(p.trim())}</span>
+              </div>
+            ))}
+          </div>
+        );
+        i++; continue;
+      }
+    }
+
+    // Regular paragraph
+    out.push(<p key={i} style={{ margin: '4px 0', lineHeight: 1.58 }}>{renderInline(tr)}</p>);
+    i++;
+  }
+
+  return <div style={{ fontSize: 13.5, color: 'inherit', ...style }}>{out}</div>;
+}
+
 /* ===== SUB-PANEL IA (AIPanel) ===== */
 function AIPanel({title, busy, text, color=C.lime, onClose}){
   if(!busy && !text) return null;
@@ -4049,7 +4160,7 @@ function AIPanel({title, busy, text, color=C.lime, onClose}){
           <Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/>pensando…
         </div>
       ) : (
-        <div style={{fontSize:13.5, lineHeight:1.55, whiteSpace:"pre-wrap", color:"#dde0cf"}}>{text}</div>
+        <MarkdownText text={text} style={{ color: "#dde0cf" }}/>
       )}
     </div>
   );
@@ -6717,36 +6828,6 @@ function Coach({
   chat, setChat, target, totals, sendCoachMessage, chatBusy, chatStreaming, sendDailyGreetingIfNeeded,
   coachPersonality, setCoachPersonality, metricslog, foodlog, exlog
 }){
-  // Simple markdown renderer for Coach responses
-  const renderMarkdown = (text) => {
-    if (!text) return null;
-    const blocks = text.split('\n\n');
-    return blocks.map((block, idx) => {
-      // List parsing
-      if (block.trim().startsWith('- ') || block.trim().match(/^\d+\.\s/)) {
-        const lines = block.split('\n');
-        return (
-          <ul key={idx} style={{ paddingLeft: '20px', margin: '8px 0' }}>
-            {lines.map((line, lidx) => {
-              const content = line.replace(/^(- |\d+\.\s)/, '');
-              const bolded = content.split(/(\*\*.*?\*\*)/g).map((part, i) => {
-                if (part.startsWith('**') && part.endsWith('**')) return <strong key={i}>{part.slice(2, -2)}</strong>;
-                return part;
-              });
-              return <li key={lidx}>{bolded}</li>;
-            })}
-          </ul>
-        );
-      }
-      
-      // Paragraph with bold parsing
-      const bolded = block.split(/(\*\*.*?\*\*)/g).map((part, i) => {
-        if (part.startsWith('**') && part.endsWith('**')) return <strong key={i}>{part.slice(2, -2)}</strong>;
-        return part;
-      });
-      return <p key={idx} style={{ margin: '8px 0' }}>{bolded}</p>;
-    });
-  };
 
   const [text, setText] = useState(""); 
   const endRef = useRef(null);
@@ -6838,14 +6919,14 @@ function Coach({
         
         {chat.slice(-4).map((m, i) => (
           <div key={i} className={`chat-bubble ${m.role === "user" ? "user" : "assistant"}`}>
-            {m.role === "user" ? m.content : renderMarkdown(m.content)}
+            {m.role === "user" ? m.content : <MarkdownText text={m.content}/>}
           </div>
         ))}
         
         {chatBusy && (
           chatStreaming ? (
             <div className="chat-bubble assistant" style={{opacity:0.9}}>
-              {renderMarkdown(chatStreaming)}
+              <MarkdownText text={chatStreaming}/>
               <span style={{display:"inline-block", width:6, height:12, background:C.lime, marginLeft:2, animation:"blink 0.7s step-end infinite", verticalAlign:"middle"}}/>
             </div>
           ) : (
