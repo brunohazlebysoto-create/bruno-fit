@@ -548,49 +548,6 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
   throw lastError || new Error("No se pudo conectar con ninguna API Key.");
 }
 
-async function callGeminiStream(messages, systemInstruction, onChunk) {
-  let apiKeysStr = await loadKey("gemini_api_key", "");
-  const apiKeys = apiKeysStr ? apiKeysStr.split(/[,;\s]+/).map(k => k.trim()).filter(k => k && !k.startsWith("sk-or-")) : [];
-  const defaultKeys = DEFAULT_GEMINI_KEY.split(/[,;\s]+/).map(k => k.trim()).filter(k => k && !k.startsWith("sk-or-"));
-  defaultKeys.forEach(dk => { if (!apiKeys.includes(dk)) apiKeys.push(dk); });
-  if (apiKeys.length === 0) { return callGemini(messages, systemInstruction); }
-  const apiKey = apiKeys[Math.floor(Math.random() * apiKeys.length)];
-
-  const contents = messages.map(m => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: m.content }]
-  }));
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?alt=sse&key=${apiKey}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents,
-      systemInstruction: { parts: [{ text: systemInstruction }] },
-      generationConfig: { temperature: 0.3 }
-    })
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let full = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    const lines = chunk.split("\n");
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      try {
-        const json = JSON.parse(line.slice(6));
-        const text = json.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        if (text) { full += text; onChunk(full); }
-      } catch (_) {}
-    }
-  }
-  return full;
-}
-
 const SEED_TECNICO = {
   "Press banca":"Press de pectoral con barra plano",
   "Press inclinado mancuerna":"Press de pectoral inclinado con mancuernas",
@@ -1098,7 +1055,6 @@ export default function App(){
   const [trainerAgentData, setTrainerAgentData] = useState(null);
   const [trainerAgentBusy, setTrainerAgentBusy] = useState(false);
   const [coachPersonality, setCoachPersonality] = useState("técnico");
-  const [chatStreaming, setChatStreaming] = useState("");
   const [showFocusMode, setShowFocusMode] = useState(false);
 
   // Elevated Calendar States & Helpers
@@ -3257,10 +3213,8 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
 * En 'data', proporciona: 'splits' (arreglo que contiene la estructura COMPLETA de todos los días de entrenamiento, cada uno con key, name, fuel y ex).
       Ejercicios válidos para ADD_SET: ${exerciseNamesStr}.`;
       
-      setChatStreaming("");
       // Una sola llamada estructurada (sin streaming paralelo — ahorra cuota)
       const out = await callGemini(nextChat.slice(-12), sys, COACH_SCHEMA);
-      setChatStreaming("");
       const parsed = cleanAndParseJSON(out);
 
       if (parsed && parsed.actions && parsed.actions.length > 0) {
@@ -3579,7 +3533,6 @@ Analiza este entrenamiento directamente con los datos anteriores y con mi histor
             totals={totals}
             sendCoachMessage={sendCoachMessage}
             chatBusy={chatBusy}
-            chatStreaming={chatStreaming}
             sendDailyGreetingIfNeeded={sendDailyGreetingIfNeeded}
             coachPersonality={coachPersonality}
             setCoachPersonality={setCoachPersonality}
@@ -5038,7 +4991,7 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr) {
   return { score, label, color, factors };
 }
 
-function PlantaHidratacion({ water, waterGoal, isRestDay }) {
+const PlantaHidratacion = React.memo(function PlantaHidratacion({ water, waterGoal, isRestDay }) {
   const wg = waterGoal || 14;
   const pct = Math.min(1, Math.max(0, (water || 0) / wg));
 
@@ -5238,7 +5191,7 @@ function PlantaHidratacion({ water, waterGoal, isRestDay }) {
       </div>
     </div>
   );
-}
+});
 
 function Hoy({
   target, totals, log, setLog, loaded, water, setWater, geminiKey, supplements, handleUpdateSupplements,
@@ -5429,6 +5382,18 @@ function Hoy({
   const pPct = ((totals.p / totalGrams) * 100).toFixed(1);
   const cPct = ((totals.c / totalGrams) * 100).toFixed(1);
   const fPct = ((totals.f / totalGrams) * 100).toFixed(1);
+
+  // Memoized: both iterate exlog/notes/foodlog — avoid recomputing every render
+  const isRestDay = React.useMemo(
+    () => !Object.values(exlog || {}).some(sets =>
+      (sets || []).some(s => (s?.date || '').slice(0, 10) === selectedDateStr)
+    ),
+    [exlog, selectedDateStr]
+  );
+  const readiness = React.useMemo(
+    () => predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr),
+    [exlog, notes, water, foodlog, selectedDateStr]
+  );
 
   const getLocalDateStr = (d) => {
     const year = d.getFullYear();
@@ -5691,32 +5656,20 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
       </div>
 
       {/* Planta de hidratación — lo primero que ves */}
-      {(() => {
-        const isRestDay = !Object.values(exlog||{}).some(sets =>
-          (sets||[]).some(s => (s?.date||'').slice(0,10) === selectedDateStr)
-        );
-        return (
-          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"16px 15px 12px", marginBottom:12, display:'flex', flexDirection:'column', alignItems:'center', gap:0}}>
-            <PlantaHidratacion water={water} waterGoal={waterGoal} isRestDay={isRestDay}/>
-          </div>
-        );
-      })()}
+      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"16px 15px 12px", marginBottom:12, display:'flex', flexDirection:'column', alignItems:'center', gap:0}}>
+        <PlantaHidratacion water={water} waterGoal={waterGoal} isRestDay={isRestDay}/>
+      </div>
 
-      {(() => {
-        const readiness = predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr);
-        return (
-          <div style={{display:"flex", alignItems:"center", gap:10, background:C.panel, border:`1.5px solid ${readiness.color}33`, borderRadius:14, padding:"10px 14px", marginBottom:12, animation:"pop 0.3s ease"}}>
-            <div style={{width:44, height:44, borderRadius:"50%", background:`${readiness.color}22`, border:`2px solid ${readiness.color}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0}}>
-              <span style={{fontSize:16, fontWeight:900, color:readiness.color}}>{readiness.score}</span>
-            </div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:10, fontWeight:800, color:readiness.color, textTransform:"uppercase", letterSpacing:".07em"}}>Preparación hoy</div>
-              <div style={{fontSize:13, fontWeight:700, color:C.ink}}>{readiness.label}</div>
-              {readiness.factors.length > 0 && <div style={{fontSize:10.5, color:C.muted, marginTop:1}}>{readiness.factors.join(" · ")}</div>}
-            </div>
-          </div>
-        );
-      })()}
+      <div style={{display:"flex", alignItems:"center", gap:10, background:C.panel, border:`1.5px solid ${readiness.color}33`, borderRadius:14, padding:"10px 14px", marginBottom:12, animation:"pop 0.3s ease"}}>
+        <div style={{width:44, height:44, borderRadius:"50%", background:`${readiness.color}22`, border:`2px solid ${readiness.color}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0}}>
+          <span style={{fontSize:16, fontWeight:900, color:readiness.color}}>{readiness.score}</span>
+        </div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:10, fontWeight:800, color:readiness.color, textTransform:"uppercase", letterSpacing:".07em"}}>Preparación hoy</div>
+          <div style={{fontSize:13, fontWeight:700, color:C.ink}}>{readiness.label}</div>
+          {readiness.factors.length > 0 && <div style={{fontSize:10.5, color:C.muted, marginTop:1}}>{readiness.factors.join(" · ")}</div>}
+        </div>
+      </div>
 
       {upcomingEvent && upcomingEvent.date && (() => {
         const days = Math.ceil((new Date(upcomingEvent.date) - new Date()) / 86400000);
@@ -5914,7 +5867,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
           <div style={{fontSize:11, fontWeight:800, color:C.cyan, textTransform:"uppercase", letterSpacing:".05em", display:"flex", alignItems:"center", gap:6, marginBottom:4}}>
             <span>📊 Insight de la Semana</span>
           </div>
-          <div style={{fontSize:13.5, color:C.ink, lineHeight:1.5}}>{weeklyInsight.text}</div>
+          <MarkdownText text={weeklyInsight.text} style={{color:C.ink}}/>
         </div>
       )}
 
@@ -6825,7 +6778,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
 
 /* ===== TAB COACH ===== */
 function Coach({
-  chat, setChat, target, totals, sendCoachMessage, chatBusy, chatStreaming, sendDailyGreetingIfNeeded,
+  chat, setChat, target, totals, sendCoachMessage, chatBusy, sendDailyGreetingIfNeeded,
   coachPersonality, setCoachPersonality, metricslog, foodlog, exlog
 }){
 
@@ -6924,16 +6877,9 @@ function Coach({
         ))}
         
         {chatBusy && (
-          chatStreaming ? (
-            <div className="chat-bubble assistant" style={{opacity:0.9}}>
-              <MarkdownText text={chatStreaming}/>
-              <span style={{display:"inline-block", width:6, height:12, background:C.lime, marginLeft:2, animation:"blink 0.7s step-end infinite", verticalAlign:"middle"}}/>
-            </div>
-          ) : (
-            <div style={{display:"flex", gap:6, color:C.muted, fontSize:13, alignItems:"center", padding:"4px 2px"}}>
-              <Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>pensando…
-            </div>
-          )
+          <div style={{display:"flex", gap:6, color:C.muted, fontSize:13, alignItems:"center", padding:"4px 2px"}}>
+            <Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>pensando…
+          </div>
         )}
         <div ref={endRef}/>
       </div>
@@ -12477,8 +12423,8 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
 
                 {/* Result */}
                 {cmpPhotoAnalysis && (
-                  <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:11, padding:"11px 13px", fontSize:12.5, color:C.ink, lineHeight:1.6}}>
-                    {cmpPhotoAnalysis}
+                  <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:11, padding:"11px 13px", color:C.ink}}>
+                    <MarkdownText text={cmpPhotoAnalysis} style={{fontSize:12.5}}/>
                   </div>
                 )}
               </>
