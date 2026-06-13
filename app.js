@@ -3320,133 +3320,257 @@ Analiza este entrenamiento directamente con los datos anteriores y con mi histor
   const generateWeeklyPDF = async () => {
     if (pdfBusy) return;
     setPdfBusy(true);
-    // Abrir ventana ANTES del await para evitar bloqueo del navegador
     const w = window.open('', '_blank');
-    if (w) w.document.write('<html><body style="background:#0c0e0b;color:#cdff4a;font-family:sans-serif;padding:0;margin:0;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center"><p style="font-size:18px">⏳ Generando reporte…</p></body></html>');
+    if (w) w.document.write('<html><body style="background:#0c0e0b;color:#cdff4a;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center"><div><p style="font-size:22px;margin-bottom:8px">⏳ Generando reporte…</p><p style="font-size:13px;color:#9aa088">Analizando tu semana con IA</p></div></body></html>');
     try {
       const last7 = [...Array(7)].map((_,i)=>{ const d=new Date(); d.setDate(d.getDate()-i); return d.toISOString().slice(0,10); }).reverse();
       const weekStart = last7[0], weekEnd = last7[6];
-      const fmt = d => { const [,m,day] = d.split('-'); return `${parseInt(day)} ${['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][parseInt(m)-1]}`; };
+      const DAYS_ES = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+      const MONTHS_ES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+      const fmtDate = d => { const dt=new Date(d+'T12:00:00'); return `${DAYS_ES[dt.getDay()]} ${dt.getDate()} ${MONTHS_ES[dt.getMonth()]}`; };
+      const fmtShort = d => { const [,m,day]=d.split('-'); return `${parseInt(day)} ${MONTHS_ES[parseInt(m)-1]}`; };
 
-      // Workouts this week
-      const weekWorkouts = {};
-      const allTimePRs = {};
+      // Workouts this week — grouped by day
+      const weekWorkouts = {}; // { date: { exName: [sets] } }
+      const allTimePRs = {}, prevBestByEx = {};
       Object.entries(exlog||{}).forEach(([exName, sets]) => {
+        let weekMax = 0;
         (sets||[]).forEach(s => {
-          if (!s || !s.w || s.type === "warmup") return;
-          if (s.w > (allTimePRs[exName]||0)) allTimePRs[exName] = s.w;
+          if (!s||!s.w||s.type==="warmup") return;
+          const w2 = parseFloat(s.w)||0;
           const d = (s.date||"").slice(0,10);
-          if (d < weekStart || d > weekEnd) return;
+          if (w2 > (allTimePRs[exName]||0)) allTimePRs[exName] = w2;
+          if (d < weekStart || d > weekEnd) {
+            if (w2 > (prevBestByEx[exName]||0)) prevBestByEx[exName] = w2;
+            return;
+          }
+          if (w2 > weekMax) weekMax = w2;
           if (!weekWorkouts[d]) weekWorkouts[d] = {};
           if (!weekWorkouts[d][exName]) weekWorkouts[d][exName] = [];
           weekWorkouts[d][exName].push(s);
         });
       });
 
-      const totalSets = Object.values(weekWorkouts).reduce((s,day) => s + Object.values(day).reduce((ss,sets) => ss+sets.length, 0), 0);
-      const totalTons = Object.values(weekWorkouts).reduce((s,day) => s + Object.values(day).reduce((ss,sets) => ss+sets.reduce((sss,set) => sss+(parseFloat(set.w)||0)*(parseFloat(set.reps)||1)/1000, 0), 0), 0);
+      const trainedDays = Object.keys(weekWorkouts).sort();
+      const totalSets = trainedDays.reduce((s,d)=>s+Object.values(weekWorkouts[d]).reduce((ss,sets)=>ss+sets.length,0),0);
+      const totalTons = trainedDays.reduce((s,d)=>s+Object.values(weekWorkouts[d]).reduce((ss,sets)=>ss+sets.reduce((sss,set)=>sss+(parseFloat(set.w)||0)*(parseFloat(set.reps)||1)/1000,0),0),0);
 
-      const wDates = last7.filter(d => metricslog?.[d]?.weight);
-      const weightChange = wDates.length >= 2 ? (parseFloat(metricslog[wDates[wDates.length-1]].weight)-parseFloat(metricslog[wDates[0]].weight)).toFixed(1) : null;
+      const wDates = last7.filter(d=>metricslog?.[d]?.weight);
+      const weightChange = wDates.length>=2 ? (parseFloat(metricslog[wDates[wDates.length-1]].weight)-parseFloat(metricslog[wDates[0]].weight)).toFixed(1) : null;
       const latestMetricDate = Object.keys(metricslog||{}).sort().reverse()[0];
-      const latestMetric = latestMetricDate ? metricslog[latestMetricDate] : null;
+      const lm = latestMetricDate ? metricslog[latestMetricDate] : null;
 
-      // Exercise list for AI
-      const exerciseLines = [];
-      Object.entries(weekWorkouts).sort().forEach(([date, dayExs]) => {
-        Object.entries(dayExs).forEach(([exName, sets]) => {
+      // Build per-day detail for AI prompt
+      const dayDetails = trainedDays.map(date => {
+        const dayExs = weekWorkouts[date];
+        const lines = Object.entries(dayExs).map(([ex,sets])=>{
           const maxW = Math.max(...sets.map(s=>parseFloat(s.w)||0));
-          exerciseLines.push(`${exName} (${date}): ${sets.length} series, max ${maxW}kg, reps: ${sets.map(s=>s.reps).join('/')}`);
+          const allPR = allTimePRs[ex]||0;
+          const prevBest = prevBestByEx[ex]||0;
+          const est1rm = maxW>0?Math.round(maxW*(1+(parseFloat(sets[0]?.reps)||8)/30)):0;
+          const prNote = maxW>=allPR&&maxW>0?' ★PR' : maxW>prevBest&&maxW>0?' ↑mejora':'';
+          return `  • ${ex}: ${sets.length} series [${sets.map(s=>`${s.w}kg×${s.reps}`).join(', ')}] → 1RM est.${est1rm}kg${prNote}`;
         });
-      });
-      const overloadStr = Object.entries(overloadSuggestions||{}).slice(0,8).map(([ex,s])=>`${ex}: ${s.currentMax}kg→${s.suggested}kg`).join('\n');
-      const plateauStr = (plateauAlerts||[]).slice(0,5).map(p=>p.exercise||p.message||JSON.stringify(p)).join(', ')||'Ninguno';
+        return `${fmtDate(date)}:\n${lines.join('\n')}`;
+      }).join('\n\n');
 
-      const PDF_SCHEMA = { type:"OBJECT", properties: {
+      // Muscle volume
+      const muscleVol = calcMuscleVolumeBalance(exlog, exercises);
+      const muscleLines = Object.entries(muscleVol).filter(([,m])=>m.setsPerWeek>0)
+        .sort((a,b)=>b[1].setsPerWeek-a[1].setsPerWeek)
+        .map(([muscle,m])=>`${muscle}: ${m.setsPerWeek.toFixed(1)} series/sem (${m.status})`).join(' | ');
+
+      // Deload / fatigue
+      const deload = detectDeloadNeed(exlog, notes||[], metricslog||{});
+      const overloadStr = Object.entries(overloadSuggestions||{}).slice(0,10).map(([ex,s])=>`${ex}: max ${s.currentMax}kg → sugerido ${s.suggested}kg`).join('\n');
+      const plateauStr = (plateauAlerts||[]).slice(0,6).map(p=>p.exercise||p.message||'').filter(Boolean).join(', ')||'Ninguno';
+
+      const PDF_SCHEMA = { type:"OBJECT", properties:{
+        valoracion:{ type:"OBJECT", properties:{ puntuacion:{type:"NUMBER"}, resumen:{type:"STRING"} }, required:["puntuacion","resumen"] },
         analisis:{ type:"STRING" },
-        fortalezas:{ type:"ARRAY", items:{ type:"STRING" } },
-        mejorar:{ type:"ARRAY", items:{ type:"STRING" } },
+        progresion:{ type:"STRING" },
+        recuperacion:{ type:"STRING" },
+        fortalezas:{ type:"ARRAY", items:{type:"STRING"} },
+        mejorar:{ type:"ARRAY", items:{ type:"OBJECT", properties:{ punto:{type:"STRING"}, accion:{type:"STRING"} }, required:["punto","accion"] } },
         cargas:{ type:"ARRAY", items:{ type:"OBJECT", properties:{
-          ejercicio:{type:"STRING"}, cargaActual:{type:"STRING"}, sugerencia:{type:"STRING"}, razon:{type:"STRING"}
-        }, required:["ejercicio","sugerencia","razon"] }},
+          ejercicio:{type:"STRING"}, cargaActual:{type:"STRING"}, sugerencia:{type:"STRING"}, esquema:{type:"STRING"}, razon:{type:"STRING"}
+        }, required:["ejercicio","sugerencia","esquema","razon"] }},
+        planProximaSemana:{ type:"ARRAY", items:{type:"STRING"} },
         focoProximaSemana:{ type:"STRING" }
-      }, required:["analisis","cargas","focoProximaSemana"] };
+      }, required:["valoracion","analisis","progresion","cargas","focoProximaSemana"] };
 
-      const sys = "Eres el coach de Bruno. Analiza su semana de entrenamiento y da recomendaciones específicas para la próxima semana. Usa SOLO los datos proporcionados. Responde en español, tono profesional y directo.";
-      const userMsg = `SEMANA ${weekStart} al ${weekEnd}:
-Días: ${Object.keys(weekWorkouts).length}/7 · Series: ${totalSets} · Volumen: ${totalTons.toFixed(1)}t
-Peso: ${latestMetric?.weight||'?'}kg${weightChange!==null?` (${parseFloat(weightChange)>=0?'+':''}${weightChange}kg/sem)`:''}
-${latestMetric?.musculo?`Músculo: ${latestMetric.musculo}kg · Grasa: ${latestMetric.grasaPct}%`:''}\n
-EJERCICIOS:\n${exerciseLines.join('\n')||'Sin datos'}
-SOBRECARGA PROGRESIVA:\n${overloadStr||'Sin datos'}
-ESTANCAMIENTOS: ${plateauStr}
+      const sys = `Eres el coach personal de Bruno. Tu análisis va a ser leído por su entrenadora humana. Sé técnico, específico y detallado. Usa los datos reales proporcionados — nunca inventes cifras. Responde en español.`;
+      const userMsg = `REPORTE SEMANAL — ${weekStart} al ${weekEnd}
 
-Para cada ejercicio realizado esta semana, da la carga actual y la sugerencia concreta para la próxima sesión. Analiza si el volumen/intensidad fue adecuado y qué priorizar la semana que viene.`;
+DATOS GENERALES:
+• Días entrenados: ${trainedDays.length}/7
+• Series efectivas totales: ${totalSets}
+• Volumen total: ${totalTons.toFixed(2)} toneladas
+• Peso: ${lm?.weight||'sin dato'}kg${weightChange!==null?` (${parseFloat(weightChange)>=0?'+':''}${weightChange}kg esta semana)`:''}
+${lm?.musculo?`• Masa muscular: ${lm.musculo}kg | Grasa: ${lm.grasaPct}% | Visceral: ${lm.visceral||'?'}`:''}
+
+ENTRENAMIENTO DÍA A DÍA:
+${dayDetails||'Sin datos'}
+
+VOLUMEN POR MÚSCULO (últimas 4 semanas):
+${muscleLines||'Sin datos'}
+
+SOBRECARGA PROGRESIVA DETECTADA:
+${overloadStr||'Sin sugerencias disponibles'}
+
+ESTANCAMIENTOS DETECTADOS:
+${plateauStr}
+
+NECESIDAD DE DELOAD: ${deload.recommended?`SÍ — urgencia ${deload.urgency} (${deload.reason})`:'No detectada'} · Semanas sin deload: ${deload.weeksSinceDeload}
+
+INSTRUCCIONES PARA EL ANÁLISIS:
+1. "valoracion": puntúa la semana del 1 al 10 con un resumen de una línea.
+2. "analisis": 3 párrafos detallados — (a) análisis global de volumen e intensidad, (b) qué ejercicios evolucionaron bien y cuáles no, (c) balance muscular push/pull/piernas.
+3. "progresion": párrafo específico sobre cómo está progresando en fuerza, si la sobrecarga es correcta, y tendencia de 1RM estimado.
+4. "recuperacion": evaluación del estado de fatiga, si necesita deload, calidad del volumen (demasiado/poco).
+5. "fortalezas": mínimo 4 puntos concretos y específicos con datos reales.
+6. "mejorar": mínimo 4 puntos cada uno con una acción concreta y accionable.
+7. "cargas": para CADA ejercicio realizado esta semana, da la carga actual, la sugerencia concreta en kg para la próxima sesión, el esquema recomendado (ej. "4×6" o "3×10-12") y el razonamiento técnico.
+8. "planProximaSemana": lista de 5-7 prioridades concretas para la próxima semana.
+9. "focoProximaSemana": UN párrafo claro de foco principal.`;
 
       const raw = await callGemini([{role:"user",content:userMsg}], sys, PDF_SCHEMA);
       const ai = cleanAndParseJSON(raw) || {};
 
-      // Build exercise table rows
-      let exRows = '';
-      Object.entries(weekWorkouts).sort().forEach(([date, dayExs]) => {
-        Object.entries(dayExs).forEach(([exName, sets]) => {
+      // Build day-grouped exercise sections
+      let daysSectionsHTML = trainedDays.map(date => {
+        const dayExs = weekWorkouts[date];
+        const dayTons = Object.values(dayExs).reduce((s,sets)=>s+sets.reduce((ss,set)=>ss+(parseFloat(set.w)||0)*(parseFloat(set.reps)||1)/1000,0),0);
+        const rows = Object.entries(dayExs).map(([exName,sets])=>{
           const maxW = Math.max(...sets.map(s=>parseFloat(s.w)||0));
           const avgReps = Math.round(sets.reduce((s,e)=>s+(parseFloat(e.reps)||8),0)/sets.length);
-          const est1rm = maxW > 0 ? Math.round(maxW*(1+avgReps/30)) : '—';
-          const isPR = allTimePRs[exName] && maxW >= allTimePRs[exName];
-          exRows += `<tr><td><b>${exName}</b>${isPR?` <span class="pr-badge">PR</span>`:''}</td><td>${fmt(date)}</td><td>${sets.length}</td><td style="font-size:10.5px;">${sets.map(s=>`${s.w}kg×${s.reps}`).join('<br>')}</td><td>${est1rm} kg</td></tr>`;
-        });
-      });
-
-      // Muscle bars
-      const muscleVol = calcMuscleVolumeBalance(exlog, exercises);
-      const maxS = Math.max(...Object.values(muscleVol).map(m=>m.setsPerWeek||0), 1);
-      let muscleBarHTML = Object.entries(muscleVol).filter(([,m])=>m.setsPerWeek>0).sort((a,b)=>b[1].setsPerWeek-a[1].setsPerWeek).map(([muscle, m]) => {
-        const pct = Math.max(3, Math.round((m.setsPerWeek/Math.max(maxS,20))*100));
-        const col = m.status==='optimal'?'#4a8a00':m.status==='high'?'#0077a0':m.status==='low'?'#c97a00':'#b91c1c';
-        return `<div class="muscle-bar"><div class="bar-label">${muscle}</div><div style="flex:1;background:#f0f0f0;border-radius:4px;height:8px;"><div style="width:${pct}%;height:8px;background:${col};border-radius:4px;"></div></div><div class="bar-val">${m.setsPerWeek.toFixed(1)}/sem</div></div>`;
+          const est1rm = maxW>0?Math.round(maxW*(1+avgReps/30)):'—';
+          const isPR = allTimePRs[exName]&&maxW>=allTimePRs[exName];
+          const isImprove = !isPR && prevBestByEx[exName] && maxW > prevBestByEx[exName];
+          const badge = isPR?'<span class="pr-badge">★ PR</span>':isImprove?'<span class="imp-badge">↑</span>':'';
+          return `<tr><td><b>${exName}</b> ${badge}</td><td>${sets.length}</td><td style="font-size:10.5px;">${sets.map(s=>`${s.w}kg×${s.reps}`).join(' · ')}</td><td>${est1rm} kg</td><td style="color:#888;">${maxW}kg</td></tr>`;
+        }).join('');
+        return `<div class="day-block">
+  <div class="day-header"><span>${fmtDate(date)}</span><span class="day-stats">${Object.keys(dayExs).length} ejercicios · ${Object.values(dayExs).reduce((s,sets)=>s+sets.length,0)} series · ${dayTons.toFixed(1)}t</span></div>
+  <table><thead><tr><th>Ejercicio</th><th>Series</th><th>Cargas × Reps</th><th>1RM est.</th><th>Mejor</th></tr></thead><tbody>${rows}</tbody></table>
+</div>`;
       }).join('');
 
-      // AI cargas table
-      let cargasRows = (ai.cargas||[]).map(c=>`<tr><td><b>${c.ejercicio}</b></td><td>${c.cargaActual||'—'}</td><td class="highlight">${c.sugerencia}</td><td style="font-size:10px;color:#666;">${c.razon||''}</td></tr>`).join('');
+      // Muscle bars grouped by category
+      const MUSCLE_GROUPS = {
+        'Empuje': ['Pectoral','Deltoides','Deltoides anterior','Tríceps'],
+        'Jalón': ['Dorsal ancho','Trapecio','Romboides','Bíceps','Braquial'],
+        'Piernas': ['Cuádriceps','Isquiotibiales','Glúteo','Gemelos','Sóleo'],
+        'Núcleo': ['Abdominales','Oblicuos','Lumbares','Core']
+      };
+      const assignedMuscles = new Set();
+      let muscleGroupsHTML = '';
+      Object.entries(MUSCLE_GROUPS).forEach(([group, muscles]) => {
+        const groupEntries = muscles.filter(m => muscleVol[m]?.setsPerWeek > 0);
+        groupEntries.forEach(m => assignedMuscles.add(m));
+        if (!groupEntries.length) return;
+        const bars = groupEntries.map(muscle => {
+          const m = muscleVol[muscle];
+          const pct = Math.max(3, Math.round((m.setsPerWeek/20)*100));
+          const col = m.status==='optimal'?'#4a8a00':m.status==='high'?'#0077a0':m.status==='low'?'#c97a00':'#b91c1c';
+          const statusLabel = m.status==='optimal'?'óptimo':m.status==='high'?'alto':m.status==='low'?'bajo':'sin trabajo';
+          return `<div class="muscle-bar"><div class="bar-label">${muscle}</div><div style="flex:1;background:#f0f0f0;border-radius:4px;height:7px;"><div style="width:${Math.min(pct,100)}%;height:7px;background:${col};border-radius:4px;"></div></div><div class="bar-val">${m.setsPerWeek.toFixed(1)}/sem <span style="color:${col};font-weight:700;">(${statusLabel})</span></div></div>`;
+        }).join('');
+        muscleGroupsHTML += `<div class="muscle-group"><div class="muscle-group-title">${group}</div>${bars}</div>`;
+      });
+      // Remaining muscles not in groups
+      const remaining = Object.entries(muscleVol).filter(([m,v])=>v.setsPerWeek>0&&!assignedMuscles.has(m));
+      if (remaining.length) {
+        const bars = remaining.map(([muscle,m])=>{
+          const pct = Math.max(3,Math.round((m.setsPerWeek/20)*100));
+          const col = m.status==='optimal'?'#4a8a00':m.status==='high'?'#0077a0':m.status==='low'?'#c97a00':'#b91c1c';
+          return `<div class="muscle-bar"><div class="bar-label">${muscle}</div><div style="flex:1;background:#f0f0f0;border-radius:4px;height:7px;"><div style="width:${Math.min(pct,100)}%;height:7px;background:${col};border-radius:4px;"></div></div><div class="bar-val">${m.setsPerWeek.toFixed(1)}/sem</div></div>`;
+        }).join('');
+        muscleGroupsHTML += `<div class="muscle-group"><div class="muscle-group-title">Otros</div>${bars}</div>`;
+      }
 
-      const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reporte Semanal Gym — ${weekStart}</title><style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;color:#1a1a1a;background:#fff;padding:28px 32px;max-width:750px;margin:0 auto}
-h1{font-size:24px;font-weight:900;margin-bottom:2px}h2{font-size:12px;font-weight:800;margin:20px 0 8px;text-transform:uppercase;letter-spacing:.06em;border-bottom:2px solid #cdff4a;padding-bottom:5px;color:#222}
-.meta{color:#888;font-size:11px;margin-bottom:22px}.summary-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:4px}
-.stat-box{background:#f8f8f8;border-radius:10px;padding:10px 12px;border-left:3px solid #cdff4a}.stat-val{font-size:22px;font-weight:900;line-height:1}.stat-label{font-size:9.5px;color:#888;margin-top:3px;text-transform:uppercase;letter-spacing:.04em}.stat-sub{font-size:10px;color:#aaa;margin-top:1px}
-table{width:100%;border-collapse:collapse;margin-bottom:10px}th{background:#f3f3f3;font-weight:700;text-align:left;padding:6px 8px;font-size:10.5px;color:#444}td{padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:11px;vertical-align:top}tr:last-child td{border-bottom:none}
-.highlight{color:#3a7000;font-weight:700}.ai-section{background:#f9fff0;border-left:3px solid #cdff4a;padding:12px 16px;border-radius:0 8px 8px 0;line-height:1.65;white-space:pre-wrap;font-size:12px;margin-bottom:4px}
-.muscle-bar{display:flex;align-items:center;gap:8px;margin-bottom:7px}.bar-label{font-size:11px;width:110px;flex-shrink:0}.bar-val{font-size:10px;color:#888;width:55px;text-align:right;flex-shrink:0}
+      // Cargas table
+      const cargasRows = (ai.cargas||[]).map(c=>`<tr><td><b>${c.ejercicio}</b></td><td>${c.cargaActual||'—'}</td><td class="highlight"><b>${c.sugerencia}</b></td><td style="color:#555;font-weight:700;">${c.esquema||'—'}</td><td style="font-size:10px;color:#666;">${c.razon||''}</td></tr>`).join('');
+
+      const scoreColor = !ai.valoracion?.puntuacion?'#888':ai.valoracion.puntuacion>=8?'#3a7000':ai.valoracion.puntuacion>=6?'#c97a00':'#b91c1c';
+
+      const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reporte Semanal — ${fmtShort(weekStart)} al ${fmtShort(weekEnd)}</title><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-serif;font-size:12px;color:#1a1a1a;background:#fff;padding:28px 32px;max-width:800px;margin:0 auto;line-height:1.5}
+h1{font-size:26px;font-weight:900;margin-bottom:2px;color:#0c0e0b}
+h2{font-size:11px;font-weight:900;margin:24px 0 10px;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #cdff4a;padding-bottom:5px;color:#333}
+.meta{color:#888;font-size:11px;margin-bottom:18px}
+.hint{background:#0c0e0b;color:#cdff4a;padding:10px 16px;border-radius:8px;margin-bottom:22px;font-size:12px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.hint button{background:#cdff4a;color:#0c0e0b;border:none;padding:6px 14px;border-radius:6px;font-weight:900;cursor:pointer;font-size:12px;flex-shrink:0}
+.score-row{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+.score-circle{width:60px;height:60px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:900;flex-shrink:0;border:3px solid}
+.score-text{font-size:13px;color:#444;line-height:1.5}
+.metrics-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.metrics-row span{background:#f5f5f5;padding:4px 10px;border-radius:6px;font-size:11px}
+.summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:4px}
+.stat-box{background:#f8f8f8;border-radius:10px;padding:10px 12px;border-left:3px solid #cdff4a}
+.stat-val{font-size:20px;font-weight:900;line-height:1}.stat-label{font-size:9px;color:#888;margin-top:3px;text-transform:uppercase;letter-spacing:.04em}
+.day-block{margin-bottom:18px}
+.day-header{display:flex;align-items:center;justify-content:space-between;background:#0c0e0b;color:#cdff4a;padding:7px 12px;border-radius:8px 8px 0 0;font-size:11.5px;font-weight:800}
+.day-stats{font-size:10px;color:#9aa088;font-weight:500}
+table{width:100%;border-collapse:collapse;margin-bottom:0}
+th{background:#f3f3f3;font-weight:700;text-align:left;padding:6px 8px;font-size:10px;color:#555}
+td{padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:11px;vertical-align:top}
+.day-block table{border-radius:0 0 8px 8px;overflow:hidden;border:1px solid #e8e8e8;border-top:none}
+.day-block tbody tr:last-child td{border-bottom:none}
 .pr-badge{display:inline-block;background:#cdff4a;color:#0c0e0b;font-size:9px;font-weight:900;padding:1px 5px;border-radius:4px;vertical-align:middle}
-.list-item{padding:5px 0 5px 12px;border-left:2px solid #cdff4a;margin-bottom:6px;font-size:12px;line-height:1.5}.warn-item{border-left-color:#f59e0b}
-.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}.foco-box{background:#0c0e0b;color:#cdff4a;border-radius:10px;padding:14px 16px;font-size:13px;font-weight:700;line-height:1.5}
-.metrics-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}.metrics-row span{background:#f5f5f5;padding:4px 10px;border-radius:6px;font-size:11px}
-.hint{background:#0c0e0b;color:#cdff4a;padding:10px 16px;border-radius:8px;margin-bottom:20px;font-size:12px;display:flex;align-items:center;justify-content:space-between}
-.hint button{background:#cdff4a;color:#0c0e0b;border:none;padding:6px 14px;border-radius:6px;font-weight:800;cursor:pointer;font-size:12px}
-.footer{margin-top:32px;font-size:9.5px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:12px}
-@media print{.hint{display:none!important}body{padding:14px 18px}}
+.imp-badge{display:inline-block;background:#4ad6ff22;color:#0077a0;font-size:9px;font-weight:900;padding:1px 5px;border-radius:4px;vertical-align:middle;border:1px solid #4ad6ff55}
+.muscle-group{margin-bottom:12px}
+.muscle-group-title{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#888;margin-bottom:6px;padding-left:2px}
+.muscle-bar{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.bar-label{font-size:11px;width:130px;flex-shrink:0;color:#333}
+.bar-val{font-size:10px;color:#888;width:130px;text-align:right;flex-shrink:0}
+.ai-section{background:#f9fff0;border-left:3px solid #cdff4a;padding:13px 16px;border-radius:0 8px 8px 0;line-height:1.7;font-size:12px;margin-bottom:6px;white-space:pre-wrap}
+.recovery-box{background:#fff8f0;border-left:3px solid #f59e0b;padding:13px 16px;border-radius:0 8px 8px 0;line-height:1.7;font-size:12px;margin-bottom:6px;white-space:pre-wrap}
+.highlight{color:#3a7000;font-weight:700}
+.list-item{padding:6px 0 6px 14px;border-left:2px solid #cdff4a;margin-bottom:7px;font-size:12px;line-height:1.5}
+.list-item .action{font-size:11px;color:#555;margin-top:2px;padding-left:0}
+.warn-item{border-left-color:#f59e0b}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.col-title{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #eee}
+.foco-box{background:#0c0e0b;color:#cdff4a;border-radius:10px;padding:16px 18px;font-size:13px;font-weight:700;line-height:1.6;margin-top:4px}
+.plan-list{list-style:none;counter-reset:plan}
+.plan-list li{counter-increment:plan;padding:7px 0 7px 28px;position:relative;border-bottom:1px solid #f5f5f5;font-size:12px;line-height:1.5}
+.plan-list li::before{content:counter(plan);position:absolute;left:0;top:7px;background:#cdff4a;color:#0c0e0b;font-weight:900;font-size:10px;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;text-align:center;line-height:18px}
+.deload-alert{background:#fff0f0;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:6px;font-size:11.5px;color:#7a4000}
+.footer{margin-top:36px;font-size:9.5px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:14px}
+@media print{.hint{display:none!important}body{padding:14px 20px}h2{margin:16px 0 8px}}
 </style></head><body>
-<div class="hint">📄 Para guardar como PDF: toca <b>Compartir → Imprimir → Guardar PDF</b>&nbsp;&nbsp;<button onclick="window.print()">Imprimir / Guardar PDF</button></div>
+<div class="hint">📄 Compartir → Imprimir → Guardar PDF &nbsp;&nbsp;<button onclick="window.print()">Imprimir / PDF</button></div>
 <h1>Reporte Semanal de Entrenamiento</h1>
-<div class="meta">Semana ${fmt(weekStart)} – ${fmt(weekEnd)} &nbsp;·&nbsp; Generado el ${fmt(new Date().toISOString().slice(0,10))}</div>
-${latestMetric?`<div class="metrics-row">${latestMetric.weight?`<span>⚖️ Peso actual: <b>${latestMetric.weight} kg</b>${weightChange!==null?` (${parseFloat(weightChange)>=0?'+':''}${weightChange} kg/sem)`:''}</span>`:''} ${latestMetric.musculo?`<span>💪 Músculo: <b>${latestMetric.musculo} kg</b></span>`:''} ${latestMetric.grasaPct?`<span>📊 Grasa: <b>${latestMetric.grasaPct}%</b></span>`:''}</div>`:''}
+<div class="meta">Semana ${fmtShort(weekStart)} – ${fmtShort(weekEnd)} &nbsp;·&nbsp; Generado el ${new Date().toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'})}</div>
+${lm?`<div class="metrics-row">${lm.weight?`<span>⚖️ Peso: <b>${lm.weight} kg</b>${weightChange!==null?` (${parseFloat(weightChange)>=0?'+':''}${weightChange} kg/sem)`:''}</span>`:''} ${lm.musculo?`<span>💪 Músculo: <b>${lm.musculo} kg</b></span>`:''} ${lm.grasaPct?`<span>📊 Grasa: <b>${lm.grasaPct}%</b></span>`:''} ${lm.visceral?`<span>🫀 Visceral: <b>G${lm.visceral}</b></span>`:''}</div>`:''}
+${ai.valoracion?`<div class="score-row"><div class="score-circle" style="color:${scoreColor};border-color:${scoreColor};">${ai.valoracion.puntuacion||'?'}</div><div class="score-text"><b style="font-size:14px;">Valoración de la semana</b><br>${ai.valoracion.resumen||''}</div></div>`:''}
 <h2>Resumen de la Semana</h2>
 <div class="summary-grid">
-<div class="stat-box"><div class="stat-val">${Object.keys(weekWorkouts).length}<span style="font-size:13px;color:#888;">/7</span></div><div class="stat-label">Días entrenados</div></div>
+<div class="stat-box"><div class="stat-val">${trainedDays.length}<span style="font-size:12px;color:#888;">/7</span></div><div class="stat-label">Días</div></div>
 <div class="stat-box"><div class="stat-val">${totalSets}</div><div class="stat-label">Series efectivas</div></div>
-<div class="stat-box"><div class="stat-val">${totalTons.toFixed(1)}<span style="font-size:13px;color:#888;">t</span></div><div class="stat-label">Volumen total</div></div>
-<div class="stat-box" style="border-left-color:${weightChange!==null&&parseFloat(weightChange)>0?'#f59e0b':'#cdff4a'};"><div class="stat-val">${weightChange!==null?(parseFloat(weightChange)>0?'+':'')+weightChange:'—'}<span style="font-size:13px;color:#888;">${weightChange!==null?' kg':''}</span></div><div class="stat-label">Cambio de peso</div></div>
+<div class="stat-box"><div class="stat-val">${totalTons.toFixed(1)}<span style="font-size:12px;color:#888;">t</span></div><div class="stat-label">Volumen total</div></div>
+<div class="stat-box" style="border-left-color:${weightChange!==null&&parseFloat(weightChange)>0?'#f59e0b':'#cdff4a'};"><div class="stat-val">${weightChange!==null?(parseFloat(weightChange)>0?'+':'')+weightChange:'—'}<span style="font-size:12px;color:#888;">${weightChange!==null?' kg':''}</span></div><div class="stat-label">Cambio peso</div></div>
 </div>
-<h2>Ejercicios Realizados</h2>
-<table><thead><tr><th>Ejercicio</th><th>Fecha</th><th>Series</th><th>Cargas × Reps</th><th>1RM est.</th></tr></thead><tbody>${exRows||'<tr><td colspan="5" style="color:#999;text-align:center;padding:12px;">Sin ejercicios registrados esta semana</td></tr>'}</tbody></table>
+${deload.recommended&&deload.urgency!=='none'?`<div style="margin-top:10px;" class="deload-alert">⚠️ <b>Deload recomendado</b> (urgencia: ${deload.urgency}) — ${deload.reason}</div>`:''}
+<h2>Entrenamientos por Día</h2>
+${daysSectionsHTML||'<p style="color:#999;">Sin entrenamientos registrados esta semana.</p>'}
 <h2>Volumen por Grupo Muscular</h2>
-<div style="padding:4px 0 8px;">${muscleBarHTML||'<p style="color:#999;">Sin datos</p>'}</div>
-<p style="font-size:10px;color:#aaa;margin-bottom:4px;">Verde=óptimo (8–20 series/sem) · Amarillo=bajo · Rojo=sin trabajo · Azul=alto volumen</p>
-${ai.analisis?`<h2>Análisis de la Semana</h2><div class="ai-section">${ai.analisis}</div>`:''}
-${(ai.fortalezas?.length||ai.mejorar?.length)?`<h2>Balance</h2><div class="two-col">${ai.fortalezas?.length?`<div><p style="font-size:10.5px;font-weight:700;color:#3a7000;margin-bottom:8px;text-transform:uppercase;">✓ Fortalezas</p>${ai.fortalezas.map(f=>`<div class="list-item">${f}</div>`).join('')}</div>`:''} ${ai.mejorar?.length?`<div><p style="font-size:10.5px;font-weight:700;color:#c97a00;margin-bottom:8px;text-transform:uppercase;">↑ A mejorar</p>${ai.mejorar.map(m=>`<div class="list-item warn-item">${m}</div>`).join('')}</div>`:''}</div>`:''}
-${cargasRows?`<h2>Recomendaciones de Carga — Próxima Semana</h2><table><thead><tr><th>Ejercicio</th><th>Carga actual</th><th>Sugerencia</th><th>Razonamiento</th></tr></thead><tbody>${cargasRows}</tbody></table>`:''}
-${ai.focoProximaSemana?`<h2>Foco Principal Próxima Semana</h2><div class="foco-box">${ai.focoProximaSemana}</div>`:''}
+<div class="two-col" style="margin-bottom:4px;">${muscleGroupsHTML}</div>
+<p style="font-size:10px;color:#aaa;margin-top:4px;">Referencia: verde=óptimo (8–20 series/sem) · amarillo=bajo (&lt;8) · rojo=sin trabajo · azul=alto (&gt;20)</p>
+<h2>Análisis Global</h2>
+${ai.analisis?`<div class="ai-section">${ai.analisis}</div>`:'<p style="color:#999;">Sin análisis disponible.</p>'}
+<h2>Progresión de Fuerza</h2>
+${ai.progresion?`<div class="ai-section">${ai.progresion}</div>`:''}
+${ai.recuperacion?`<h2>Recuperación y Fatiga</h2><div class="recovery-box">${ai.recuperacion}</div>`:''}
+${(ai.fortalezas?.length||ai.mejorar?.length)?`<h2>Balance de la Semana</h2><div class="two-col">
+${ai.fortalezas?.length?`<div><div class="col-title" style="color:#3a7000;">✓ Fortalezas</div>${ai.fortalezas.map(f=>`<div class="list-item">${f}</div>`).join('')}</div>`:''}
+${ai.mejorar?.length?`<div><div class="col-title" style="color:#c97a00;">↑ A mejorar</div>${ai.mejorar.map(m=>`<div class="list-item warn-item"><b>${m.punto||m}</b>${m.accion?`<div class="action">→ ${m.accion}</div>`:''}</div>`).join('')}</div>`:''}
+</div>`:''}
+${cargasRows?`<h2>Recomendaciones de Carga — Próxima Semana</h2><table><thead><tr><th>Ejercicio</th><th>Carga actual</th><th>Sugerencia</th><th>Esquema</th><th>Razonamiento</th></tr></thead><tbody>${cargasRows}</tbody></table>`:''}
+${ai.planProximaSemana?.length?`<h2>Plan para la Próxima Semana</h2><ol class="plan-list">${ai.planProximaSemana.map(p=>`<li>${p}</li>`).join('')}</ol>`:''}
+${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoProximaSemana}</div>`:''}
 <div class="footer">Reporte generado por Bruno Fit &nbsp;·&nbsp; ${new Date().toLocaleDateString('es-ES',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div>
 </body></html>`;
 
