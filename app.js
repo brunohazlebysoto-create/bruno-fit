@@ -2039,10 +2039,13 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       if (profErr) throw profErr;
 
       // 2. Sincronizar Registro de Métricas y Peso
+      // ⚡ Bolt: Accumulated metrics into an array to avoid N+1 Supabase queries
+      // Expected impact: Reduces N database calls per user to 1 call per table
       const metricEntries = Object.entries(metricslog || {});
+      const metricsData = [];
       for (const [dateStr, m] of metricEntries) {
         if (!m || m.weight === undefined) continue;
-        const { error: metErr } = await supabase.from('metrics_logs').upsert({
+        metricsData.push({
           user_id: uId,
           date: dateStr,
           weight: parseFloat(m.weight) || 93.9,
@@ -2058,16 +2061,22 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           cintura: m.cintura !== undefined && m.cintura !== "" ? parseFloat(m.cintura) : null,
           pecho: m.pecho !== undefined && m.pecho !== "" ? parseFloat(m.pecho) : null,
           updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id, date' });
+        });
+      }
+      if (metricsData.length > 0) {
+        const { error: metErr } = await supabase.from('metrics_logs').upsert(metricsData, { onConflict: 'user_id, date' });
         if (metErr) throw metErr;
       }
 
       // 3. Sincronizar Comidas, Agua y Suplementos
+      // ⚡ Bolt: Accumulated nutrition logs into an array to avoid N+1 Supabase queries
+      // Expected impact: Reduces N database calls per user to 1 call per table
       const allDates = new Set([
         ...Object.keys(foodlog || {}),
         ...Object.keys(waterlog || {}),
         ...Object.keys(suppslog || {})
       ]);
+      const nutritionData = [];
       for (const dateStr of allDates) {
         const foodItems = foodlog[dateStr] || [];
         let kcal = 0, p = 0, c = 0, f = 0;
@@ -2080,7 +2089,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         const waterVal = waterlog[dateStr] || 0;
         const suppsVal = suppslog[dateStr] || { Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false };
 
-        const { error: nutErr } = await supabase.from('nutrition_logs').upsert({
+        nutritionData.push({
           user_id: uId,
           date: dateStr,
           kcal,
@@ -2091,11 +2100,16 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           food_items: foodItems,
           supplements: suppsVal,
           updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id, date' });
+        });
+      }
+      if (nutritionData.length > 0) {
+        const { error: nutErr } = await supabase.from('nutrition_logs').upsert(nutritionData, { onConflict: 'user_id, date' });
         if (nutErr) throw nutErr;
       }
 
       // 4. Sincronizar Historial de Entrenamientos
+      // ⚡ Bolt: Accumulated workout logs into an array to avoid N+1 Supabase queries
+      // Expected impact: Reduces N database calls per user to 1 call per table
       const workoutGroups = {};
       Object.entries(exlog || {}).forEach(([exName, sets]) => {
         (sets || []).forEach(s => {
@@ -2106,10 +2120,11 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           workoutGroups[key].push(s);
         });
       });
+      const workoutData = [];
       for (const [key, sets] of Object.entries(workoutGroups)) {
         const [dateStr, exerciseName] = key.split('|');
         const duration = workoutDurations[dateStr] || 0;
-        const { error: wkErr } = await supabase.from('workout_logs').upsert({
+        workoutData.push({
           user_id: uId,
           date: dateStr,
           exercise_name: exerciseName,
@@ -2117,6 +2132,9 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           duration: duration,
           updated_at: new Date().toISOString()
         });
+      }
+      if (workoutData.length > 0) {
+        const { error: wkErr } = await supabase.from('workout_logs').upsert(workoutData);
         if (wkErr) throw wkErr;
       }
 
