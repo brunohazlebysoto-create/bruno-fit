@@ -246,6 +246,38 @@ async function saveKey(key,val){
   } 
 }
 
+/* ===== CACHÉ DE RESPUESTAS IA (localStorage, ahorra cuota) ===== */
+const AI_CACHE_KEY = "ai_response_cache_v1";
+const AI_CACHE_MAX = 150;
+const AI_CACHE_TTL = 30 * 86400000; // 30 días
+function _aiHash(s){ let h=0; const str=(s||""); for(let i=0;i<str.length;i++){ h=(h*31 + str.charCodeAt(i))|0; } return h.toString(36); }
+function getAICache(kind, input){
+  try{
+    const raw = localStorage.getItem(AI_CACHE_KEY);
+    if(!raw) return null;
+    const store = JSON.parse(raw);
+    const key = kind + ":" + _aiHash((input||"").toLowerCase().trim());
+    const hit = store[key];
+    if(!hit) return null;
+    if(Date.now() - hit.t > AI_CACHE_TTL) return null;
+    return hit.v;
+  }catch(_){ return null; }
+}
+function setAICache(kind, input, value){
+  try{
+    const raw = localStorage.getItem(AI_CACHE_KEY);
+    let store = raw ? JSON.parse(raw) : {};
+    const key = kind + ":" + _aiHash((input||"").toLowerCase().trim());
+    store[key] = { v: value, t: Date.now() };
+    const keys = Object.keys(store);
+    if(keys.length > AI_CACHE_MAX){
+      keys.sort((a,b)=>store[a].t - store[b].t);
+      for(let i=0;i<keys.length - AI_CACHE_MAX;i++) delete store[keys[i]];
+    }
+    localStorage.setItem(AI_CACHE_KEY, JSON.stringify(store));
+  }catch(_){}
+}
+
 /* ===== SUPABASE CLIENT INITIALIZATION ===== */
 let supabase = null;
 function initSupabase(url, key) {
@@ -3701,6 +3733,7 @@ Analiza este entrenamiento directamente con los datos anteriores y con mi histor
         />
       )}
 
+      {prAlerts.length > 0 && <Confetti key={prAlerts.join("|").slice(0, 24)} />}
       {prAlerts.length > 0 && (
         <div style={{
           position: "absolute",
@@ -3949,6 +3982,30 @@ Analiza este entrenamiento directamente con los datos anteriores y con mi histor
       )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ===== CONFETTI (celebración de PR) ===== */
+function Confetti(){
+  const pieces = React.useMemo(() => Array.from({length: 40}).map((_, i) => ({
+    left: Math.random() * 100,
+    delay: Math.random() * 0.4,
+    dur: 1.8 + Math.random() * 1.4,
+    color: [C.lime, C.cyan, C.amber, C.rose, "#ffffff"][i % 5],
+    rot: Math.random() * 360,
+    size: 6 + Math.random() * 7
+  })), []);
+  return (
+    <div style={{position:"fixed", inset:0, pointerEvents:"none", zIndex:10000, overflow:"hidden"}}>
+      {pieces.map((p, i) => (
+        <div key={i} style={{
+          position:"absolute", top:0, left:`${p.left}%`,
+          width:p.size, height:p.size*0.55, background:p.color,
+          borderRadius:2, opacity:0.95, transform:`rotate(${p.rot}deg)`,
+          animation:`confettiFall ${p.dur}s cubic-bezier(0.4,0,0.6,1) ${p.delay}s forwards`
+        }}/>
+      ))}
     </div>
   );
 }
@@ -4493,11 +4550,18 @@ function AddFood({
     setAddFoodInputText(val);
     setBusy(true);
     setErr("");
+    const cached = getAICache("food", val);
+    if (cached && Array.isArray(cached) && cached.length) {
+      setAiParsedResults(prev => [...prev, ...cached]);
+      setBusy(false);
+      return;
+    }
     try {
       const out = await callGemini([{ role: "user", content: val }], FOOD_SYS, FOOD_SCHEMA);
       const parsed = cleanAndParseJSON(out);
       if (parsed && parsed.items) {
         setAiParsedResults(prev => [...prev, ...parsed.items]);
+        setAICache("food", val, parsed.items);
       } else {
         throw new Error("No se devolvió un formato correcto.");
       }
@@ -7967,6 +8031,12 @@ function FocusMode({ onClose, splits, exlog }) {
   const exDuration = 60;
   const [formCues, setFormCues] = useState({});
   const [formCueBusy, setFormCueBusy] = useState({});
+  const [setsDone, setSetsDone] = useState({}); // { [exName]: number }
+  const markSetDone = (exName) => {
+    setSetsDone(prev => ({ ...prev, [exName]: (prev[exName] || 0) + 1 }));
+    startRest(); // descanso automático al completar serie
+  };
+  const resetSets = (exName) => setSetsDone(prev => ({ ...prev, [exName]: 0 }));
 
   const generateFormCue = async (exName) => {
     if (formCues[exName] || formCueBusy[exName]) return;
@@ -8269,6 +8339,24 @@ function FocusMode({ onClose, splits, exlog }) {
                             color:C.lime, fontSize:11, fontWeight:800}}>
                           ▶ Descanso {restTotal}s
                         </button>
+
+                        {/* Set tracking */}
+                        <div style={{display:"flex", alignItems:"center", gap:8, marginTop:8}}>
+                          <button
+                            onClick={() => markSetDone(exName)}
+                            style={{flex:1, padding:"9px", borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", fontWeight:800, fontSize:12.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
+                          >
+                            ✓ Serie hecha
+                          </button>
+                          <div style={{fontSize:12, fontWeight:700, color:C.muted, minWidth:54, textAlign:"center"}}>
+                            {(setsDone[exName] || 0)} series
+                          </div>
+                          {(setsDone[exName] || 0) > 0 && (
+                            <button onClick={() => resetSets(exName)} style={{background:"none", border:`1px solid ${C.line}`, borderRadius:8, padding:"7px 9px", color:C.muted, fontSize:11, cursor:"pointer"}}>
+                              Reset
+                            </button>
+                          )}
+                        </div>
 
                         {/* Form cue */}
                         {formCues[exName] ? (
@@ -8703,61 +8791,84 @@ function Entreno({
     try{
       if(addMode === "nombre"){
         let tecnico = "", equipo = "peso libre", musculos = [];
-        try {
-          const sys = "Eres un entrenador personal experto. Analiza el ejercicio brindado, identifica su nombre técnico, el tipo de equipo usado y al menos los 3 músculos principales. Devuelve un JSON. Ejemplo:\n" +
-                      "{\n" +
-                      "  \"tecnico\": \"Extensión de rodilla en máquina\",\n" +
-                      "  \"equipo\": \"máquina\",\n" +
-                      "  \"musculos\": [\"Cuádriceps femoral\", \"Vasto lateral\", \"Vasto medial\"]\n" +
-                      "}\n" +
-                      "Valores válidos para equipo: \"peso libre\", \"máquina\", \"polea\", \"cuerpo libre\".";
-          const schema = {
-            type: "OBJECT",
-            properties: {
-              tecnico: { type: "STRING" },
-              equipo: { type: "STRING" },
-              musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Al menos 3 músculos principales" }
-            },
-            required: ["tecnico", "equipo", "musculos"]
-          };
-          const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
-          tecnico = o.tecnico || "";
-          equipo = o.equipo || "peso libre";
-          musculos = o.musculos || [];
-        } catch(aiE) {
-          // Fallback: add with name only, no AI metadata
-          setAddErr("⚠️ " + aiErr(aiE) + " — ejercicio añadido sin metadatos.");
+        // Local-first: si el ejercicio ya existe, reusar su metadata sin llamar a la IA
+        const matchName = findBestMatch(addText.trim(), allExerciseObjects.map(e => e.name));
+        const matchObj = matchName ? allExerciseObjects.find(e => e.name === matchName) : null;
+        if (matchObj && (matchObj.musculos?.length || matchObj.tecnico)) {
+          tecnico = matchObj.tecnico || "";
+          equipo = matchObj.equipo || "peso libre";
+          musculos = matchObj.musculos || [];
+        } else {
+          const cached = getAICache("exname", addText.trim());
+          if (cached) {
+            tecnico = cached.tecnico || ""; equipo = cached.equipo || "peso libre"; musculos = cached.musculos || [];
+          } else {
+            try {
+              const sys = "Eres un entrenador personal experto. Analiza el ejercicio brindado, identifica su nombre técnico, el tipo de equipo usado y al menos los 3 músculos principales. Devuelve un JSON. Ejemplo:\n" +
+                          "{\n" +
+                          "  \"tecnico\": \"Extensión de rodilla en máquina\",\n" +
+                          "  \"equipo\": \"máquina\",\n" +
+                          "  \"musculos\": [\"Cuádriceps femoral\", \"Vasto lateral\", \"Vasto medial\"]\n" +
+                          "}\n" +
+                          "Valores válidos para equipo: \"peso libre\", \"máquina\", \"polea\", \"cuerpo libre\".";
+              const schema = {
+                type: "OBJECT",
+                properties: {
+                  tecnico: { type: "STRING" },
+                  equipo: { type: "STRING" },
+                  musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Al menos 3 músculos principales" }
+                },
+                required: ["tecnico", "equipo", "musculos"]
+              };
+              const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
+              tecnico = o.tecnico || "";
+              equipo = o.equipo || "peso libre";
+              musculos = o.musculos || [];
+              setAICache("exname", addText.trim(), { tecnico, equipo, musculos });
+            } catch(aiE) {
+              setAddErr("⚠️ " + aiErr(aiE) + " — ejercicio añadido sin metadatos.");
+            }
+          }
         }
         setExercises({...exercises, [sel]: [...dayExs, {name: addText.trim(), tecnico, equipo, musculos}]});
       } else {
         let nombre = addText.trim(), tecnico = "", equipo = "peso libre", musculos = [];
-        try {
-          const sys = "El usuario describe un ejercicio físico. Identifícalo, indica su nombre técnico, el tipo de equipo y al menos los 3 músculos principales. Devuelve un JSON. Ejemplo:\n" +
-                      "{\n" +
-                      "  \"nombre\": \"Vuelos laterales en polea\",\n" +
-                      "  \"tecnico\": \"Abducción de hombro en polea baja\",\n" +
-                      "  \"equipo\": \"polea\",\n" +
-                      "  \"musculos\": [\"Deltoides lateral\", \"Supraespinoso\", \"Trapecio\"]\n" +
-                      "}\n" +
-                      "Valores válidos para equipo: \"peso libre\", \"máquina\", \"polea\", \"cuerpo libre\".";
-          const schema = {
-            type: "OBJECT",
-            properties: {
-              nombre: { type: "STRING" },
-              tecnico: { type: "STRING" },
-              equipo: { type: "STRING" },
-              musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Al menos 3 músculos principales" }
-            },
-            required: ["nombre", "tecnico", "equipo", "musculos"]
-          };
-          const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
-          nombre = o.nombre || addText.trim();
-          tecnico = o.tecnico || "";
-          equipo = o.equipo || "peso libre";
-          musculos = o.musculos || [];
-        } catch(aiE) {
-          // Fallback: add with description as name, no AI metadata
-          setAddErr("⚠️ " + aiErr(aiE) + " — añadido sin identificar, puedes editar el nombre después.");
+        const cachedD = getAICache("exdesc", addText.trim());
+        if (cachedD) {
+          nombre = cachedD.nombre || addText.trim();
+          tecnico = cachedD.tecnico || "";
+          equipo = cachedD.equipo || "peso libre";
+          musculos = cachedD.musculos || [];
+        } else {
+          try {
+            const sys = "El usuario describe un ejercicio físico. Identifícalo, indica su nombre técnico, el tipo de equipo y al menos los 3 músculos principales. Devuelve un JSON. Ejemplo:\n" +
+                        "{\n" +
+                        "  \"nombre\": \"Vuelos laterales en polea\",\n" +
+                        "  \"tecnico\": \"Abducción de hombro en polea baja\",\n" +
+                        "  \"equipo\": \"polea\",\n" +
+                        "  \"musculos\": [\"Deltoides lateral\", \"Supraespinoso\", \"Trapecio\"]\n" +
+                        "}\n" +
+                        "Valores válidos para equipo: \"peso libre\", \"máquina\", \"polea\", \"cuerpo libre\".";
+            const schema = {
+              type: "OBJECT",
+              properties: {
+                nombre: { type: "STRING" },
+                tecnico: { type: "STRING" },
+                equipo: { type: "STRING" },
+                musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Al menos 3 músculos principales" }
+              },
+              required: ["nombre", "tecnico", "equipo", "musculos"]
+            };
+            const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
+            nombre = o.nombre || addText.trim();
+            tecnico = o.tecnico || "";
+            equipo = o.equipo || "peso libre";
+            musculos = o.musculos || [];
+            setAICache("exdesc", addText.trim(), { nombre, tecnico, equipo, musculos });
+          } catch(aiE) {
+            // Fallback: add with description as name, no AI metadata
+            setAddErr("⚠️ " + aiErr(aiE) + " — añadido sin identificar, puedes editar el nombre después.");
+          }
         }
         setExercises({...exercises, [sel]: [...dayExs, {name: nombre, tecnico, equipo, musculos}]});
       }
