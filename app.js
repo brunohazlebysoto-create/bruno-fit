@@ -1092,6 +1092,7 @@ export default function App(){
   const [showTrainerAgent, setShowTrainerAgent] = useState(false);
   const [trainerAgentData, setTrainerAgentData] = useState(null);
   const [trainerAgentBusy, setTrainerAgentBusy] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const [coachPersonality, setCoachPersonality] = useState("técnico");
   const [showFocusMode, setShowFocusMode] = useState(false);
 
@@ -3316,6 +3317,152 @@ Analiza este entrenamiento directamente con los datos anteriores y con mi histor
     await sendCoachMessage(msg);
   };
 
+  const generateWeeklyPDF = async () => {
+    if (pdfBusy) return;
+    setPdfBusy(true);
+    try {
+      const last7 = [...Array(7)].map((_,i)=>{ const d=new Date(); d.setDate(d.getDate()-i); return d.toISOString().slice(0,10); }).reverse();
+      const weekStart = last7[0], weekEnd = last7[6];
+      const fmt = d => { const [,m,day] = d.split('-'); return `${parseInt(day)} ${['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][parseInt(m)-1]}`; };
+
+      // Workouts this week
+      const weekWorkouts = {};
+      const allTimePRs = {};
+      Object.entries(exlog||{}).forEach(([exName, sets]) => {
+        (sets||[]).forEach(s => {
+          if (!s || !s.w || s.type === "warmup") return;
+          if (s.w > (allTimePRs[exName]||0)) allTimePRs[exName] = s.w;
+          const d = (s.date||"").slice(0,10);
+          if (d < weekStart || d > weekEnd) return;
+          if (!weekWorkouts[d]) weekWorkouts[d] = {};
+          if (!weekWorkouts[d][exName]) weekWorkouts[d][exName] = [];
+          weekWorkouts[d][exName].push(s);
+        });
+      });
+
+      const totalSets = Object.values(weekWorkouts).reduce((s,day) => s + Object.values(day).reduce((ss,sets) => ss+sets.length, 0), 0);
+      const totalTons = Object.values(weekWorkouts).reduce((s,day) => s + Object.values(day).reduce((ss,sets) => ss+sets.reduce((sss,set) => sss+(parseFloat(set.w)||0)*(parseFloat(set.reps)||1)/1000, 0), 0), 0);
+
+      const foodDays = last7.filter(d => (foodlog[d]||[]).length > 0);
+      const avgKcal = foodDays.length ? Math.round(foodDays.reduce((s,d)=>s+(foodlog[d]||[]).reduce((a,e)=>a+(+e.kcal||0),0),0)/foodDays.length) : 0;
+      const avgProt = foodDays.length ? Math.round(foodDays.reduce((s,d)=>s+(foodlog[d]||[]).reduce((a,e)=>a+(+e.proteina||0),0),0)/foodDays.length) : 0;
+
+      const wDates = last7.filter(d => metricslog?.[d]?.weight);
+      const weightChange = wDates.length >= 2 ? (parseFloat(metricslog[wDates[wDates.length-1]].weight)-parseFloat(metricslog[wDates[0]].weight)).toFixed(1) : null;
+      const latestMetricDate = Object.keys(metricslog||{}).sort().reverse()[0];
+      const latestMetric = latestMetricDate ? metricslog[latestMetricDate] : null;
+
+      // Exercise list for AI
+      const exerciseLines = [];
+      Object.entries(weekWorkouts).sort().forEach(([date, dayExs]) => {
+        Object.entries(dayExs).forEach(([exName, sets]) => {
+          const maxW = Math.max(...sets.map(s=>parseFloat(s.w)||0));
+          exerciseLines.push(`${exName} (${date}): ${sets.length} series, max ${maxW}kg, reps: ${sets.map(s=>s.reps).join('/')}`);
+        });
+      });
+      const overloadStr = Object.entries(overloadSuggestions||{}).slice(0,8).map(([ex,s])=>`${ex}: ${s.currentMax}kg→${s.suggested}kg`).join('\n');
+      const plateauStr = (plateauAlerts||[]).slice(0,5).map(p=>p.exercise||p.message||JSON.stringify(p)).join(', ')||'Ninguno';
+
+      const PDF_SCHEMA = { type:"OBJECT", properties: {
+        analisis:{ type:"STRING" },
+        fortalezas:{ type:"ARRAY", items:{ type:"STRING" } },
+        mejorar:{ type:"ARRAY", items:{ type:"STRING" } },
+        cargas:{ type:"ARRAY", items:{ type:"OBJECT", properties:{
+          ejercicio:{type:"STRING"}, cargaActual:{type:"STRING"}, sugerencia:{type:"STRING"}, razon:{type:"STRING"}
+        }, required:["ejercicio","sugerencia","razon"] }},
+        focoProximaSemana:{ type:"STRING" }
+      }, required:["analisis","cargas","focoProximaSemana"] };
+
+      const sys = "Eres el coach de Bruno. Analiza su semana de entrenamiento y da recomendaciones específicas para la próxima semana. Usa SOLO los datos proporcionados. Responde en español, tono profesional y directo.";
+      const userMsg = `SEMANA ${weekStart} al ${weekEnd}:
+Días: ${Object.keys(weekWorkouts).length}/7 · Series: ${totalSets} · Volumen: ${totalTons.toFixed(1)}t
+Peso: ${latestMetric?.weight||'?'}kg${weightChange!==null?` (${parseFloat(weightChange)>=0?'+':''}${weightChange}kg/sem)`:''}
+Objetivo: ${target?.kcal||2200}kcal/${target?.p||180}g prot · Real: ${avgKcal}kcal/${avgProt}g prot
+${latestMetric?.musculo?`Músculo: ${latestMetric.musculo}kg · Grasa: ${latestMetric.grasaPct}%`:''}\n
+EJERCICIOS:\n${exerciseLines.join('\n')||'Sin datos'}
+SOBRECARGA PROGRESIVA:\n${overloadStr||'Sin datos'}
+ESTANCAMIENTOS: ${plateauStr}
+
+Para cada ejercicio realizado esta semana, da la carga actual y la sugerencia concreta para la próxima sesión. Analiza si el volumen/intensidad fue adecuado y qué priorizar la semana que viene.`;
+
+      const raw = await callGemini([{role:"user",content:userMsg}], sys, PDF_SCHEMA);
+      const ai = cleanAndParseJSON(raw) || {};
+
+      // Build exercise table rows
+      let exRows = '';
+      Object.entries(weekWorkouts).sort().forEach(([date, dayExs]) => {
+        Object.entries(dayExs).forEach(([exName, sets]) => {
+          const maxW = Math.max(...sets.map(s=>parseFloat(s.w)||0));
+          const avgReps = Math.round(sets.reduce((s,e)=>s+(parseFloat(e.reps)||8),0)/sets.length);
+          const est1rm = maxW > 0 ? Math.round(maxW*(1+avgReps/30)) : '—';
+          const isPR = allTimePRs[exName] && maxW >= allTimePRs[exName];
+          exRows += `<tr><td><b>${exName}</b>${isPR?` <span class="pr-badge">PR</span>`:''}</td><td>${fmt(date)}</td><td>${sets.length}</td><td style="font-size:10.5px;">${sets.map(s=>`${s.w}kg×${s.reps}`).join('<br>')}</td><td>${est1rm} kg</td></tr>`;
+        });
+      });
+
+      // Muscle bars
+      const muscleVol = calcMuscleVolumeBalance(exlog, exercises);
+      const maxS = Math.max(...Object.values(muscleVol).map(m=>m.setsPerWeek||0), 1);
+      let muscleBarHTML = Object.entries(muscleVol).filter(([,m])=>m.setsPerWeek>0).sort((a,b)=>b[1].setsPerWeek-a[1].setsPerWeek).map(([muscle, m]) => {
+        const pct = Math.max(3, Math.round((m.setsPerWeek/Math.max(maxS,20))*100));
+        const col = m.status==='optimal'?'#4a8a00':m.status==='high'?'#0077a0':m.status==='low'?'#c97a00':'#b91c1c';
+        return `<div class="muscle-bar"><div class="bar-label">${muscle}</div><div style="flex:1;background:#f0f0f0;border-radius:4px;height:8px;"><div style="width:${pct}%;height:8px;background:${col};border-radius:4px;"></div></div><div class="bar-val">${m.setsPerWeek.toFixed(1)}/sem</div></div>`;
+      }).join('');
+
+      // AI cargas table
+      let cargasRows = (ai.cargas||[]).map(c=>`<tr><td><b>${c.ejercicio}</b></td><td>${c.cargaActual||'—'}</td><td class="highlight">${c.sugerencia}</td><td style="font-size:10px;color:#666;">${c.razon||''}</td></tr>`).join('');
+
+      const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reporte Semanal Gym — ${weekStart}</title><style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;color:#1a1a1a;background:#fff;padding:28px 32px;max-width:750px;margin:0 auto}
+h1{font-size:24px;font-weight:900;margin-bottom:2px}h2{font-size:12px;font-weight:800;margin:20px 0 8px;text-transform:uppercase;letter-spacing:.06em;border-bottom:2px solid #cdff4a;padding-bottom:5px;color:#222}
+.meta{color:#888;font-size:11px;margin-bottom:22px}.summary-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:4px}
+.stat-box{background:#f8f8f8;border-radius:10px;padding:10px 12px;border-left:3px solid #cdff4a}.stat-val{font-size:22px;font-weight:900;line-height:1}.stat-label{font-size:9.5px;color:#888;margin-top:3px;text-transform:uppercase;letter-spacing:.04em}.stat-sub{font-size:10px;color:#aaa;margin-top:1px}
+table{width:100%;border-collapse:collapse;margin-bottom:10px}th{background:#f3f3f3;font-weight:700;text-align:left;padding:6px 8px;font-size:10.5px;color:#444}td{padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:11px;vertical-align:top}tr:last-child td{border-bottom:none}
+.highlight{color:#3a7000;font-weight:700}.ai-section{background:#f9fff0;border-left:3px solid #cdff4a;padding:12px 16px;border-radius:0 8px 8px 0;line-height:1.65;white-space:pre-wrap;font-size:12px;margin-bottom:4px}
+.muscle-bar{display:flex;align-items:center;gap:8px;margin-bottom:7px}.bar-label{font-size:11px;width:110px;flex-shrink:0}.bar-val{font-size:10px;color:#888;width:55px;text-align:right;flex-shrink:0}
+.pr-badge{display:inline-block;background:#cdff4a;color:#0c0e0b;font-size:9px;font-weight:900;padding:1px 5px;border-radius:4px;vertical-align:middle}
+.list-item{padding:5px 0 5px 12px;border-left:2px solid #cdff4a;margin-bottom:6px;font-size:12px;line-height:1.5}.warn-item{border-left-color:#f59e0b}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}.foco-box{background:#0c0e0b;color:#cdff4a;border-radius:10px;padding:14px 16px;font-size:13px;font-weight:700;line-height:1.5}
+.metrics-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}.metrics-row span{background:#f5f5f5;padding:4px 10px;border-radius:6px;font-size:11px}
+.hint{background:#0c0e0b;color:#cdff4a;padding:10px 16px;border-radius:8px;margin-bottom:20px;font-size:12px;display:flex;align-items:center;justify-content:space-between}
+.hint button{background:#cdff4a;color:#0c0e0b;border:none;padding:6px 14px;border-radius:6px;font-weight:800;cursor:pointer;font-size:12px}
+.footer{margin-top:32px;font-size:9.5px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:12px}
+@media print{.hint{display:none!important}body{padding:14px 18px}}
+</style></head><body>
+<div class="hint">📄 Para guardar como PDF: toca <b>Compartir → Imprimir → Guardar PDF</b>&nbsp;&nbsp;<button onclick="window.print()">Imprimir / Guardar PDF</button></div>
+<h1>Reporte Semanal de Entrenamiento</h1>
+<div class="meta">Semana ${fmt(weekStart)} – ${fmt(weekEnd)} &nbsp;·&nbsp; Generado el ${fmt(new Date().toISOString().slice(0,10))}</div>
+${latestMetric?`<div class="metrics-row">${latestMetric.weight?`<span>⚖️ Peso actual: <b>${latestMetric.weight} kg</b>${weightChange!==null?` (${parseFloat(weightChange)>=0?'+':''}${weightChange} kg/sem)`:''}</span>`:''} ${latestMetric.musculo?`<span>💪 Músculo: <b>${latestMetric.musculo} kg</b></span>`:''} ${latestMetric.grasaPct?`<span>📊 Grasa: <b>${latestMetric.grasaPct}%</b></span>`:''}</div>`:''}
+<h2>Resumen de la Semana</h2>
+<div class="summary-grid">
+<div class="stat-box"><div class="stat-val">${Object.keys(weekWorkouts).length}<span style="font-size:13px;color:#888;">/7</span></div><div class="stat-label">Días entrenados</div></div>
+<div class="stat-box"><div class="stat-val">${totalSets}</div><div class="stat-label">Series efectivas</div></div>
+<div class="stat-box"><div class="stat-val">${totalTons.toFixed(1)}<span style="font-size:13px;color:#888;">t</span></div><div class="stat-label">Volumen total</div></div>
+<div class="stat-box" style="border-left-color:#4ad6ff;"><div class="stat-val" style="color:#0077a0;">${avgProt}<span style="font-size:13px;">g</span></div><div class="stat-label">Proteína prom.</div><div class="stat-sub">obj: ${target?.p||180}g</div></div>
+<div class="stat-box" style="border-left-color:#f59e0b;"><div class="stat-val" style="color:#c97a00;">${avgKcal}</div><div class="stat-label">Kcal prom.</div><div class="stat-sub">obj: ${target?.kcal||2200}</div></div>
+<div class="stat-box" style="border-left-color:${weightChange!==null&&parseFloat(weightChange)>0?'#f59e0b':'#cdff4a'};"><div class="stat-val">${weightChange!==null?(parseFloat(weightChange)>0?'+':'')+weightChange:'—'}<span style="font-size:13px;color:#888;">${weightChange!==null?' kg':''}</span></div><div class="stat-label">Cambio de peso</div></div>
+</div>
+<h2>Ejercicios Realizados</h2>
+<table><thead><tr><th>Ejercicio</th><th>Fecha</th><th>Series</th><th>Cargas × Reps</th><th>1RM est.</th></tr></thead><tbody>${exRows||'<tr><td colspan="5" style="color:#999;text-align:center;padding:12px;">Sin ejercicios registrados esta semana</td></tr>'}</tbody></table>
+<h2>Volumen por Grupo Muscular</h2>
+<div style="padding:4px 0 8px;">${muscleBarHTML||'<p style="color:#999;">Sin datos</p>'}</div>
+<p style="font-size:10px;color:#aaa;margin-bottom:4px;">Verde=óptimo (8–20 series/sem) · Amarillo=bajo · Rojo=sin trabajo · Azul=alto volumen</p>
+${ai.analisis?`<h2>Análisis de la Semana</h2><div class="ai-section">${ai.analisis}</div>`:''}
+${(ai.fortalezas?.length||ai.mejorar?.length)?`<h2>Balance</h2><div class="two-col">${ai.fortalezas?.length?`<div><p style="font-size:10.5px;font-weight:700;color:#3a7000;margin-bottom:8px;text-transform:uppercase;">✓ Fortalezas</p>${ai.fortalezas.map(f=>`<div class="list-item">${f}</div>`).join('')}</div>`:''} ${ai.mejorar?.length?`<div><p style="font-size:10.5px;font-weight:700;color:#c97a00;margin-bottom:8px;text-transform:uppercase;">↑ A mejorar</p>${ai.mejorar.map(m=>`<div class="list-item warn-item">${m}</div>`).join('')}</div>`:''}</div>`:''}
+${cargasRows?`<h2>Recomendaciones de Carga — Próxima Semana</h2><table><thead><tr><th>Ejercicio</th><th>Carga actual</th><th>Sugerencia</th><th>Razonamiento</th></tr></thead><tbody>${cargasRows}</tbody></table>`:''}
+${ai.focoProximaSemana?`<h2>Foco Principal Próxima Semana</h2><div class="foco-box">${ai.focoProximaSemana}</div>`:''}
+<div class="footer">Reporte generado por Bruno Fit &nbsp;·&nbsp; ${new Date().toLocaleDateString('es-ES',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div>
+</body></html>`;
+
+      const w = window.open('','_blank');
+      if (w) { w.document.write(html); w.document.close(); }
+    } catch(e) {
+      alert("No se pudo generar el reporte: " + aiErr(e));
+    } finally {
+      setPdfBusy(false);
+    }
+  };
+
   const importWorkoutData = (resolvedWorkout, currentSplitKey) => {
     let updatedExlog = { ...exlog };
     let updatedExercises = { ...exercises };
@@ -3485,6 +3632,14 @@ Analiza este entrenamiento directamente con los datos anteriores y con mi histor
                 >
                   <Sparkles size={13}/><span>Agente</span>
                 </button>
+                <button
+                  onClick={generateWeeklyPDF}
+                  disabled={pdfBusy}
+                  className="btn-active-scale"
+                  style={{background:"rgba(245,158,11,0.08)", border:`1px solid rgba(245,158,11,0.3)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.amber, fontWeight:800, fontSize:11.5, cursor: pdfBusy ? "not-allowed" : "pointer", opacity: pdfBusy ? 0.6 : 1}}
+                >
+                  {pdfBusy ? <Loader2 size={13} style={{animation:"spin 1s linear infinite"}}/> : <span>📄</span>}<span>PDF</span>
+                </button>
               </div>
             </div>
           )}
@@ -3578,6 +3733,8 @@ Analiza este entrenamiento directamente con los datos anteriores y con mi histor
             metricslog={metricslog}
             foodlog={foodlog}
             exlog={exlog}
+            generateWeeklyPDF={generateWeeklyPDF}
+            pdfBusy={pdfBusy}
           />
         )}
         {view === "entreno" && (
@@ -6936,7 +7093,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
 /* ===== TAB COACH ===== */
 function Coach({
   chat, setChat, target, totals, sendCoachMessage, chatBusy, sendDailyGreetingIfNeeded,
-  coachPersonality, setCoachPersonality, metricslog, foodlog, exlog
+  coachPersonality, setCoachPersonality, metricslog, foodlog, exlog, generateWeeklyPDF, pdfBusy
 }){
 
   const [text, setText] = useState(""); 
@@ -7055,13 +7212,22 @@ function Coach({
         >
           💪 ¿Qué entreno hoy?
         </button>
-        <button 
+        <button
           onClick={() => sendCoachMessage('Basándote en mi progresión histórica y PRs actuales, ¿cuánto debería cargar esta semana en cada ejercicio para seguir progresando sin lesionarme?')}
           disabled={chatBusy}
           style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.rose}`, background:"transparent", color:C.rose, cursor:"pointer", opacity: chatBusy ? 0.5 : 1}}
         >
           🎯 Cargas recomendadas
         </button>
+        {generateWeeklyPDF && (
+          <button
+            onClick={generateWeeklyPDF}
+            disabled={pdfBusy || chatBusy}
+            style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.amber}`, background: pdfBusy ? `${C.amber}18` : "transparent", color:C.amber, cursor: pdfBusy ? "not-allowed" : "pointer", opacity: (pdfBusy||chatBusy) ? 0.6 : 1, display:"flex", alignItems:"center", gap:4}}
+          >
+            {pdfBusy ? <><Loader2 size={11} style={{animation:"spin 1s linear infinite"}}/>Generando…</> : <>📄 PDF para coach</>}
+          </button>
+        )}
       </div>
       <div style={{display:"flex", gap:8, paddingTop:6}}>
         <input 
