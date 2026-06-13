@@ -3343,10 +3343,6 @@ Analiza este entrenamiento directamente con los datos anteriores y con mi histor
       const totalSets = Object.values(weekWorkouts).reduce((s,day) => s + Object.values(day).reduce((ss,sets) => ss+sets.length, 0), 0);
       const totalTons = Object.values(weekWorkouts).reduce((s,day) => s + Object.values(day).reduce((ss,sets) => ss+sets.reduce((sss,set) => sss+(parseFloat(set.w)||0)*(parseFloat(set.reps)||1)/1000, 0), 0), 0);
 
-      const foodDays = last7.filter(d => (foodlog[d]||[]).length > 0);
-      const avgKcal = foodDays.length ? Math.round(foodDays.reduce((s,d)=>s+(foodlog[d]||[]).reduce((a,e)=>a+(+e.kcal||0),0),0)/foodDays.length) : 0;
-      const avgProt = foodDays.length ? Math.round(foodDays.reduce((s,d)=>s+(foodlog[d]||[]).reduce((a,e)=>a+(+e.proteina||0),0),0)/foodDays.length) : 0;
-
       const wDates = last7.filter(d => metricslog?.[d]?.weight);
       const weightChange = wDates.length >= 2 ? (parseFloat(metricslog[wDates[wDates.length-1]].weight)-parseFloat(metricslog[wDates[0]].weight)).toFixed(1) : null;
       const latestMetricDate = Object.keys(metricslog||{}).sort().reverse()[0];
@@ -3377,7 +3373,6 @@ Analiza este entrenamiento directamente con los datos anteriores y con mi histor
       const userMsg = `SEMANA ${weekStart} al ${weekEnd}:
 Días: ${Object.keys(weekWorkouts).length}/7 · Series: ${totalSets} · Volumen: ${totalTons.toFixed(1)}t
 Peso: ${latestMetric?.weight||'?'}kg${weightChange!==null?` (${parseFloat(weightChange)>=0?'+':''}${weightChange}kg/sem)`:''}
-Objetivo: ${target?.kcal||2200}kcal/${target?.p||180}g prot · Real: ${avgKcal}kcal/${avgProt}g prot
 ${latestMetric?.musculo?`Músculo: ${latestMetric.musculo}kg · Grasa: ${latestMetric.grasaPct}%`:''}\n
 EJERCICIOS:\n${exerciseLines.join('\n')||'Sin datos'}
 SOBRECARGA PROGRESIVA:\n${overloadStr||'Sin datos'}
@@ -3438,8 +3433,6 @@ ${latestMetric?`<div class="metrics-row">${latestMetric.weight?`<span>⚖️ Pes
 <div class="stat-box"><div class="stat-val">${Object.keys(weekWorkouts).length}<span style="font-size:13px;color:#888;">/7</span></div><div class="stat-label">Días entrenados</div></div>
 <div class="stat-box"><div class="stat-val">${totalSets}</div><div class="stat-label">Series efectivas</div></div>
 <div class="stat-box"><div class="stat-val">${totalTons.toFixed(1)}<span style="font-size:13px;color:#888;">t</span></div><div class="stat-label">Volumen total</div></div>
-<div class="stat-box" style="border-left-color:#4ad6ff;"><div class="stat-val" style="color:#0077a0;">${avgProt}<span style="font-size:13px;">g</span></div><div class="stat-label">Proteína prom.</div><div class="stat-sub">obj: ${target?.p||180}g</div></div>
-<div class="stat-box" style="border-left-color:#f59e0b;"><div class="stat-val" style="color:#c97a00;">${avgKcal}</div><div class="stat-label">Kcal prom.</div><div class="stat-sub">obj: ${target?.kcal||2200}</div></div>
 <div class="stat-box" style="border-left-color:${weightChange!==null&&parseFloat(weightChange)>0?'#f59e0b':'#cdff4a'};"><div class="stat-val">${weightChange!==null?(parseFloat(weightChange)>0?'+':'')+weightChange:'—'}<span style="font-size:13px;color:#888;">${weightChange!==null?' kg':''}</span></div><div class="stat-label">Cambio de peso</div></div>
 </div>
 <h2>Ejercicios Realizados</h2>
