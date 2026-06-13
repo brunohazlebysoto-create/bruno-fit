@@ -3743,11 +3743,11 @@ Analiza este entrenamiento directamente con los datos anteriores y con mi histor
       {prAlerts.length > 0 && <Confetti key={prAlerts.join("|").slice(0, 24)} />}
       {prAlerts.length > 0 && (
         <div style={{
-          position: "absolute",
+          position: "fixed",
           top: 16,
           left: "50%",
           transform: "translateX(-50%)",
-          width: "calc(100% - 24px)",
+          width: "calc(100vw - 24px)",
           maxWidth: 360,
           background: "rgba(21, 23, 15, 0.98)",
           border: `2px solid ${C.lime}`,
