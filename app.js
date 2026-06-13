@@ -3320,6 +3320,9 @@ Analiza este entrenamiento directamente con los datos anteriores y con mi histor
   const generateWeeklyPDF = async () => {
     if (pdfBusy) return;
     setPdfBusy(true);
+    // Abrir ventana ANTES del await para evitar bloqueo del navegador
+    const w = window.open('', '_blank');
+    if (w) w.document.write('<html><body style="background:#0c0e0b;color:#cdff4a;font-family:sans-serif;padding:0;margin:0;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center"><p style="font-size:18px">⏳ Generando reporte…</p></body></html>');
     try {
       const last7 = [...Array(7)].map((_,i)=>{ const d=new Date(); d.setDate(d.getDate()-i); return d.toISOString().slice(0,10); }).reverse();
       const weekStart = last7[0], weekEnd = last7[6];
@@ -3447,9 +3450,9 @@ ${ai.focoProximaSemana?`<h2>Foco Principal Próxima Semana</h2><div class="foco-
 <div class="footer">Reporte generado por Bruno Fit &nbsp;·&nbsp; ${new Date().toLocaleDateString('es-ES',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div>
 </body></html>`;
 
-      const w = window.open('','_blank');
-      if (w) { w.document.write(html); w.document.close(); }
+      if (w && !w.closed) { w.document.open(); w.document.write(html); w.document.close(); }
     } catch(e) {
+      if (w && !w.closed) w.close();
       alert("No se pudo generar el reporte: " + aiErr(e));
     } finally {
       setPdfBusy(false);
@@ -3625,14 +3628,6 @@ ${ai.focoProximaSemana?`<h2>Foco Principal Próxima Semana</h2><div class="foco-
                 >
                   <Sparkles size={13}/><span>Agente</span>
                 </button>
-                <button
-                  onClick={generateWeeklyPDF}
-                  disabled={pdfBusy}
-                  className="btn-active-scale"
-                  style={{background:"rgba(245,158,11,0.08)", border:`1px solid rgba(245,158,11,0.3)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.amber, fontWeight:800, fontSize:11.5, cursor: pdfBusy ? "not-allowed" : "pointer", opacity: pdfBusy ? 0.6 : 1}}
-                >
-                  {pdfBusy ? <Loader2 size={13} style={{animation:"spin 1s linear infinite"}}/> : <span>📄</span>}<span>PDF</span>
-                </button>
               </div>
             </div>
           )}
@@ -3726,8 +3721,6 @@ ${ai.focoProximaSemana?`<h2>Foco Principal Próxima Semana</h2><div class="foco-
             metricslog={metricslog}
             foodlog={foodlog}
             exlog={exlog}
-            generateWeeklyPDF={generateWeeklyPDF}
-            pdfBusy={pdfBusy}
           />
         )}
         {view === "entreno" && (
@@ -3871,6 +3864,8 @@ ${ai.focoProximaSemana?`<h2>Foco Principal Próxima Semana</h2><div class="foco-
           data={trainerAgentData}
           busy={trainerAgentBusy}
           onRunAnalysis={runTrainerAgentAnalysis}
+          generateWeeklyPDF={generateWeeklyPDF}
+          pdfBusy={pdfBusy}
           exlog={exlog}
           exercises={exercises}
           notes={notes}
@@ -7086,7 +7081,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
 /* ===== TAB COACH ===== */
 function Coach({
   chat, setChat, target, totals, sendCoachMessage, chatBusy, sendDailyGreetingIfNeeded,
-  coachPersonality, setCoachPersonality, metricslog, foodlog, exlog, generateWeeklyPDF, pdfBusy
+  coachPersonality, setCoachPersonality, metricslog, foodlog, exlog
 }){
 
   const [text, setText] = useState(""); 
@@ -7212,15 +7207,6 @@ function Coach({
         >
           🎯 Cargas recomendadas
         </button>
-        {generateWeeklyPDF && (
-          <button
-            onClick={generateWeeklyPDF}
-            disabled={pdfBusy || chatBusy}
-            style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.amber}`, background: pdfBusy ? `${C.amber}18` : "transparent", color:C.amber, cursor: pdfBusy ? "not-allowed" : "pointer", opacity: (pdfBusy||chatBusy) ? 0.6 : 1, display:"flex", alignItems:"center", gap:4}}
-          >
-            {pdfBusy ? <><Loader2 size={11} style={{animation:"spin 1s linear infinite"}}/>Generando…</> : <>📄 PDF para coach</>}
-          </button>
-        )}
       </div>
       <div style={{display:"flex", gap:8, paddingTop:6}}>
         <input 
@@ -8052,7 +8038,7 @@ function MuscleHeatmap({ exlog, days, onChangeDays }) {
 }
 
 /* ===== AGENTE ENTRENADOR ===== */
-function TrainerAgent({ onClose, data, busy, onRunAnalysis, exlog, exercises, notes, metricslog, splits, plateauAlerts, overloadSuggestions, muscleImbalances }) {
+function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, pdfBusy, exlog, exercises, notes, metricslog, splits, plateauAlerts, overloadSuggestions, muscleImbalances }) {
   const local = data?._local || null;
 
   const muscleVol = React.useMemo(() => {
@@ -8260,6 +8246,17 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, exlog, exercises, no
         {/* Error */}
         {data?._error && (
           <div style={{fontSize:12, color:"#f43f5e", background:"rgba(244,63,94,0.08)", border:"1px solid rgba(244,63,94,0.2)", borderRadius:9, padding:"10px 12px"}}>{data._error}</div>
+        )}
+
+        {/* PDF para coach */}
+        {generateWeeklyPDF && (
+          <button
+            onClick={generateWeeklyPDF}
+            disabled={pdfBusy || busy}
+            style={{width:"100%", padding:"13px 0", borderRadius:12, border:`1px solid ${C.amber}`, cursor:(pdfBusy||busy)?"not-allowed":"pointer", background:"transparent", color:C.amber, fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyContent:"center", gap:8, opacity:(pdfBusy||busy)?0.6:1, transition:"opacity .2s"}}
+          >
+            {pdfBusy ? <><Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>Generando reporte…</> : <>📄 PDF para mi coach</>}
+          </button>
         )}
 
         {/* AI CTA */}
