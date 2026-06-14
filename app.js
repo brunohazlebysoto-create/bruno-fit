@@ -3689,7 +3689,12 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
                     outline: "none"
                   }}
                 >
-                  <Ic size={22} strokeWidth={isActive ? 2.5 : 1.8}/>
+                  <div style={{position:"relative", display:"inline-flex"}}>
+                    <Ic size={22} strokeWidth={isActive ? 2.5 : 1.8}/>
+                    {k === "coach" && chat.length > 0 && view !== "coach" && (
+                      <div style={{position:"absolute", top:-2, right:-3, width:7, height:7, borderRadius:"50%", background:C.lime}}/>
+                    )}
+                  </div>
                   <span style={{ fontSize: 10, fontWeight: isActive ? 700 : 500, letterSpacing: "0.01em" }}>{lbl}</span>
                 </button>
               );
@@ -3735,24 +3740,57 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             </div>
           )}
           {view === "entreno" && (
-            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
-              <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Rutina de Hoy</div>
-              <div style={{display:"flex", gap:6}}>
-                <button
-                  onClick={() => setShowFocusMode(true)}
-                  className="btn-active-scale"
-                  style={{background:"rgba(74,214,255,0.08)", border:`1px solid rgba(74,214,255,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.cyan, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
-                >
-                  <Clock size={13}/><span>Foco</span>
-                </button>
-                <button
-                  onClick={() => setShowTrainerAgent(true)}
-                  className="btn-active-scale"
-                  style={{background:"rgba(205,255,74,0.08)", border:`1px solid rgba(205,255,74,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.lime, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
-                >
-                  <Sparkles size={13}/><span>Agente</span>
-                </button>
+            <div>
+              <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+                <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Rutina de Hoy</div>
+                <div style={{display:"flex", gap:6}}>
+                  <button
+                    onClick={() => setShowFocusMode(true)}
+                    className="btn-active-scale"
+                    style={{background:"rgba(74,214,255,0.08)", border:`1px solid rgba(74,214,255,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.cyan, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
+                  >
+                    <Clock size={13}/><span>Foco</span>
+                  </button>
+                  <button
+                    onClick={() => setShowTrainerAgent(true)}
+                    className="btn-active-scale"
+                    style={{background:"rgba(205,255,74,0.08)", border:`1px solid rgba(205,255,74,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.lime, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
+                  >
+                    <Sparkles size={13}/><span>Agente</span>
+                  </button>
+                </div>
               </div>
+              {(() => {
+                const isPush = m => /pectoral|deltoid|tricep/i.test(m);
+                const isPull = m => /dorsal|trapecio|bicep|rombo/i.test(m);
+                const isLegs = m => /cuadri|isquio|gluteo|gemelo|soleo/i.test(m);
+                const weekAgo = Date.now() - 7 * 864e5;
+                const exMap = {};
+                Object.values(exercises || {}).flat().forEach(e => { exMap[e.name] = e.musculos || []; });
+                let push = 0, pull = 0, legs = 0;
+                Object.entries(exlog || {}).forEach(([name, sets]) => {
+                  const ms = exMap[name] || MUSCLES[name] || [];
+                  (sets || []).forEach(s => {
+                    if (s && s.date && new Date(s.date).getTime() >= weekAgo && s.type !== "warmup") {
+                      if (ms.some(isPush)) push++;
+                      else if (ms.some(isPull)) pull++;
+                      else if (ms.some(isLegs)) legs++;
+                    }
+                  });
+                });
+                if (push + pull + legs === 0) return null;
+                return (
+                  <div style={{display:"flex", gap:6, marginTop:8}}>
+                    {[["Empuje",push,C.cyan],["Jalón",pull,C.lime],["Piernas",legs,C.amber]].map(([lbl,val,col]) => (
+                      <div key={lbl} style={{flex:1, background:C.panel, border:`1px solid ${col}33`, borderRadius:8, padding:"5px 8px", textAlign:"center"}}>
+                        <div style={{fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase"}}>{lbl}</div>
+                        <div style={{fontSize:16, fontWeight:900, color:col, lineHeight:1.2}}>{val}</div>
+                        <div style={{fontSize:8, color:C.muted}}>series</div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           )}
           {view === "reg" && (
@@ -3956,7 +3994,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
           />
         )}
         {view === "addfood" && (
-          <AddFood 
+          <AddFood
             addFoodInputText={addFoodInputText}
             setAddFoodInputText={setAddFoodInputText}
             aiParsedResults={aiParsedResults}
@@ -3968,6 +4006,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             setLog={(l) => { setLog(l); saveState({ log: l }); }}
             geminiKey={geminiKey}
             saveState={saveState}
+            foodlog={foodlog}
           />
         )}
         {view === "editentry" && (
@@ -4774,7 +4813,8 @@ function AddFood({
   log,
   setLog,
   geminiKey,
-  saveState
+  saveState,
+  foodlog
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -4784,6 +4824,20 @@ function AddFood({
   useEffect(() => {
     setLocalText(addFoodInputText || "");
   }, [addFoodInputText]);
+
+  const recentUnique = React.useMemo(() => {
+    const seen = new Map();
+    const allDates = Object.keys(foodlog || {}).sort().reverse();
+    for (const d of allDates) {
+      for (const entry of (foodlog[d] || [])) {
+        const key = entry.resumen?.toLowerCase().trim();
+        if (key && !seen.has(key)) seen.set(key, entry);
+        if (seen.size >= 5) break;
+      }
+      if (seen.size >= 5) break;
+    }
+    return [...seen.values()];
+  }, [foodlog]);
 
   const FOOD_SYS = "Eres un nutricionista experto. Estima los macros de la comida detallada por el usuario (puede ser texto o imagen).\n" +
                     "REGLAS CRÍTICAS DE ESTIMACIÓN:\n" +
@@ -4948,6 +5002,29 @@ function AddFood({
       <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 16 }}>
         <div style={{ fontSize: 20, fontWeight: 800, color: "var(--text-ink)" }}>¿Qué has comido?</div>
         <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: -8 }}>Escribe los alimentos y cantidades de forma natural.</div>
+
+        {recentUnique.length > 0 && (
+          <div style={{padding:"0 0 6px"}}>
+            <div style={{fontSize:10, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:6}}>Repetir rápido</div>
+            <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
+              {recentUnique.map((item, i) => (
+                <button key={i} onClick={() => {
+                  const newEntry = { ...item, id: Date.now() + i, t: Date.now() };
+                  const newLog = [newEntry, ...log];
+                  setLog(newLog);
+                  saveState({ log: newLog });
+                }} style={{
+                  background:C.panel2, border:`1px solid ${C.line}`, borderRadius:20,
+                  padding:"5px 10px", fontSize:11, fontWeight:600, color:C.ink,
+                  cursor:"pointer", display:"flex", alignItems:"center", gap:4
+                }}>
+                  <span style={{maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{item.resumen}</span>
+                  <span style={{color:C.muted, fontSize:10}}>{item.kcal}kcal</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div style={{ position: "relative" }}>
           <textarea
@@ -5826,6 +5903,15 @@ function Hoy({
     [exlog, notes, water, foodlog, selectedDateStr]
   );
 
+  const weekKcal = React.useMemo(() => {
+    return [...Array(7)].map((_,i) => {
+      const d = new Date(); d.setDate(d.getDate() - (6-i));
+      const dateStr = d.toISOString().slice(0,10);
+      const entries = (foodlog || {})[dateStr] || [];
+      return { date: dateStr, kcal: Math.round(entries.reduce((s,e) => s+(+e.kcal||0), 0)) };
+    });
+  }, [foodlog]);
+
   const getLocalDateStr = (d) => {
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -6099,8 +6185,14 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
       />
 
       {/* Planta de hidratación */}
-      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"16px 15px 12px", marginBottom:12, display:'flex', flexDirection:'column', alignItems:'center', gap:0}}>
+      <div
+        onClick={() => { if(water < waterGoal) setWater(water + 1); }}
+        style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"16px 15px 8px", marginBottom:12, display:'flex', flexDirection:'column', alignItems:'center', gap:0, cursor: water < waterGoal ? "pointer" : "default"}}
+      >
         <PlantaHidratacion water={water} waterGoal={waterGoal} isRestDay={isRestDay}/>
+        <div style={{fontSize:10, color:C.muted, marginTop:4, letterSpacing:".04em"}}>
+          {water < waterGoal ? "Toca para +💧" : "¡Hidratación completa! 🎉"}
+        </div>
       </div>
 
       <div style={{display:"flex", alignItems:"center", gap:10, background:C.panel, border:`1.5px solid ${readiness.color}33`, borderRadius:14, padding:"10px 14px", marginBottom:12, animation:"pop 0.3s ease"}}>
@@ -6113,6 +6205,32 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
           {readiness.factors.length > 0 && <div style={{fontSize:10.5, color:C.muted, marginTop:1}}>{readiness.factors.join(" · ")}</div>}
         </div>
       </div>
+
+      {weekKcal.some(d => d.kcal > 0) && (() => {
+        const maxK = Math.max(...weekKcal.map(d=>d.kcal), target?.kcal||2200);
+        const tgt = target?.kcal || 2200;
+        const DAYS = ['L','M','X','J','V','S','D'];
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"12px 14px", marginBottom:12}}>
+            <div style={{fontSize:11, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:8}}>Calorías · 7 días</div>
+            <div style={{display:"flex", alignItems:"flex-end", gap:4, height:44}}>
+              {weekKcal.map((d,i) => {
+                const h = d.kcal > 0 ? Math.max(4, Math.round((d.kcal/maxK)*44)) : 3;
+                const isToday = d.date === selectedDateStr;
+                const aboveTarget = d.kcal > tgt * 1.05;
+                const col = d.kcal === 0 ? C.line : aboveTarget ? C.amber : isToday ? C.lime : C.cyan;
+                return (
+                  <div key={i} style={{flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:2}}>
+                    <div style={{width:"100%", height:h, background:col, borderRadius:3, transition:"height .3s"}}/>
+                    <div style={{fontSize:8, color: isToday ? C.lime : C.muted, fontWeight: isToday ? 800 : 500}}>{DAYS[(new Date(d.date+'T12:00:00').getDay()+6)%7]}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{fontSize:9.5, color:C.muted, marginTop:4}}>Objetivo: {tgt} kcal · Hoy: {weekKcal[6]?.kcal || 0} kcal</div>
+          </div>
+        );
+      })()}
 
       {upcomingEvent && upcomingEvent.date && (() => {
         const days = Math.ceil((new Date(upcomingEvent.date) - new Date()) / 86400000);
@@ -6935,6 +7053,11 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                     {m.t ? new Date(m.t).toLocaleTimeString("es", { hour:"2-digit", minute:"2-digit" }) : "—"}
                   </span>
                   <span style={{color:C.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1}}>{m.resumen}</span>
+                  {m.proteina >= 20 ? (
+                    <span style={{background:`${C.lime}22`, color:C.lime, fontSize:9.5, fontWeight:800, borderRadius:6, padding:"1px 5px", flexShrink:0}}>💪 {m.proteina}g P</span>
+                  ) : m.proteina > 0 ? (
+                    <span style={{color:C.muted, fontSize:9.5, flexShrink:0}}>{m.proteina}g P</span>
+                  ) : null}
                   <span style={{color:C.muted, fontSize:10.5, flexShrink:0}}>{Math.round(m.kcal)} kcal</span>
                 </div>
               ))}
@@ -8260,6 +8383,8 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
                   <div style={{fontSize:9, fontWeight:700, color:"#9aa088", marginBottom:2, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{muscle.toUpperCase()}</div>
                   <div style={{fontSize:18, fontWeight:900, color:sc.text, lineHeight:1}}>{d.setsPerWeek}</div>
                   <div style={{fontSize:8, color:sc.text, marginTop:1, opacity:.8}}>{d.status === "neglected" ? "sin trabajo" : d.status === "low" ? "bajo" : d.status === "high" ? "alto" : "óptimo"}</div>
+                  {d.setsPerWeek < 10 && <div style={{fontSize:7, color:"#9aa088", marginTop:2, opacity:.7}}>↑ MEV: 10</div>}
+                  {d.setsPerWeek > 18 && <div style={{fontSize:7, color:C.amber, marginTop:2, opacity:.85}}>⚠ cerca MRV (20)</div>}
                 </div>
               );
             })}
@@ -8422,6 +8547,15 @@ function FocusMode({ onClose, splits, exlog }) {
   const [formCues, setFormCues] = useState({});
   const [formCueBusy, setFormCueBusy] = useState({});
   const today = new Date().toISOString().slice(0, 10);
+  const sessionStartRef = useRef(Date.now());
+  const [showHydrationAlert, setShowHydrationAlert] = useState(false);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const elapsed = (Date.now() - sessionStartRef.current) / 60000;
+      if (elapsed >= 45 && !showHydrationAlert) setShowHydrationAlert(true);
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [showHydrationAlert]);
   const [setsDone, setSetsDone] = useState({});
   useEffect(() => {
     loadKey("focus_sets_" + today, {}).then(saved => {
@@ -8433,6 +8567,13 @@ function FocusMode({ onClose, splits, exlog }) {
   }, [setsDone, today]);
   const markSetDone = (exName) => {
     setSetsDone(prev => ({ ...prev, [exName]: (prev[exName] || 0) + 1 }));
+    // Auto-suggest rest based on last logged reps
+    const lastSets = (exlog[exName] || []).slice(0, 3);
+    const avgReps = lastSets.length > 0
+      ? Math.round(lastSets.reduce((s,e) => s + (parseFloat(e.reps) || 8), 0) / lastSets.length)
+      : 8;
+    const suggestedRest = avgReps <= 5 ? 180 : avgReps <= 10 ? 120 : 60;
+    setRestTotal(suggestedRest);
     startRest();
   };
   const resetSets = (exName) => setSetsDone(prev => ({ ...prev, [exName]: 0 }));
@@ -8554,6 +8695,14 @@ function FocusMode({ onClose, splits, exlog }) {
           </div>
           <button onClick={onClose} style={{background:"none", color:C.muted, cursor:"pointer", padding:4, display:"flex", border:"none"}}><X size={20}/></button>
         </div>
+
+        {/* Hydration alert after 45 min */}
+        {showHydrationAlert && (
+          <div style={{background:`${C.cyan}18`, border:`1px solid ${C.cyan}44`, borderRadius:10, padding:"10px 12px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:8}}>
+            <span style={{fontSize:12.5, color:C.cyan}}>💧 Llevas +45 min entrenando — bebe agua ahora</span>
+            <button onClick={() => setShowHydrationAlert(false)} style={{background:"none", border:"none", color:C.muted, cursor:"pointer", fontSize:16, lineHeight:1}}>×</button>
+          </div>
+        )}
 
         {/* REST TIMER */}
         <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:14, padding:16}}>
@@ -8913,6 +9062,22 @@ function Entreno({
       if (savedWk) setWk(savedWk);
     })();
   }, []);
+
+  const topProgress = React.useMemo(() => {
+    const now = Date.now();
+    const thirtyDaysAgo = now - 30 * 86400000;
+    const progress = [];
+    Object.entries(exlog || {}).forEach(([name, sets]) => {
+      const recent = sets.filter(s => s.w && new Date(s.date).getTime() > thirtyDaysAgo);
+      const older = sets.filter(s => s.w && new Date(s.date).getTime() <= thirtyDaysAgo && new Date(s.date).getTime() > now - 60 * 86400000);
+      if (!recent.length || !older.length) return;
+      const recentMax = Math.max(...recent.map(s=>parseFloat(s.w)||0));
+      const olderMax = Math.max(...older.map(s=>parseFloat(s.w)||0));
+      const delta = recentMax - olderMax;
+      if (delta > 0) progress.push({ name, delta, current: recentMax });
+    });
+    return progress.sort((a,b) => b.delta - a.delta).slice(0, 3);
+  }, [exlog]);
 
   /* ===== MAPA DE CALOR DE VOLUMEN SEMANAL ===== */
   const vol = useMemo(() => {
@@ -9348,6 +9513,19 @@ function Entreno({
   return (
     <div className="pop">
       <div className="disp" style={{fontSize:24, color:C.lime, marginBottom:10}}>ENTRENAMIENTO · SPLIT</div>
+
+      {topProgress.length > 0 && (
+        <div style={{display:"flex", gap:6, marginBottom:12, overflowX:"auto"}}>
+          {topProgress.map((p, i) => (
+            <div key={i} style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:10, padding:"8px 10px", minWidth:110, flexShrink:0}}>
+              <div style={{fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase", marginBottom:2}}>Top {i+1} · 30 días</div>
+              <div style={{fontSize:12, fontWeight:800, color:C.ink, marginBottom:2, lineHeight:1.2}}>{p.name}</div>
+              <div style={{fontSize:13, fontWeight:900, color:C.lime}}>+{p.delta}kg</div>
+              <div style={{fontSize:10, color:C.muted}}>{p.current}kg ahora</div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {muscleImbalances && muscleImbalances.length > 0 && (
         <div style={{
