@@ -5545,15 +5545,26 @@ const DailyGreetingCard = React.memo(function DailyGreetingCard({
       (sets || []).some(s => (s?.date || '').slice(0, 10) === selectedDateStr)
     ), [exlog, selectedDateStr]);
 
+  const sendMealSuggestion = (meal) => {
+    setView("coach");
+    const msgs = {
+      desayuno: `Dame 3 opciones de desayuno para ahora. Que sean variadas, altas en proteína y prácticas. Ajústalas a mis macros diarios.`,
+      almuerzo: `Dame 3 opciones de almuerzo para ahora. Altas en proteína, que me dejen con energía para el resto del día. Ajusta a mis macros.`,
+      merienda: `Dame 2-3 ideas de merienda/snack para ahora. Que sean rápidas y ayuden a llegar bien a la cena sin pasarme de calorías.`,
+      cena: `Dame 3 opciones de cena para esta noche. Que sean livianas pero con buena proteína. Ajusta a lo que me queda de macros hoy.`,
+    };
+    setTimeout(() => sendCoachMessage?.(msgs[meal]), 200);
+  };
+
   const contextButtons = [];
   if (hour >= 6 && hour < 11) {
-    contextButtons.push({ icon: "🌞", label: "Desayuno", action: () => setView("addfood") });
+    contextButtons.push({ icon: "🌞", label: "Desayuno", action: () => sendMealSuggestion("desayuno") });
   } else if (hour >= 11 && hour < 15) {
-    contextButtons.push({ icon: "🍽️", label: "Almuerzo", action: () => setView("addfood") });
+    contextButtons.push({ icon: "🍽️", label: "Almuerzo", action: () => sendMealSuggestion("almuerzo") });
   } else if (hour >= 15 && hour < 18) {
-    contextButtons.push({ icon: "🫐", label: "Merienda", action: () => setView("addfood") });
+    contextButtons.push({ icon: "🫐", label: "Merienda", action: () => sendMealSuggestion("merienda") });
   } else if (hour >= 18 && hour < 22) {
-    contextButtons.push({ icon: "🌆", label: "Cena", action: () => setView("addfood") });
+    contextButtons.push({ icon: "🌆", label: "Cena", action: () => sendMealSuggestion("cena") });
   }
 
   if (!hasTrainedToday && !isRestDay) {
@@ -5565,13 +5576,19 @@ const DailyGreetingCard = React.memo(function DailyGreetingCard({
     }});
   }
 
-  const handleResumen = () => {
+  // Botón adaptado según momento del día
+  const isNight = hour >= 19 || hour < 5;
+  const isMorning = hour >= 5 && hour < 12;
+  const ctaLabel = isNight ? "Resumen del día" : isMorning ? "Plan para hoy" : "¿Cómo voy hoy?";
+  const ctaIcon = isNight ? "🌙" : isMorning ? "📋" : "📊";
+
+  const handleCTA = () => {
     setView("coach");
-    const msg = hour >= 20 || hour < 5
-      ? `[Resumen nocturno ${selectedDateStr}] Hazme un resumen de mi día completo: nutrición, entrenamiento, hidratación y qué mejorar mañana.`
-      : hour < 11
-      ? `[Plan matutino ${selectedDateStr}] Dame un plan concreto para hoy: qué comer según mis macros, si toca entrenar y cuál es mi prioridad del día.`
-      : `[Seguimiento ${selectedDateStr}] ¿Cómo voy con mi plan de hoy? Analiza lo registrado y dame sugerencias para el resto del día.`;
+    const msg = isNight
+      ? `[Resumen nocturno ${selectedDateStr}] Hazme un resumen de mi día completo: entrenamiento, nutrición, hidratación y qué mejorar mañana.`
+      : isMorning
+      ? `[Plan matutino ${selectedDateStr}] Dame un plan concreto para hoy: qué toca entrenar según mi split, cuántas calorías y proteína apuntar, y cuál es la prioridad del día.`
+      : `[Seguimiento ${selectedDateStr}] ¿Cómo voy con mi plan de hoy? Analiza lo que ya registré y dame sugerencias para el resto del día.`;
     setTimeout(() => sendCoachMessage?.(msg), 200);
   };
 
@@ -5595,13 +5612,13 @@ const DailyGreetingCard = React.memo(function DailyGreetingCard({
           ))}
         </div>
       )}
-      <button onClick={handleResumen} style={{
+      <button onClick={handleCTA} style={{
         width:"100%", background:C.panel2, border:`1px solid ${C.line}`,
         borderRadius:12, padding:"11px 16px",
         fontSize:13.5, fontWeight:700, color:C.ink,
         cursor:"pointer", display:"flex", alignItems:"center", gap:8, justifyContent:"center"
       }}>
-        <Sparkles size={15} color={C.lime}/> Resumen IA del día
+        <Sparkles size={15} color={C.lime}/> {ctaIcon} {ctaLabel}
       </button>
     </div>
   );
