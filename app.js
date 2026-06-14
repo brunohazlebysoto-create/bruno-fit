@@ -6,7 +6,7 @@ import {
   MessageSquare, NotebookPen, Loader2, Scale, Camera, Clock, ChefHat, 
   Sparkles, LineChart, Dumbbell, ClipboardList, GlassWater, Target, 
   CalendarDays, ShoppingCart, Activity, Eye, EyeOff, CheckSquare, Square, ShieldAlert,
-  RefreshCw, Link2, Copy, Check, Settings, Pill, X
+  RefreshCw, Link2, Copy, Check, Settings, Pill, X, TrendingUp
 } from "lucide-react";
 
 /* ===== CONSTANTES Y PRESETS ===== */
@@ -22,6 +22,7 @@ const DEFAULT_SPLITS = [
   { key:"B", name:"Pierna Cuádriceps + Hombros", fuel:"Carbo alto", ex:["Sentadilla","Prensa 45°","Sentadilla búlgara","Sentadilla ciclista Smith","Extensión cuádriceps","Press Arnold","Vuelos laterales","Vuelos posteriores polea"] },
   { key:"C", name:"Espalda + Tríceps", fuel:"Carbo medio-alto", ex:["Dominadas / Jalón","Remo barra","Remo máquina","Pullover polea","Face pull","Press cerrado","Extensión polea","Extensión sobre cabeza"] },
   { key:"D", name:"Pierna Posterior", fuel:"Carbo alto", ex:["Peso muerto","Leg curl sentado","Puente glúteos","Estocada atrás Smith"] },
+  { key:"E", name:"100% Suelo y Cero Espacio", fuel:"Carbo bajo-medio", ex:["Sentadillas con pulso","Flexiones de brazos","Remo Delfín","Curl con Auto-Resistencia"] },
 ];
 
 const MUSCLES = {
@@ -51,6 +52,10 @@ const MUSCLES = {
   "Leg curl sentado":["Isquios"],
   "Puente glúteos":["Glúteos"],
   "Estocada atrás Smith":["Glúteos","Cuádriceps","Isquios"],
+  "Sentadillas con pulso":["Cuádriceps","Glúteos","Isquios"],
+  "Flexiones de brazos":["Pectoral","Tríceps","Deltoide ant."],
+  "Remo Delfín":["Espalda","Deltoides"],
+  "Curl con Auto-Resistencia":["Bíceps"],
 };
 
 const DEFAULT_MEALS = [
@@ -241,6 +246,44 @@ async function saveKey(key,val){
   } 
 }
 
+/* ===== CACHÉ DE RESPUESTAS IA (localStorage, ahorra cuota) ===== */
+const AI_CACHE_KEY = "ai_response_cache_v1";
+const AI_CACHE_MAX = 150;
+const AI_CACHE_TTL = 30 * 86400000; // 30 días
+function _aiHash(s){ let h=0; const str=(s||""); for(let i=0;i<str.length;i++){ h=(h*31 + str.charCodeAt(i))|0; } return h.toString(36); }
+function getAICache(kind, input){
+  try{
+    const raw = localStorage.getItem(AI_CACHE_KEY);
+    if(!raw) return null;
+    const store = JSON.parse(raw);
+    const key = kind + ":" + _aiHash((input||"").toLowerCase().trim());
+    const hit = store[key];
+    if(!hit) return null;
+    if(Date.now() - hit.t > AI_CACHE_TTL) return null;
+    return hit.v;
+  }catch(_){ return null; }
+}
+function setAICache(kind, input, value){
+  try{
+    const raw = localStorage.getItem(AI_CACHE_KEY);
+    let store = raw ? JSON.parse(raw) : {};
+    const key = kind + ":" + _aiHash((input||"").toLowerCase().trim());
+    store[key] = { v: value, t: Date.now() };
+    let keys = Object.keys(store);
+    if(keys.length > AI_CACHE_MAX){
+      keys.sort((a,b)=>store[a].t - store[b].t);
+      for(let i=0;i<keys.length - AI_CACHE_MAX;i++) delete store[keys[i]];
+      keys = Object.keys(store);
+    }
+    const blob = JSON.stringify(store);
+    if(blob.length > 480000){
+      keys.sort((a,b)=>store[a].t - store[b].t);
+      keys.slice(0, Math.floor(keys.length / 2)).forEach(k => delete store[k]);
+    }
+    localStorage.setItem(AI_CACHE_KEY, JSON.stringify(store));
+  }catch(_){}
+}
+
 /* ===== SUPABASE CLIENT INITIALIZATION ===== */
 let supabase = null;
 function initSupabase(url, key) {
@@ -296,12 +339,18 @@ async function fetchStateFromCloud(syncCode) {
 
 /* ===== INTEGRACIÓN DE LA API DE GEMINI (1.5 FLASH) ===== */
 const aiErr = (e) => {
-  if (!e) return "No se pudo conectar con la IA. Verifica tu API Key o conexión.";
+  if (!e) return "⚠️ Sin clave API. Ve a Perfil → Ajustes y agrega tu clave de Google AI Studio (gemini.google.com) — es gratuita.";
   const msg = e.message || "";
-  if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota") || msg.includes("limit")) {
-    return "Límite de la API superado (Error 429 / Quota Exceeded). Si usas la versión gratuita de Google AI Studio, espera unos segundos para restablecer el límite por minuto. Para evitar esto, puedes agregar múltiples API Keys separadas por comas en Ajustes (se rotarán automáticamente) o habilitar el pago por uso (Pay-as-you-go) en Google AI Studio, que cuesta centavos para uso personal.";
+  if (msg.includes("No se pudo conectar") || msg.includes("No API Key")) {
+    return "⚠️ Sin clave API configurada. Ve a Perfil → Ajustes → Clave Gemini y agrega tu clave gratuita de gemini.google.com";
   }
-  return "No se pudo conectar con la IA. Detalle: " + msg;
+  if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota") || msg.includes("limit")) {
+    return "⏱️ Límite de API superado. Espera unos segundos o agrega más claves en Perfil → Ajustes (se rotan automáticamente).";
+  }
+  if (msg.includes("401") || msg.includes("403") || msg.includes("API_KEY") || msg.includes("invalid")) {
+    return "❌ Clave API inválida. Ve a Perfil → Ajustes y verifica tu clave Gemini.";
+  }
+  return "⚠️ Error IA: " + msg;
 };
 const getProfileStr = (weight = 93.9, musculo = 64.7, grasaPct = 26.2, visceral = 9) => {
   return `Bruno: hombre, 34 años, 180 cm, ${weight} kg. Objetivo: definición (bajar grasa manteniendo músculo; ${musculo} kg de músculo, ${grasaPct}% grasa, visceral grado ${visceral}). Dieta hiperproteica.`;
@@ -364,6 +413,10 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
       apiKeys.push(dk);
     }
   });
+
+  if (apiKeys.length === 0) {
+    throw new Error("No API Key configurada. Ve a Perfil → Ajustes y agrega tu clave Gemini gratuita de gemini.google.com");
+  }
 
   // Priorizar las llaves de Gemini nativas primero y usar las de OpenRouter como respaldo/fallback
   const geminiKeys = apiKeys.filter(k => !k.startsWith("sk-or-"));
@@ -522,19 +575,92 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
       }
     } catch (e) {
       lastError = e;
+      const is429 = e.message && (e.message.includes("429") || e.message.includes("RESOURCE_EXHAUSTED") || e.message.includes("quota") || e.message.includes("limit"));
       console.warn(`Error con la API Key ${idx + 1}/${orderedKeys.length}: ${e.message}. Intentando con la siguiente...`);
+      if (is429 && idx < orderedKeys.length - 1) {
+        await new Promise(r => setTimeout(r, 1500));
+      }
     }
   }
 
   throw lastError || new Error("No se pudo conectar con ninguna API Key.");
 }
 
-function seedExercises(){ 
-  const o={}; 
-  DEFAULT_SPLITS.forEach(d=>{ 
-    o[d.key]=d.ex.map(n=>({name:n,tecnico:"",musculos:MUSCLES[n]||[]})); 
-  }); 
-  return o; 
+const SEED_TECNICO = {
+  "Press banca":"Press de pectoral con barra plano",
+  "Press inclinado mancuerna":"Press de pectoral inclinado con mancuernas",
+  "Aperturas":"Apertura de pectoral con mancuernas",
+  "Curl inclinado":"Curl de bíceps inclinado con mancuernas",
+  "Curl martillo":"Curl de bíceps en agarre martillo",
+  "Curl prono barra":"Curl reverso con barra recta",
+  "Sentadilla":"Sentadilla con barra libre",
+  "Prensa 45°":"Prensa de pierna a 45 grados",
+  "Sentadilla búlgara":"Sentadilla split búlgara con mancuernas",
+  "Sentadilla ciclista Smith":"Sentadilla ciclista en máquina Smith",
+  "Extensión cuádriceps":"Extensión de rodilla en máquina",
+  "Press Arnold":"Press Arnold con mancuernas",
+  "Vuelos laterales":"Abducción lateral de hombro con mancuernas",
+  "Vuelos posteriores polea":"Abducción posterior de hombro en polea",
+  "Dominadas / Jalón":"Jalón frontal en polea alta o dominadas",
+  "Remo barra":"Remo con barra inclinado hacia adelante",
+  "Remo máquina":"Remo sentado en máquina",
+  "Pullover polea":"Pullover de espalda en polea alta",
+  "Face pull":"Face pull en polea alta con cuerda",
+  "Press cerrado":"Press de tríceps con agarre cerrado en barra",
+  "Extensión polea":"Extensión de tríceps en polea alta",
+  "Extensión sobre cabeza":"Extensión de tríceps sobre la cabeza",
+  "Peso muerto":"Peso muerto convencional con barra",
+  "Leg curl sentado":"Flexión de rodilla en máquina sentada",
+  "Puente glúteos":"Puente de glúteos con barra",
+  "Estocada atrás Smith":"Estocada posterior en máquina Smith",
+  "Sentadillas con pulso":"Sentadilla con pulso al frente sin equipo",
+  "Flexiones de brazos":"Flexión de pecho en suelo",
+  "Remo Delfín":"Remo invertido con apoyo en el suelo",
+  "Curl con Auto-Resistencia":"Curl de bíceps con autorresistencia manual",
+};
+
+const SEED_EQUIPO = {
+  "Press banca":"peso libre",
+  "Press inclinado mancuerna":"peso libre",
+  "Aperturas":"peso libre",
+  "Curl inclinado":"peso libre",
+  "Curl martillo":"peso libre",
+  "Curl prono barra":"peso libre",
+  "Sentadilla":"peso libre",
+  "Prensa 45°":"máquina",
+  "Sentadilla búlgara":"peso libre",
+  "Sentadilla ciclista Smith":"máquina",
+  "Extensión cuádriceps":"máquina",
+  "Press Arnold":"peso libre",
+  "Vuelos laterales":"peso libre",
+  "Vuelos posteriores polea":"polea",
+  "Dominadas / Jalón":"peso libre",
+  "Remo barra":"peso libre",
+  "Remo máquina":"máquina",
+  "Pullover polea":"polea",
+  "Face pull":"polea",
+  "Press cerrado":"peso libre",
+  "Extensión polea":"polea",
+  "Extensión sobre cabeza":"peso libre",
+  "Peso muerto":"peso libre",
+  "Leg curl sentado":"máquina",
+  "Puente glúteos":"peso libre",
+  "Estocada atrás Smith":"máquina",
+  "Sentadillas con pulso":"cuerpo libre",
+  "Flexiones de brazos":"cuerpo libre",
+  "Remo Delfín":"cuerpo libre",
+  "Curl con Auto-Resistencia":"cuerpo libre",
+};
+
+const EQUIPO_ORDER = ["peso libre","máquina","polea","cuerpo libre"];
+const EQUIPO_LABEL = { "peso libre":"🏋️ Peso libre", "máquina":"⚙️ Máquina", "polea":"🔗 Polea", "cuerpo libre":"🤸 Cuerpo libre" };
+
+function seedExercises(){
+  const o={};
+  DEFAULT_SPLITS.forEach(d=>{
+    o[d.key]=d.ex.map(n=>({name:n, tecnico:SEED_TECNICO[n]||"", equipo:SEED_EQUIPO[n]||"peso libre", musculos:MUSCLES[n]||[]}));
+  });
+  return o;
 }
 
 /* ===== GRÁFICO SVG COMPARTIDO ===== */
@@ -966,6 +1092,9 @@ export default function App(){
   const [showTrainerAgent, setShowTrainerAgent] = useState(false);
   const [trainerAgentData, setTrainerAgentData] = useState(null);
   const [trainerAgentBusy, setTrainerAgentBusy] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [coachPersonality, setCoachPersonality] = useState("técnico");
+  const [showFocusMode, setShowFocusMode] = useState(false);
 
   // Elevated Calendar States & Helpers
   const [calMonth, setCalMonth] = useState(() => new Date());
@@ -1093,6 +1222,9 @@ export default function App(){
   const [supabaseUser, setSupabaseUser] = useState(null);
   const [sbSyncing, setSbSyncing] = useState(false);
   const [sbError, setSbError] = useState("");
+  const [sbAutoSyncStatus, setSbAutoSyncStatus] = useState(""); // "" | "saving" | "saved" | "error"
+  const sbFullSyncTimer = useRef(null);
+  const sbPullIntervalRef = useRef(null);
 
   const target = customPresets[presetKey] || customPresets.personalizado || DEFAULT_PRESETS.personalizado;
 
@@ -1225,6 +1357,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
             const { data: { session } } = await client.auth.getSession();
             if (session?.user) {
               setSupabaseUser(session.user);
+              setSbError(""); // limpiar cualquier error viejo al restaurar sesión
+              setTimeout(() => loadFullStateFromSupabase(session.user.id), 1500);
             }
           } catch(e) {
             console.error("Error al obtener sesión de Supabase:", e);
@@ -1576,7 +1710,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
             setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
             setShoppingList(cloudData.shoppingList || { categorias: [] });
             if (cloudData.meals && Array.isArray(cloudData.meals) && cloudData.meals.length > 0) setMeals(cloudData.meals);
-            setCustomSuggestions(cloudData.customSuggestions || []);
+            if (cloudData.customSuggestions && Array.isArray(cloudData.customSuggestions) && cloudData.customSuggestions.length > 0) setCustomSuggestions(cloudData.customSuggestions);
             setActiveSplitKey(cloudData.activeSplitKey || "A");
             if (Array.isArray(cloudData.splits)) {
               setSplits(cloudData.splits);
@@ -1755,32 +1889,14 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       suppsInventory: nextSuppsInventory,
       workoutDurations: nextWorkoutDurations,
       experiments: nextExperiments,
+      smartGoals: updates.smartGoals !== undefined ? updates.smartGoals : smartGoals,
+      challenges: updates.challenges !== undefined ? updates.challenges : challenges,
+      weeklyInsight: updates.weeklyInsight !== undefined ? updates.weeklyInsight : weeklyInsight,
+      upcomingEvent: updates.upcomingEvent !== undefined ? updates.upcomingEvent : upcomingEvent,
       updatedAt: updateTime
     };
 
-    // Guardar local
-    if (updates.presetKey !== undefined) await saveKey("profile", { presetKey: updates.presetKey });
-    if (updates.customPresets !== undefined) await saveKey("custom_presets", updates.customPresets);
-    if (updates.notes !== undefined) await saveKey("notes", updates.notes);
-    if (updates.chat !== undefined) await saveKey("chat", updates.chat);
-    if (updates.exlog !== undefined) await saveKey("exlog", updates.exlog);
-    if (updates.exercises !== undefined) await saveKey("exercises", updates.exercises);
-    if (updates.bodyComp !== undefined) await saveKey("body_comp", updates.bodyComp);
-    if (updates.shoppingList !== undefined) await saveKey("shopping_list", updates.shoppingList);
-    if (updates.meals !== undefined) await saveKey("meals", updates.meals);
-    if (updates.customSuggestions !== undefined) await saveKey("custom_suggestions", updates.customSuggestions);
-    if (updates.activeSplitKey !== undefined) await saveKey("active_split_key", updates.activeSplitKey);
-    if (updates.experiments !== undefined) await saveKey("experiments", updates.experiments);
-    if (updates.splits !== undefined) await saveKey("training_splits", updates.splits);
-    
-    await saveKey("foodlog", nextFoodlog);
-    await saveKey("waterlog", nextWaterlog);
-    await saveKey("suppslog", nextSuppslog);
-    await saveKey("metricslog", nextMetricslog);
-    await saveKey("supps_inventory", nextSuppsInventory);
-    await saveKey("workout_durations", nextWorkoutDurations);
-    await saveKey("last_local_update", updateTime);
-
+    // Actualizar UI primero (feedback instantáneo), luego persistir
     if (updates.log !== undefined) setFoodlog(nextFoodlog);
     if (updates.water !== undefined) setWaterlog(nextWaterlog);
     if (updates.supplements !== undefined) setSuppslog(nextSuppslog);
@@ -1792,6 +1908,33 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     if (updates.customSuggestions !== undefined) setCustomSuggestions(nextCustomSuggestions);
     if (updates.experiments !== undefined) setExperiments(nextExperiments);
     if (updates.splits !== undefined) setSplits(nextSplits);
+
+    // Guardar local en paralelo (antes era secuencial: ~20 awaits encadenados)
+    const writes = [];
+    if (updates.presetKey !== undefined) writes.push(saveKey("profile", { presetKey: updates.presetKey }));
+    if (updates.customPresets !== undefined) writes.push(saveKey("custom_presets", updates.customPresets));
+    if (updates.notes !== undefined) writes.push(saveKey("notes", updates.notes));
+    if (updates.chat !== undefined) writes.push(saveKey("chat", updates.chat));
+    if (updates.exlog !== undefined) writes.push(saveKey("exlog", updates.exlog));
+    if (updates.exercises !== undefined) writes.push(saveKey("exercises", updates.exercises));
+    if (updates.bodyComp !== undefined) writes.push(saveKey("body_comp", updates.bodyComp));
+    if (updates.shoppingList !== undefined) writes.push(saveKey("shopping_list", updates.shoppingList));
+    if (updates.meals !== undefined) writes.push(saveKey("meals", updates.meals));
+    if (updates.customSuggestions !== undefined) writes.push(saveKey("custom_suggestions", updates.customSuggestions));
+    if (updates.activeSplitKey !== undefined) writes.push(saveKey("active_split_key", updates.activeSplitKey));
+    if (updates.experiments !== undefined) writes.push(saveKey("experiments", updates.experiments));
+    if (updates.splits !== undefined) writes.push(saveKey("training_splits", updates.splits));
+    writes.push(saveKey("foodlog", nextFoodlog));
+    writes.push(saveKey("waterlog", nextWaterlog));
+    writes.push(saveKey("suppslog", nextSuppslog));
+    writes.push(saveKey("metricslog", nextMetricslog));
+    writes.push(saveKey("supps_inventory", nextSuppsInventory));
+    writes.push(saveKey("workout_durations", nextWorkoutDurations));
+    writes.push(saveKey("last_local_update", updateTime));
+    await Promise.all(writes);
+
+    // Auto-sync completo a Supabase (full_state)
+    scheduleFullSupabaseSync(current);
 
     // Guardar nube
     if (cloudSync && syncCode && !syncCode.startsWith("bf-")) {
@@ -1955,10 +2098,12 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       if (error) throw error;
       if (data?.user) {
         setSupabaseUser(data.user);
-        // Sincronizar datos locales a la nube automáticamente
-        setTimeout(() => {
-          syncLocalToSupabase();
-        }, 1000);
+        // Primero intentar restaurar desde la nube (si hay datos más recientes)
+        const restored = await loadFullStateFromSupabase(data.user.id);
+        setSbError(restored ? "Datos restaurados desde la nube." : "Sesión iniciada. Sincronizando...");
+        if (!restored) {
+          setTimeout(() => syncLocalToSupabase(), 1000);
+        }
       }
     } catch(err) {
       console.error("Error al iniciar sesión en Supabase:", err);
@@ -2014,9 +2159,9 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     }
   };
 
-  const syncLocalToSupabase = async () => {
+  const syncLocalToSupabase = async (silent = false) => {
     if (!supabase || !supabaseUser) {
-      setSbError("Supabase no está inicializado o no hay sesión activa.");
+      if (!silent) setSbError("Supabase no está inicializado o no hay sesión activa.");
       return false;
     }
     setSbSyncing(true);
@@ -2025,7 +2170,19 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       const uId = supabaseUser.id;
       const uEmail = supabaseUser.email;
 
-      // 1. Sincronizar Perfil
+      // Antes de subir, verificar si la nube tiene datos más recientes
+      const localUpdatedAt = await loadKey("last_local_update", 0);
+      const { data: profileCheck } = await supabase.from('profiles').select('full_state').eq('id', uId).single();
+      const cloudUpdatedAt = profileCheck?.full_state?.updatedAt || 0;
+      if (cloudUpdatedAt > localUpdatedAt) {
+        // La nube es más reciente → restaurar en vez de sobreescribir
+        const restored = await loadFullStateFromSupabase(uId);
+        setSbSyncing(false);
+        setSbError(restored ? "Datos restaurados desde la nube (más recientes)." : "Sin cambios.");
+        return true;
+      }
+
+
       const { error: profErr } = await supabase.from('profiles').upsert({
         id: uId,
         email: uEmail,
@@ -2131,7 +2288,151 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     }
   };
 
-  const changePreset = (k) => { 
+  // ── Auto-sync completo a Supabase (debounced 5s) ──────────────────────────
+  const scheduleFullSupabaseSync = (stateBlob) => {
+    if (!supabase || !supabaseUser) return;
+    clearTimeout(sbFullSyncTimer.current);
+    setSbAutoSyncStatus("saving");
+    sbFullSyncTimer.current = setTimeout(async () => {
+      try {
+        const { error } = await supabase.from('profiles').upsert({
+          id: supabaseUser.id,
+          email: supabaseUser.email,
+          full_state: stateBlob,
+          updated_at: new Date().toISOString()
+        });
+        if (error) throw error;
+        setSbAutoSyncStatus("saved");
+        setTimeout(() => setSbAutoSyncStatus(""), 3000);
+      } catch(e) {
+        console.error("SB full-sync error:", e);
+        setSbAutoSyncStatus("error");
+      } finally {
+        sbFullSyncTimer.current = null;
+      }
+    }, 5000);
+  };
+
+  // Pull automático cada 60s: si la nube tiene datos más recientes los restaura silenciosamente
+  useEffect(() => {
+    if (!supabase || !supabaseUser) {
+      clearInterval(sbPullIntervalRef.current);
+      return;
+    }
+    sbPullIntervalRef.current = setInterval(async () => {
+      try {
+        if (sbFullSyncTimer.current) return; // hay un push pendiente: no pisar con un pull
+        const localTs = await loadKey("last_local_update", 0);
+        const { data } = await supabase.from('profiles').select('full_state').eq('id', supabaseUser.id).single();
+        const cloudTs = data?.full_state?.updatedAt || 0;
+        if (cloudTs > localTs) {
+          await loadFullStateFromSupabase(supabaseUser.id);
+          setSbAutoSyncStatus("saved");
+          setTimeout(() => setSbAutoSyncStatus(""), 3000);
+        }
+      } catch(e) { /* silencioso */ }
+    }, 60000);
+    return () => clearInterval(sbPullIntervalRef.current);
+  }, [supabaseUser]);
+
+  // Restaura TODO el estado desde profiles.full_state (al hacer login en nuevo dispositivo)
+  const loadFullStateFromSupabase = async (userId) => {
+    try {
+      const { data, error } = await supabase.from('profiles').select('full_state, updated_at').eq('id', userId).single();
+      if (error || !data?.full_state) return false;
+      const s = data.full_state;
+      const localUpdatedAt = await loadKey("last_local_update", 0);
+      const cloudUpdatedAt = s.updatedAt || 0;
+      if (cloudUpdatedAt <= localUpdatedAt) return false; // local es más reciente
+      // Restaurar todo desde la nube
+      if (s.notes && Array.isArray(s.notes) && s.notes.length > 0) { setNotes(s.notes); await saveKey("notes", s.notes); }
+      if (s.exlog && Object.keys(s.exlog).length > 0) { setExlog(s.exlog); await saveKey("exlog", s.exlog); }
+      if (s.exercises && Object.keys(s.exercises).length > 0) { setExercises(s.exercises); await saveKey("exercises", s.exercises); }
+      if (s.foodlog && Object.keys(s.foodlog).length > 0) { setFoodlog(s.foodlog); await saveKey("foodlog", s.foodlog); }
+      if (s.waterlog && Object.keys(s.waterlog).length > 0) { setWaterlog(s.waterlog); await saveKey("waterlog", s.waterlog); }
+      if (s.suppslog && Object.keys(s.suppslog).length > 0) { setSuppslog(s.suppslog); await saveKey("suppslog", s.suppslog); }
+      if (s.metricslog && Object.keys(s.metricslog).length > 0) { setMetricslog(s.metricslog); await saveKey("metricslog", s.metricslog); }
+      if (s.suppsInventory && Object.keys(s.suppsInventory).length > 0) { setSuppsInventory(s.suppsInventory); await saveKey("supps_inventory", s.suppsInventory); }
+      if (s.workoutDurations && Object.keys(s.workoutDurations).length > 0) { setWorkoutDurations(s.workoutDurations); await saveKey("workout_durations", s.workoutDurations); }
+      if (s.meals && Array.isArray(s.meals) && s.meals.length > 0) { setMeals(s.meals); await saveKey("meals", s.meals); }
+      if (s.splits && Array.isArray(s.splits) && s.splits.length > 0) { setSplits(s.splits); await saveKey("training_splits", s.splits); }
+      if (s.bodyComp) { setBodyComp(s.bodyComp); await saveKey("body_comp", s.bodyComp); }
+      if (s.shoppingList) { setShoppingList(s.shoppingList); await saveKey("shopping_list", s.shoppingList); }
+      if (s.presetKey) { setPresetKey(s.presetKey); await saveKey("profile", { presetKey: s.presetKey }); }
+      if (s.activeSplitKey) { setActiveSplitKey(s.activeSplitKey); await saveKey("active_split_key", s.activeSplitKey); }
+      if (s.customPresets) { setCustomPresets(s.customPresets); await saveKey("custom_presets", s.customPresets); }
+      if (s.customSuggestions && Array.isArray(s.customSuggestions)) { setCustomSuggestions(s.customSuggestions); await saveKey("custom_suggestions", s.customSuggestions); }
+      if (s.chat && Array.isArray(s.chat) && s.chat.length > 0) { setChat(s.chat); await saveKey("chat", s.chat); }
+      if (s.experiments && Array.isArray(s.experiments)) { setExperiments(s.experiments); await saveKey("experiments", s.experiments); }
+      if (s.smartGoals && Array.isArray(s.smartGoals) && s.smartGoals.length > 0) { setSmartGoals(s.smartGoals); await saveKey("smart_goals", s.smartGoals); }
+      if (s.challenges && Array.isArray(s.challenges) && s.challenges.length > 0) { setChallenges(s.challenges); await saveKey("challenges", s.challenges); }
+      if (s.weeklyInsight) { setWeeklyInsight(s.weeklyInsight); await saveKey("weekly_insight", s.weeklyInsight); }
+      if (s.upcomingEvent) { setUpcomingEvent(s.upcomingEvent); await saveKey("upcoming_event", s.upcomingEvent); }
+      if (s.updatedAt) await saveKey("last_local_update", s.updatedAt);
+      return true;
+    } catch(e) {
+      console.error("loadFullState error:", e);
+      return false;
+    }
+  };
+
+  // Exportar todos los datos como JSON
+  const exportDataJSON = () => {
+    const snapshot = {
+      exportedAt: new Date().toISOString(),
+      notes, exlog, exercises, foodlog, waterlog, suppslog, metricslog,
+      suppsInventory, workoutDurations, meals, splits, bodyComp,
+      shoppingList, presetKey, activeSplitKey, customPresets,
+      customSuggestions, chat, experiments, smartGoals, challenges,
+      weeklyInsight, upcomingEvent
+    };
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `brunofit-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Importar datos desde JSON
+  const importDataJSON = (file) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const s = JSON.parse(e.target.result);
+        if (s.notes && Array.isArray(s.notes)) { setNotes(s.notes); await saveKey("notes", s.notes); }
+        if (s.exlog && typeof s.exlog === 'object') { setExlog(s.exlog); await saveKey("exlog", s.exlog); }
+        if (s.exercises && typeof s.exercises === 'object') { setExercises(s.exercises); await saveKey("exercises", s.exercises); }
+        if (s.foodlog && typeof s.foodlog === 'object') { setFoodlog(s.foodlog); await saveKey("foodlog", s.foodlog); }
+        if (s.waterlog && typeof s.waterlog === 'object') { setWaterlog(s.waterlog); await saveKey("waterlog", s.waterlog); }
+        if (s.suppslog && typeof s.suppslog === 'object') { setSuppslog(s.suppslog); await saveKey("suppslog", s.suppslog); }
+        if (s.metricslog && typeof s.metricslog === 'object') { setMetricslog(s.metricslog); await saveKey("metricslog", s.metricslog); }
+        if (s.suppsInventory && typeof s.suppsInventory === 'object') { setSuppsInventory(s.suppsInventory); await saveKey("supps_inventory", s.suppsInventory); }
+        if (s.workoutDurations && typeof s.workoutDurations === 'object') { setWorkoutDurations(s.workoutDurations); await saveKey("workout_durations", s.workoutDurations); }
+        if (s.meals && Array.isArray(s.meals)) { setMeals(s.meals); await saveKey("meals", s.meals); }
+        if (s.splits && Array.isArray(s.splits)) { setSplits(s.splits); await saveKey("training_splits", s.splits); }
+        if (s.bodyComp) { setBodyComp(s.bodyComp); await saveKey("body_comp", s.bodyComp); }
+        if (s.shoppingList) { setShoppingList(s.shoppingList); await saveKey("shopping_list", s.shoppingList); }
+        if (s.presetKey) { setPresetKey(s.presetKey); await saveKey("profile", { presetKey: s.presetKey }); }
+        if (s.activeSplitKey) { setActiveSplitKey(s.activeSplitKey); await saveKey("active_split_key", s.activeSplitKey); }
+        if (s.customPresets) { setCustomPresets(s.customPresets); await saveKey("custom_presets", s.customPresets); }
+        if (s.customSuggestions && Array.isArray(s.customSuggestions)) { setCustomSuggestions(s.customSuggestions); await saveKey("custom_suggestions", s.customSuggestions); }
+        if (s.chat && Array.isArray(s.chat)) { setChat(s.chat); await saveKey("chat", s.chat); }
+        if (s.experiments && Array.isArray(s.experiments)) { setExperiments(s.experiments); await saveKey("experiments", s.experiments); }
+        if (s.smartGoals && Array.isArray(s.smartGoals)) { setSmartGoals(s.smartGoals); await saveKey("smart_goals", s.smartGoals); }
+        if (s.challenges && Array.isArray(s.challenges)) { setChallenges(s.challenges); await saveKey("challenges", s.challenges); }
+        if (s.weeklyInsight) { setWeeklyInsight(s.weeklyInsight); await saveKey("weekly_insight", s.weeklyInsight); }
+        if (s.upcomingEvent) { setUpcomingEvent(s.upcomingEvent); await saveKey("upcoming_event", s.upcomingEvent); }
+        setSbError("Datos importados correctamente.");
+      } catch(err) {
+        setSbError("Error al importar: archivo inválido.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const changePreset = (k) => {
     setPresetKey(k);
     saveState({ presetKey: k });
   };
@@ -2251,7 +2552,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       setShoppingList(cloudData.shoppingList || { categorias: [] });
       if (cloudData.meals && Array.isArray(cloudData.meals) && cloudData.meals.length > 0) setMeals(cloudData.meals);
-      setCustomSuggestions(cloudData.customSuggestions || []);
+      if (cloudData.customSuggestions && Array.isArray(cloudData.customSuggestions) && cloudData.customSuggestions.length > 0) setCustomSuggestions(cloudData.customSuggestions);
       setActiveSplitKey(cloudData.activeSplitKey || "A");
       if (Array.isArray(cloudData.splits)) {
         setSplits(cloudData.splits);
@@ -2326,7 +2627,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
       setShoppingList(cloudData.shoppingList || { categorias: [] });
       if (cloudData.meals && Array.isArray(cloudData.meals) && cloudData.meals.length > 0) setMeals(cloudData.meals);
-      setCustomSuggestions(cloudData.customSuggestions || []);
+      if (cloudData.customSuggestions && Array.isArray(cloudData.customSuggestions) && cloudData.customSuggestions.length > 0) setCustomSuggestions(cloudData.customSuggestions);
       setActiveSplitKey(cloudData.activeSplitKey || "A");
       if (Array.isArray(cloudData.splits)) {
         setSplits(cloudData.splits);
@@ -2413,9 +2714,11 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     const todayProtein = todayLog.reduce((s,e)=>s+(+e.proteina||0),0);
     const todayHasWorkout = Object.values(eLog||{}).some(sets=>(sets||[]).some(s=>s?.date?.slice(0,10)===todayStr));
     let msg = null;
+    const remKcal = (tgt?.kcal||2200) - todayKcal;
     if (hour>=7&&hour<=9&&todayKcal<100) msg={icon:"🌅",text:`Buenos días! Objetivo: ${tgt?.kcal||2200} kcal · ${tgt?.p||180}g proteína. Registra tu desayuno.`};
     else if (hour>=12&&hour<=13&&todayKcal<400) msg={icon:"🍽️",text:`Son las ${hour}:00h y llevas solo ${todayKcal} kcal. Come bien antes del entreno.`};
     else if (hour>=17&&hour<=19&&!todayHasWorkout&&todayKcal>200) msg={icon:"💪",text:`¿Ya entrenaste? Llevas ${todayProtein}g de ${tgt?.p||180}g proteína objetivo.`};
+    else if (hour>=21&&hour<23&&remKcal>300) msg={icon:"🌙",text:`Faltan ${remKcal} kcal para cerrar el día. ¿Ya cenaste? Ve a la pestaña Hoy para pedir sugerencias de cena.`};
     else if (hour>=21&&todayProtein<(tgt?.p||180)*0.7) msg={icon:"🥛",text:`Cierre del día: ${todayProtein}g de ${tgt?.p||180}g proteína. Un batido antes de dormir te ayuda.`};
     setProactiveMsg(msg);
   };
@@ -2735,14 +3038,19 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
   // Resumen del entrenamiento realizado hoy
   const getTodayWorkoutSummary = () => {
+    const todayStr = selectedDateStr || new Date().toISOString().slice(0, 10);
     let summary = [];
     Object.entries(exlog || {}).forEach(([name, sets]) => {
-      const todayStr = new Date().toISOString().slice(0, 10);
-      const todaySets = (sets || []).filter(s => s && s.date && s.date.slice(0, 10) === todayStr);
+      const todaySets = (sets || []).filter(s => s && s.date && s.date.slice(0, 10) === todayStr && s.type !== "warmup");
       if (todaySets.length > 0) {
-        const sorted = [...todaySets].reverse();
-        const setsText = sorted.map((s, idx) => s ? `Serie ${idx + 1}: ${s.w} kg x ${s.reps}` : "").filter(Boolean).join(", ");
-        summary.push(`- ${name}: ${setsText}`);
+        const sorted = [...todaySets];
+        const setsText = sorted.map((s, idx) => {
+          let txt = `S${idx + 1}: ${s.w}kg×${s.reps}`;
+          if (s.rir !== undefined && s.rir !== null) txt += ` @RIR${s.rir}`;
+          return txt;
+        }).join(", ");
+        const vol = sorted.reduce((a, s) => a + (parseFloat(s.w) || 0) * (parseFloat(s.reps) || 1), 0);
+        summary.push(`- ${name} (${sorted.length} series, ${Math.round(vol)} kg vol): ${setsText}`);
       }
     });
     if (summary.length === 0) return "Ninguno registrado hoy.";
@@ -2927,7 +3235,9 @@ ${todayWorkout}
 ${workoutHistory}
 --- FIN HISTORIAL ---
 
-Español, directo, técnico y motivador. Usa el historial para dar recomendaciones personalizadas y basadas en datos reales (PRs, progresión, volumen). Si detectás estancamiento o regresión en algún ejercicio, mencionalo proactivamente.
+Español. ${coachPersonality==="motivacional" ? "Tono motivacional, empático y energético. Celebra logros, usa frases inspiradoras, motiva a Bruno a superar sus límites." : coachPersonality==="nutricionista" ? "Enfócate principalmente en nutrición, timing de comidas, macros y estrategias alimentarias. Profundiza en el aspecto nutricional sobre el entrenamiento." : coachPersonality==="psicólogo" ? "Tono empático, comprensivo y de apoyo. Atiende el aspecto mental y emocional del fitness. Ayuda a manejar el estrés, la motivación y los hábitos." : "Directo, técnico y basado en datos. Prioriza análisis de progresión, volumen, PRs y optimización del rendimiento."}
+FORMATO DE RESPUESTA (chatResponse): Texto limpio y legible para chat móvil. PERMITIDO: párrafos cortos, listas con "• item" (un ítem por línea), **negrita** para datos clave, emojis puntuales para separar secciones. PROHIBIDO: ### headers, listas con * en medio de una frase, párrafos de más de 4 líneas. Máximo 4 ítems por lista; si hay más datos, agrúpalos. Separá las secciones con una línea en blanco.
+Usa el historial para dar recomendaciones personalizadas y basadas en datos reales (PRs, progresión, volumen). Si detectás estancamiento o regresión en algún ejercicio, mencionalo proactivamente.
 REGLA DE CALCULADORA INVERSA: Si Bruno te pregunta qué cenar o comer para cerrar el día o cómo completar sus macros restantes (ej. 'me quedan 600 calorías y 50g de proteína...'), calcula con precisión matemática una combinación rápida de alimentos (ej. claras, huevo entero, gramos exactos de pechuga de pollo, scoop de whey) para cuadrar sus números de forma exacta.
 REGLA CRÍTICA DE PORCIONES E INGREDIENTES: Cuando recomiendes porciones, alimentos o comidas en el chat, debes ajustar estrictamente las porciones (detallando gramos exactos) al plan nutricional seleccionado por Bruno (${target.label}) y a las necesidades energéticas del split del día (${activeSplit.fuel}). No recomiendes las mismas porciones por defecto. Si está en "Volumen" o día de "Carbo alto", propón porciones abundantes de carbohidratos. Si está en "Definición" o día de "Carbo medio", sé sumamente estricto y reduce las porciones de carbohidratos, sugiriendo fuentes de proteína magra más saciantes.
 REGLA DE DATOS NUTRICIONALES DE REFERENCIA: Para calcular calorías y macronutrientes de los alimentos registrados (ADD_FOOD) o recomendados en el chat, debes basar tus cálculos estrictamente en bases de datos nutricionales oficiales y verificadas (como USDA FoodData Central o tablas locales de Latinoamérica/Chile). No inventes ni alucines valores; asegúrate de que todas las estimaciones por porción/gramaje sean científicamente coherentes con estas fuentes oficiales.
@@ -2942,12 +3252,12 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
 * En 'data', proporciona: 'splits' (arreglo que contiene la estructura COMPLETA de todos los días de entrenamiento, cada uno con key, name, fuel y ex).
       Ejercicios válidos para ADD_SET: ${exerciseNamesStr}.`;
       
+      // Una sola llamada estructurada (sin streaming paralelo — ahorra cuota)
       const out = await callGemini(nextChat.slice(-12), sys, COACH_SCHEMA);
       const parsed = cleanAndParseJSON(out);
-      
-      if (parsed.actions && parsed.actions.length > 0) {
+
+      if (parsed && parsed.actions && parsed.actions.length > 0) {
         handleCoachActions(parsed.actions);
-        // Si registró ejercicios, análisis automático de la sesión
         const hasNewSets = parsed.actions.some(a => a.type === 'ADD_SET');
         if (hasNewSets) {
           setTimeout(() => {
@@ -2955,8 +3265,8 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
           }, 1500);
         }
       }
-      
-      const finalChat = [...nextChat, { role: "assistant", content: parsed.chatResponse || "..." }];
+
+      const finalChat = [...nextChat, { role: "assistant", content: (parsed && parsed.chatResponse) || "..." }];
       setChat(finalChat);
       await saveState({ chat: finalChat });
     } catch(e) {
@@ -2976,8 +3286,301 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
 
   const handleAnalyzeWorkout = async () => {
     setView("coach");
-    const msg = "He terminado de entrenar. Por favor, analiza mi entrenamiento de hoy y dame sugerencias. Pregúntame sobre mis sensaciones, fallos u otros detalles relevantes.";
+    const todayWorkout = getTodayWorkoutSummary();
+    if (todayWorkout === "Ninguno registrado hoy.") {
+      // Sin datos aún — solo abrir Coach
+      return;
+    }
+    // Construir resumen nutricional de hoy
+    const todayLog = (foodlog || {})[selectedDateStr] || [];
+    const todayTotals = todayLog.reduce((a, e) => ({
+      kcal: a.kcal + (+e.kcal || 0), p: a.p + (+e.proteina || 0),
+      c: a.c + (+e.carbo || 0), f: a.f + (+e.grasa || 0)
+    }), { kcal:0, p:0, c:0, f:0 });
+    const nutritionLine = todayLog.length > 0
+      ? `Nutrición hoy: ${Math.round(todayTotals.kcal)} kcal | P: ${Math.round(todayTotals.p)}g C: ${Math.round(todayTotals.c)}g G: ${Math.round(todayTotals.f)}g`
+      : "Sin registros nutricionales hoy.";
+    // Notas de sensaciones del día
+    const todaySensations = (notes || [])
+      .filter(n => (n.date || "").slice(0,10) === selectedDateStr)
+      .map(n => n.text).join(" / ") || "Sin notas de sensaciones.";
+
+    const msg = `[ANÁLISIS DE ENTRENAMIENTO — todos los datos ya están cargados en tu sistema]
+
+Ejercicios completados hoy (${selectedDateStr}):
+${todayWorkout}
+
+${nutritionLine}
+Sensaciones/notas del día: ${todaySensations}
+
+Analiza este entrenamiento directamente con los datos anteriores y con mi historial que ya tenés. Evalúa: progresión vs semanas previas, si el volumen y los pesos fueron adecuados, y dá 2-3 recomendaciones concretas para la próxima sesión. No me pidas que registre datos — todo ya está en tu sistema.`;
     await sendCoachMessage(msg);
+  };
+
+  const generateWeeklyPDF = async () => {
+    if (pdfBusy) return;
+    setPdfBusy(true);
+    const w = window.open('', '_blank');
+    if (w) w.document.write('<html><body style="background:#0c0e0b;color:#cdff4a;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center"><div><p style="font-size:22px;margin-bottom:8px">⏳ Generando reporte…</p><p style="font-size:13px;color:#9aa088">Analizando tu semana con IA</p></div></body></html>');
+    try {
+      const last7 = [...Array(7)].map((_,i)=>{ const d=new Date(); d.setDate(d.getDate()-i); return d.toISOString().slice(0,10); }).reverse();
+      const weekStart = last7[0], weekEnd = last7[6];
+      const DAYS_ES = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+      const MONTHS_ES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+      const fmtDate = d => { const dt=new Date(d+'T12:00:00'); return `${DAYS_ES[dt.getDay()]} ${dt.getDate()} ${MONTHS_ES[dt.getMonth()]}`; };
+      const fmtShort = d => { const [,m,day]=d.split('-'); return `${parseInt(day)} ${MONTHS_ES[parseInt(m)-1]}`; };
+
+      // Workouts this week — grouped by day
+      const weekWorkouts = {}; // { date: { exName: [sets] } }
+      const allTimePRs = {}, prevBestByEx = {};
+      Object.entries(exlog||{}).forEach(([exName, sets]) => {
+        let weekMax = 0;
+        (sets||[]).forEach(s => {
+          if (!s||!s.w||s.type==="warmup") return;
+          const w2 = parseFloat(s.w)||0;
+          const d = (s.date||"").slice(0,10);
+          if (w2 > (allTimePRs[exName]||0)) allTimePRs[exName] = w2;
+          if (d < weekStart || d > weekEnd) {
+            if (w2 > (prevBestByEx[exName]||0)) prevBestByEx[exName] = w2;
+            return;
+          }
+          if (w2 > weekMax) weekMax = w2;
+          if (!weekWorkouts[d]) weekWorkouts[d] = {};
+          if (!weekWorkouts[d][exName]) weekWorkouts[d][exName] = [];
+          weekWorkouts[d][exName].push(s);
+        });
+      });
+
+      const trainedDays = Object.keys(weekWorkouts).sort();
+      const totalSets = trainedDays.reduce((s,d)=>s+Object.values(weekWorkouts[d]).reduce((ss,sets)=>ss+sets.length,0),0);
+      const totalTons = trainedDays.reduce((s,d)=>s+Object.values(weekWorkouts[d]).reduce((ss,sets)=>ss+sets.reduce((sss,set)=>sss+(parseFloat(set.w)||0)*(parseFloat(set.reps)||1)/1000,0),0),0);
+
+      const wDates = last7.filter(d=>metricslog?.[d]?.weight);
+      const weightChange = wDates.length>=2 ? (parseFloat(metricslog[wDates[wDates.length-1]].weight)-parseFloat(metricslog[wDates[0]].weight)).toFixed(1) : null;
+      const latestMetricDate = Object.keys(metricslog||{}).sort().reverse()[0];
+      const lm = latestMetricDate ? metricslog[latestMetricDate] : null;
+
+      // Build per-day detail for AI prompt
+      const dayDetails = trainedDays.map(date => {
+        const dayExs = weekWorkouts[date];
+        const lines = Object.entries(dayExs).map(([ex,sets])=>{
+          const maxW = Math.max(...sets.map(s=>parseFloat(s.w)||0));
+          const allPR = allTimePRs[ex]||0;
+          const prevBest = prevBestByEx[ex]||0;
+          const est1rm = maxW>0?Math.round(maxW*(1+(parseFloat(sets[0]?.reps)||8)/30)):0;
+          const prNote = maxW>=allPR&&maxW>0?' ★PR' : maxW>prevBest&&maxW>0?' ↑mejora':'';
+          return `  • ${ex}: ${sets.length} series [${sets.map(s=>`${s.w}kg×${s.reps}`).join(', ')}] → 1RM est.${est1rm}kg${prNote}`;
+        });
+        return `${fmtDate(date)}:\n${lines.join('\n')}`;
+      }).join('\n\n');
+
+      // Muscle volume
+      const muscleVol = calcMuscleVolumeBalance(exlog, exercises);
+      const muscleLines = Object.entries(muscleVol).filter(([,m])=>m.setsPerWeek>0)
+        .sort((a,b)=>b[1].setsPerWeek-a[1].setsPerWeek)
+        .map(([muscle,m])=>`${muscle}: ${m.setsPerWeek.toFixed(1)} series/sem (${m.status})`).join(' | ');
+
+      // Deload / fatigue
+      const deload = detectDeloadNeed(exlog, notes||[], metricslog||{});
+      const overloadStr = Object.entries(overloadSuggestions||{}).slice(0,10).map(([ex,s])=>`${ex}: max ${s.currentMax}kg → sugerido ${s.suggested}kg`).join('\n');
+      const plateauStr = (plateauAlerts||[]).slice(0,6).map(p=>p.exercise||p.message||'').filter(Boolean).join(', ')||'Ninguno';
+
+      const PDF_SCHEMA = { type:"OBJECT", properties:{
+        valoracion:{ type:"OBJECT", properties:{ puntuacion:{type:"NUMBER"}, resumen:{type:"STRING"} }, required:["puntuacion","resumen"] },
+        analisis:{ type:"STRING" },
+        progresion:{ type:"STRING" },
+        recuperacion:{ type:"STRING" },
+        fortalezas:{ type:"ARRAY", items:{type:"STRING"} },
+        mejorar:{ type:"ARRAY", items:{ type:"OBJECT", properties:{ punto:{type:"STRING"}, accion:{type:"STRING"} }, required:["punto","accion"] } },
+        cargas:{ type:"ARRAY", items:{ type:"OBJECT", properties:{
+          ejercicio:{type:"STRING"}, cargaActual:{type:"STRING"}, sugerencia:{type:"STRING"}, esquema:{type:"STRING"}, razon:{type:"STRING"}
+        }, required:["ejercicio","sugerencia","esquema","razon"] }},
+        planProximaSemana:{ type:"ARRAY", items:{type:"STRING"} },
+        focoProximaSemana:{ type:"STRING" }
+      }, required:["valoracion","analisis","progresion","cargas","focoProximaSemana"] };
+
+      const sys = `Eres el coach personal de Bruno. Tu análisis va a ser leído por su entrenadora humana. Sé técnico, específico y detallado. Usa los datos reales proporcionados — nunca inventes cifras. Responde en español.`;
+      const userMsg = `REPORTE SEMANAL — ${weekStart} al ${weekEnd}
+
+DATOS GENERALES:
+• Días entrenados: ${trainedDays.length}/7
+• Series efectivas totales: ${totalSets}
+• Volumen total: ${totalTons.toFixed(2)} toneladas
+• Peso: ${lm?.weight||'sin dato'}kg${weightChange!==null?` (${parseFloat(weightChange)>=0?'+':''}${weightChange}kg esta semana)`:''}
+${lm?.musculo?`• Masa muscular: ${lm.musculo}kg | Grasa: ${lm.grasaPct}% | Visceral: ${lm.visceral||'?'}`:''}
+
+ENTRENAMIENTO DÍA A DÍA:
+${dayDetails||'Sin datos'}
+
+VOLUMEN POR MÚSCULO (últimas 4 semanas):
+${muscleLines||'Sin datos'}
+
+SOBRECARGA PROGRESIVA DETECTADA:
+${overloadStr||'Sin sugerencias disponibles'}
+
+ESTANCAMIENTOS DETECTADOS:
+${plateauStr}
+
+NECESIDAD DE DELOAD: ${deload.recommended?`SÍ — urgencia ${deload.urgency} (${deload.reason})`:'No detectada'} · Semanas sin deload: ${deload.weeksSinceDeload}
+
+INSTRUCCIONES PARA EL ANÁLISIS:
+1. "valoracion": puntúa la semana del 1 al 10 con un resumen de una línea.
+2. "analisis": 3 párrafos detallados — (a) análisis global de volumen e intensidad, (b) qué ejercicios evolucionaron bien y cuáles no, (c) balance muscular push/pull/piernas.
+3. "progresion": párrafo específico sobre cómo está progresando en fuerza, si la sobrecarga es correcta, y tendencia de 1RM estimado.
+4. "recuperacion": evaluación del estado de fatiga, si necesita deload, calidad del volumen (demasiado/poco).
+5. "fortalezas": mínimo 4 puntos concretos y específicos con datos reales.
+6. "mejorar": mínimo 4 puntos cada uno con una acción concreta y accionable.
+7. "cargas": para CADA ejercicio realizado esta semana, da la carga actual, la sugerencia concreta en kg para la próxima sesión, el esquema recomendado (ej. "4×6" o "3×10-12") y el razonamiento técnico.
+8. "planProximaSemana": lista de 5-7 prioridades concretas para la próxima semana.
+9. "focoProximaSemana": UN párrafo claro de foco principal.`;
+
+      const raw = await callGemini([{role:"user",content:userMsg}], sys, PDF_SCHEMA);
+      const ai = cleanAndParseJSON(raw) || {};
+
+      // Build day-grouped exercise sections
+      let daysSectionsHTML = trainedDays.map(date => {
+        const dayExs = weekWorkouts[date];
+        const dayTons = Object.values(dayExs).reduce((s,sets)=>s+sets.reduce((ss,set)=>ss+(parseFloat(set.w)||0)*(parseFloat(set.reps)||1)/1000,0),0);
+        const rows = Object.entries(dayExs).map(([exName,sets])=>{
+          const maxW = Math.max(...sets.map(s=>parseFloat(s.w)||0));
+          const avgReps = Math.round(sets.reduce((s,e)=>s+(parseFloat(e.reps)||8),0)/sets.length);
+          const est1rm = maxW>0?Math.round(maxW*(1+avgReps/30)):'—';
+          const isPR = allTimePRs[exName]&&maxW>=allTimePRs[exName];
+          const isImprove = !isPR && prevBestByEx[exName] && maxW > prevBestByEx[exName];
+          const badge = isPR?'<span class="pr-badge">★ PR</span>':isImprove?'<span class="imp-badge">↑</span>':'';
+          return `<tr><td><b>${exName}</b> ${badge}</td><td>${sets.length}</td><td style="font-size:10.5px;">${sets.map(s=>`${s.w}kg×${s.reps}`).join(' · ')}</td><td>${est1rm} kg</td><td style="color:#888;">${maxW}kg</td></tr>`;
+        }).join('');
+        return `<div class="day-block">
+  <div class="day-header"><span>${fmtDate(date)}</span><span class="day-stats">${Object.keys(dayExs).length} ejercicios · ${Object.values(dayExs).reduce((s,sets)=>s+sets.length,0)} series · ${dayTons.toFixed(1)}t</span></div>
+  <table><thead><tr><th>Ejercicio</th><th>Series</th><th>Cargas × Reps</th><th>1RM est.</th><th>Mejor</th></tr></thead><tbody>${rows}</tbody></table>
+</div>`;
+      }).join('');
+
+      // Muscle bars grouped by category
+      const MUSCLE_GROUPS = {
+        'Empuje': ['Pectoral','Deltoides','Deltoides anterior','Tríceps'],
+        'Jalón': ['Dorsal ancho','Trapecio','Romboides','Bíceps','Braquial'],
+        'Piernas': ['Cuádriceps','Isquiotibiales','Glúteo','Gemelos','Sóleo'],
+        'Núcleo': ['Abdominales','Oblicuos','Lumbares','Core']
+      };
+      const assignedMuscles = new Set();
+      let muscleGroupsHTML = '';
+      Object.entries(MUSCLE_GROUPS).forEach(([group, muscles]) => {
+        const groupEntries = muscles.filter(m => muscleVol[m]?.setsPerWeek > 0);
+        groupEntries.forEach(m => assignedMuscles.add(m));
+        if (!groupEntries.length) return;
+        const bars = groupEntries.map(muscle => {
+          const m = muscleVol[muscle];
+          const pct = Math.max(3, Math.round((m.setsPerWeek/20)*100));
+          const col = m.status==='optimal'?'#4a8a00':m.status==='high'?'#0077a0':m.status==='low'?'#c97a00':'#b91c1c';
+          const statusLabel = m.status==='optimal'?'óptimo':m.status==='high'?'alto':m.status==='low'?'bajo':'sin trabajo';
+          return `<div class="muscle-bar"><div class="bar-label">${muscle}</div><div style="flex:1;background:#f0f0f0;border-radius:4px;height:7px;"><div style="width:${Math.min(pct,100)}%;height:7px;background:${col};border-radius:4px;"></div></div><div class="bar-val">${m.setsPerWeek.toFixed(1)}/sem <span style="color:${col};font-weight:700;">(${statusLabel})</span></div></div>`;
+        }).join('');
+        muscleGroupsHTML += `<div class="muscle-group"><div class="muscle-group-title">${group}</div>${bars}</div>`;
+      });
+      // Remaining muscles not in groups
+      const remaining = Object.entries(muscleVol).filter(([m,v])=>v.setsPerWeek>0&&!assignedMuscles.has(m));
+      if (remaining.length) {
+        const bars = remaining.map(([muscle,m])=>{
+          const pct = Math.max(3,Math.round((m.setsPerWeek/20)*100));
+          const col = m.status==='optimal'?'#4a8a00':m.status==='high'?'#0077a0':m.status==='low'?'#c97a00':'#b91c1c';
+          return `<div class="muscle-bar"><div class="bar-label">${muscle}</div><div style="flex:1;background:#f0f0f0;border-radius:4px;height:7px;"><div style="width:${Math.min(pct,100)}%;height:7px;background:${col};border-radius:4px;"></div></div><div class="bar-val">${m.setsPerWeek.toFixed(1)}/sem</div></div>`;
+        }).join('');
+        muscleGroupsHTML += `<div class="muscle-group"><div class="muscle-group-title">Otros</div>${bars}</div>`;
+      }
+
+      // Cargas table
+      const cargasRows = (ai.cargas||[]).map(c=>`<tr><td><b>${c.ejercicio}</b></td><td>${c.cargaActual||'—'}</td><td class="highlight"><b>${c.sugerencia}</b></td><td style="color:#555;font-weight:700;">${c.esquema||'—'}</td><td style="font-size:10px;color:#666;">${c.razon||''}</td></tr>`).join('');
+
+      const scoreColor = !ai.valoracion?.puntuacion?'#888':ai.valoracion.puntuacion>=8?'#3a7000':ai.valoracion.puntuacion>=6?'#c97a00':'#b91c1c';
+
+      const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reporte Semanal — ${fmtShort(weekStart)} al ${fmtShort(weekEnd)}</title><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-serif;font-size:12px;color:#1a1a1a;background:#fff;padding:28px 32px;max-width:800px;margin:0 auto;line-height:1.5}
+h1{font-size:26px;font-weight:900;margin-bottom:2px;color:#0c0e0b}
+h2{font-size:11px;font-weight:900;margin:24px 0 10px;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #cdff4a;padding-bottom:5px;color:#333}
+.meta{color:#888;font-size:11px;margin-bottom:18px}
+.hint{background:#0c0e0b;color:#cdff4a;padding:10px 16px;border-radius:8px;margin-bottom:22px;font-size:12px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.hint button{background:#cdff4a;color:#0c0e0b;border:none;padding:6px 14px;border-radius:6px;font-weight:900;cursor:pointer;font-size:12px;flex-shrink:0}
+.score-row{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+.score-circle{width:60px;height:60px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:900;flex-shrink:0;border:3px solid}
+.score-text{font-size:13px;color:#444;line-height:1.5}
+.metrics-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.metrics-row span{background:#f5f5f5;padding:4px 10px;border-radius:6px;font-size:11px}
+.summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:4px}
+.stat-box{background:#f8f8f8;border-radius:10px;padding:10px 12px;border-left:3px solid #cdff4a}
+.stat-val{font-size:20px;font-weight:900;line-height:1}.stat-label{font-size:9px;color:#888;margin-top:3px;text-transform:uppercase;letter-spacing:.04em}
+.day-block{margin-bottom:18px}
+.day-header{display:flex;align-items:center;justify-content:space-between;background:#0c0e0b;color:#cdff4a;padding:7px 12px;border-radius:8px 8px 0 0;font-size:11.5px;font-weight:800}
+.day-stats{font-size:10px;color:#9aa088;font-weight:500}
+table{width:100%;border-collapse:collapse;margin-bottom:0}
+th{background:#f3f3f3;font-weight:700;text-align:left;padding:6px 8px;font-size:10px;color:#555}
+td{padding:6px 8px;border-bottom:1px solid #f0f0f0;font-size:11px;vertical-align:top}
+.day-block table{border-radius:0 0 8px 8px;overflow:hidden;border:1px solid #e8e8e8;border-top:none}
+.day-block tbody tr:last-child td{border-bottom:none}
+.pr-badge{display:inline-block;background:#cdff4a;color:#0c0e0b;font-size:9px;font-weight:900;padding:1px 5px;border-radius:4px;vertical-align:middle}
+.imp-badge{display:inline-block;background:#4ad6ff22;color:#0077a0;font-size:9px;font-weight:900;padding:1px 5px;border-radius:4px;vertical-align:middle;border:1px solid #4ad6ff55}
+.muscle-group{margin-bottom:12px}
+.muscle-group-title{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#888;margin-bottom:6px;padding-left:2px}
+.muscle-bar{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.bar-label{font-size:11px;width:130px;flex-shrink:0;color:#333}
+.bar-val{font-size:10px;color:#888;width:130px;text-align:right;flex-shrink:0}
+.ai-section{background:#f9fff0;border-left:3px solid #cdff4a;padding:13px 16px;border-radius:0 8px 8px 0;line-height:1.7;font-size:12px;margin-bottom:6px;white-space:pre-wrap}
+.recovery-box{background:#fff8f0;border-left:3px solid #f59e0b;padding:13px 16px;border-radius:0 8px 8px 0;line-height:1.7;font-size:12px;margin-bottom:6px;white-space:pre-wrap}
+.highlight{color:#3a7000;font-weight:700}
+.list-item{padding:6px 0 6px 14px;border-left:2px solid #cdff4a;margin-bottom:7px;font-size:12px;line-height:1.5}
+.list-item .action{font-size:11px;color:#555;margin-top:2px;padding-left:0}
+.warn-item{border-left-color:#f59e0b}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.col-title{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #eee}
+.foco-box{background:#0c0e0b;color:#cdff4a;border-radius:10px;padding:16px 18px;font-size:13px;font-weight:700;line-height:1.6;margin-top:4px}
+.plan-list{list-style:none;counter-reset:plan}
+.plan-list li{counter-increment:plan;padding:7px 0 7px 28px;position:relative;border-bottom:1px solid #f5f5f5;font-size:12px;line-height:1.5}
+.plan-list li::before{content:counter(plan);position:absolute;left:0;top:7px;background:#cdff4a;color:#0c0e0b;font-weight:900;font-size:10px;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;text-align:center;line-height:18px}
+.deload-alert{background:#fff0f0;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:6px;font-size:11.5px;color:#7a4000}
+.footer{margin-top:36px;font-size:9.5px;color:#bbb;text-align:center;border-top:1px solid #eee;padding-top:14px}
+@media print{.hint{display:none!important}body{padding:14px 20px}h2{margin:16px 0 8px}}
+</style></head><body>
+<div class="hint">📄 Compartir → Imprimir → Guardar PDF &nbsp;&nbsp;<button onclick="window.print()">Imprimir / PDF</button></div>
+<h1>Reporte Semanal de Entrenamiento</h1>
+<div class="meta">Semana ${fmtShort(weekStart)} – ${fmtShort(weekEnd)} &nbsp;·&nbsp; Generado el ${new Date().toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'})}</div>
+${lm?`<div class="metrics-row">${lm.weight?`<span>⚖️ Peso: <b>${lm.weight} kg</b>${weightChange!==null?` (${parseFloat(weightChange)>=0?'+':''}${weightChange} kg/sem)`:''}</span>`:''} ${lm.musculo?`<span>💪 Músculo: <b>${lm.musculo} kg</b></span>`:''} ${lm.grasaPct?`<span>📊 Grasa: <b>${lm.grasaPct}%</b></span>`:''} ${lm.visceral?`<span>🫀 Visceral: <b>G${lm.visceral}</b></span>`:''}</div>`:''}
+${ai.valoracion?`<div class="score-row"><div class="score-circle" style="color:${scoreColor};border-color:${scoreColor};">${ai.valoracion.puntuacion||'?'}</div><div class="score-text"><b style="font-size:14px;">Valoración de la semana</b><br>${ai.valoracion.resumen||''}</div></div>`:''}
+<h2>Resumen de la Semana</h2>
+<div class="summary-grid">
+<div class="stat-box"><div class="stat-val">${trainedDays.length}<span style="font-size:12px;color:#888;">/7</span></div><div class="stat-label">Días</div></div>
+<div class="stat-box"><div class="stat-val">${totalSets}</div><div class="stat-label">Series efectivas</div></div>
+<div class="stat-box"><div class="stat-val">${totalTons.toFixed(1)}<span style="font-size:12px;color:#888;">t</span></div><div class="stat-label">Volumen total</div></div>
+<div class="stat-box" style="border-left-color:${weightChange!==null&&parseFloat(weightChange)>0?'#f59e0b':'#cdff4a'};"><div class="stat-val">${weightChange!==null?(parseFloat(weightChange)>0?'+':'')+weightChange:'—'}<span style="font-size:12px;color:#888;">${weightChange!==null?' kg':''}</span></div><div class="stat-label">Cambio peso</div></div>
+</div>
+${deload.recommended&&deload.urgency!=='none'?`<div style="margin-top:10px;" class="deload-alert">⚠️ <b>Deload recomendado</b> (urgencia: ${deload.urgency}) — ${deload.reason}</div>`:''}
+<h2>Entrenamientos por Día</h2>
+${daysSectionsHTML||'<p style="color:#999;">Sin entrenamientos registrados esta semana.</p>'}
+<h2>Volumen por Grupo Muscular</h2>
+<div class="two-col" style="margin-bottom:4px;">${muscleGroupsHTML}</div>
+<p style="font-size:10px;color:#aaa;margin-top:4px;">Referencia: verde=óptimo (8–20 series/sem) · amarillo=bajo (&lt;8) · rojo=sin trabajo · azul=alto (&gt;20)</p>
+<h2>Análisis Global</h2>
+${ai.analisis?`<div class="ai-section">${ai.analisis}</div>`:'<p style="color:#999;">Sin análisis disponible.</p>'}
+<h2>Progresión de Fuerza</h2>
+${ai.progresion?`<div class="ai-section">${ai.progresion}</div>`:''}
+${ai.recuperacion?`<h2>Recuperación y Fatiga</h2><div class="recovery-box">${ai.recuperacion}</div>`:''}
+${(ai.fortalezas?.length||ai.mejorar?.length)?`<h2>Balance de la Semana</h2><div class="two-col">
+${ai.fortalezas?.length?`<div><div class="col-title" style="color:#3a7000;">✓ Fortalezas</div>${ai.fortalezas.map(f=>`<div class="list-item">${f}</div>`).join('')}</div>`:''}
+${ai.mejorar?.length?`<div><div class="col-title" style="color:#c97a00;">↑ A mejorar</div>${ai.mejorar.map(m=>`<div class="list-item warn-item"><b>${m.punto||m}</b>${m.accion?`<div class="action">→ ${m.accion}</div>`:''}</div>`).join('')}</div>`:''}
+</div>`:''}
+${cargasRows?`<h2>Recomendaciones de Carga — Próxima Semana</h2><table><thead><tr><th>Ejercicio</th><th>Carga actual</th><th>Sugerencia</th><th>Esquema</th><th>Razonamiento</th></tr></thead><tbody>${cargasRows}</tbody></table>`:''}
+${ai.planProximaSemana?.length?`<h2>Plan para la Próxima Semana</h2><ol class="plan-list">${ai.planProximaSemana.map(p=>`<li>${p}</li>`).join('')}</ol>`:''}
+${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoProximaSemana}</div>`:''}
+<div class="footer">Reporte generado por Bruno Fit &nbsp;·&nbsp; ${new Date().toLocaleDateString('es-ES',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div>
+</body></html>`;
+
+      if (w && !w.closed) { w.document.open(); w.document.write(html); w.document.close(); }
+    } catch(e) {
+      if (w && !w.closed) w.close();
+      alert("No se pudo generar el reporte: " + aiErr(e));
+    } finally {
+      setPdfBusy(false);
+    }
   };
 
   const importWorkoutData = (resolvedWorkout, currentSplitKey) => {
@@ -3134,13 +3737,22 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
           {view === "entreno" && (
             <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
               <div style={{fontSize:20, fontWeight:800, color:C.ink}}>Rutina de Hoy</div>
-              <button
-                onClick={() => setShowTrainerAgent(true)}
-                className="btn-active-scale"
-                style={{background:"rgba(205,255,74,0.08)", border:`1px solid rgba(205,255,74,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.lime, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
-              >
-                <Sparkles size={13}/><span>Agente</span>
-              </button>
+              <div style={{display:"flex", gap:6}}>
+                <button
+                  onClick={() => setShowFocusMode(true)}
+                  className="btn-active-scale"
+                  style={{background:"rgba(74,214,255,0.08)", border:`1px solid rgba(74,214,255,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.cyan, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
+                >
+                  <Clock size={13}/><span>Foco</span>
+                </button>
+                <button
+                  onClick={() => setShowTrainerAgent(true)}
+                  className="btn-active-scale"
+                  style={{background:"rgba(205,255,74,0.08)", border:`1px solid rgba(205,255,74,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.lime, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
+                >
+                  <Sparkles size={13}/><span>Agente</span>
+                </button>
+              </div>
             </div>
           )}
           {view === "reg" && (
@@ -3213,17 +3825,26 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
             addFoodInputText={addFoodInputText}
             setAddFoodInputText={setAddFoodInputText}
             customSuggestions={customSuggestions}
+            exlog={exlog}
+            notes={notes}
+            foodlog={foodlog}
+            sendCoachMessage={sendCoachMessage}
           />
         )}
         {view === "coach" && (
-          <Coach 
-            chat={chat} 
-            setChat={(c) => { setChat(c); saveState({ chat: c }); }} 
-            target={target} 
-            totals={totals} 
+          <Coach
+            chat={chat}
+            setChat={(c) => { setChat(c); saveState({ chat: c }); }}
+            target={target}
+            totals={totals}
             sendCoachMessage={sendCoachMessage}
             chatBusy={chatBusy}
             sendDailyGreetingIfNeeded={sendDailyGreetingIfNeeded}
+            coachPersonality={coachPersonality}
+            setCoachPersonality={setCoachPersonality}
+            metricslog={metricslog}
+            foodlog={foodlog}
+            exlog={exlog}
           />
         )}
         {view === "entreno" && (
@@ -3325,6 +3946,9 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
             handleSbRegister={handleSbRegister}
             handleSbLogout={handleSbLogout}
             syncLocalToSupabase={syncLocalToSupabase}
+            exportDataJSON={exportDataJSON}
+            importDataJSON={importDataJSON}
+            sbAutoSyncStatus={sbAutoSyncStatus}
             changePreset={changePreset}
             presetKey={presetKey}
             customPresets={customPresets}
@@ -3364,6 +3988,8 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
           data={trainerAgentData}
           busy={trainerAgentBusy}
           onRunAnalysis={runTrainerAgentAnalysis}
+          generateWeeklyPDF={generateWeeklyPDF}
+          pdfBusy={pdfBusy}
           exlog={exlog}
           exercises={exercises}
           notes={notes}
@@ -3375,13 +4001,22 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
         />
       )}
 
+      {showFocusMode && (
+        <FocusMode
+          onClose={() => setShowFocusMode(false)}
+          splits={splits}
+          exlog={exlog}
+        />
+      )}
+
+      {prAlerts.length > 0 && <Confetti key={prAlerts.join("|").slice(0, 24)} />}
       {prAlerts.length > 0 && (
         <div style={{
-          position: "absolute",
+          position: "fixed",
           top: 16,
           left: "50%",
           transform: "translateX(-50%)",
-          width: "calc(100% - 24px)",
+          width: "calc(100vw - 24px)",
           maxWidth: 360,
           background: "rgba(21, 23, 15, 0.98)",
           border: `2px solid ${C.lime}`,
@@ -3627,6 +4262,140 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
   );
 }
 
+/* ===== CONFETTI (celebración de PR) ===== */
+function Confetti(){
+  const pieces = React.useMemo(() => Array.from({length: 40}).map((_, i) => ({
+    left: Math.random() * 100,
+    delay: Math.random() * 0.4,
+    dur: 1.8 + Math.random() * 1.4,
+    color: [C.lime, C.cyan, C.amber, C.rose, "#ffffff"][i % 5],
+    rot: Math.random() * 360,
+    size: 6 + Math.random() * 7
+  })), []);
+  return (
+    <div style={{position:"fixed", inset:0, pointerEvents:"none", zIndex:10000, overflow:"hidden"}}>
+      {pieces.map((p, i) => (
+        <div key={i} style={{
+          position:"absolute", top:0, left:`${p.left}%`,
+          width:p.size, height:p.size*0.55, background:p.color,
+          borderRadius:2, opacity:0.95, transform:`rotate(${p.rot}deg)`,
+          animation:`confettiFall ${p.dur}s cubic-bezier(0.4,0,0.6,1) ${p.delay}s forwards`
+        }}/>
+      ))}
+    </div>
+  );
+}
+
+/* ===== MARKDOWN TEXT RENDERER ===== */
+function MarkdownText({ text, style = {} }) {
+  if (!text) return null;
+
+  const renderInline = (str) => {
+    if (!str) return null;
+    const parts = str.split(/(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`)/g);
+    return parts.map((p, i) => {
+      if (p.startsWith('**') && p.endsWith('**') && p.length > 4)
+        return <strong key={i} style={{ fontWeight: 700 }}>{p.slice(2, -2)}</strong>;
+      if (p.startsWith('*') && p.endsWith('*') && p.length > 2 && !p.startsWith('**'))
+        return <span key={i} style={{ color: C.cyan }}>{p.slice(1, -1)}</span>;
+      if (p.startsWith('`') && p.endsWith('`'))
+        return <code key={i} style={{ background: 'rgba(255,255,255,0.09)', borderRadius: 4, padding: '1px 5px', fontSize: '0.88em' }}>{p.slice(1, -1)}</code>;
+      return p;
+    });
+  };
+
+  const lines = text.split('\n');
+  const out = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const tr = lines[i].trim();
+
+    if (!tr) { i++; continue; }
+
+    // ### / ## / # headers
+    const hm = tr.match(/^(#{1,3})\s+(.*)/);
+    if (hm) {
+      const lvl = hm[1].length;
+      out.push(
+        <div key={i} style={{ fontSize: lvl === 1 ? 15 : lvl === 2 ? 13.5 : 13, fontWeight: 800, color: C.lime, marginTop: 10, marginBottom: 3, lineHeight: 1.3 }}>
+          {renderInline(hm[2])}
+        </div>
+      );
+      i++; continue;
+    }
+
+    // Standalone **Title** line → section header
+    if (/^\*\*[^*]+\*\*\s*:?\s*$/.test(tr)) {
+      out.push(
+        <div key={i} style={{ fontSize: 13, fontWeight: 800, color: C.lime, marginTop: 10, marginBottom: 2 }}>
+          {tr.replace(/\*\*/g, '').replace(/:$/, '')}
+        </div>
+      );
+      i++; continue;
+    }
+
+    // Bullet list (•, -, * at line start)
+    if (/^[•\-\*]\s/.test(tr)) {
+      const items = [];
+      while (i < lines.length && /^[•\-\*]\s/.test(lines[i].trim())) {
+        const itemText = lines[i].trim().replace(/^[•\-\*]\s+/, '');
+        items.push(
+          <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', marginBottom: 3 }}>
+            <span style={{ color: C.lime, flexShrink: 0, fontSize: 14, lineHeight: '1.55' }}>·</span>
+            <span style={{ flex: 1, lineHeight: 1.55 }}>{renderInline(itemText)}</span>
+          </div>
+        );
+        i++;
+      }
+      out.push(<div key={`bl${i}`} style={{ margin: '5px 0' }}>{items}</div>);
+      continue;
+    }
+
+    // Numbered list
+    if (/^\d+[.)]\s/.test(tr)) {
+      const items = [];
+      let n = 1;
+      while (i < lines.length && /^\d+[.)]\s/.test(lines[i].trim())) {
+        const itemText = lines[i].trim().replace(/^\d+[.)]\s+/, '');
+        items.push(
+          <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', marginBottom: 3 }}>
+            <span style={{ color: C.lime, flexShrink: 0, fontWeight: 700, fontSize: 12, minWidth: 16, lineHeight: '1.7' }}>{n}.</span>
+            <span style={{ flex: 1, lineHeight: 1.55 }}>{renderInline(itemText)}</span>
+          </div>
+        );
+        i++; n++;
+      }
+      out.push(<div key={`nl${i}`} style={{ margin: '5px 0' }}>{items}</div>);
+      continue;
+    }
+
+    // Inline "* item * item" pattern → split into vertical bullets
+    if (/\*\s[A-ZÁÉÍÓÚ0-9\*]/.test(tr) && (tr.match(/\*\s/g) || []).length >= 2) {
+      const parts = tr.split(/\s*\*\s+/).filter(Boolean);
+      if (parts.length > 1) {
+        out.push(
+          <div key={i} style={{ margin: '5px 0' }}>
+            {parts.map((p, pi) => (
+              <div key={pi} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', marginBottom: 3 }}>
+                <span style={{ color: C.lime, flexShrink: 0, fontSize: 14, lineHeight: '1.55' }}>·</span>
+                <span style={{ flex: 1, lineHeight: 1.55 }}>{renderInline(p.trim())}</span>
+              </div>
+            ))}
+          </div>
+        );
+        i++; continue;
+      }
+    }
+
+    // Regular paragraph
+    out.push(<p key={i} style={{ margin: '4px 0', lineHeight: 1.58 }}>{renderInline(tr)}</p>);
+    i++;
+  }
+
+  return <div style={{ fontSize: 13.5, color: 'inherit', ...style }}>{out}</div>;
+}
+
 /* ===== SUB-PANEL IA (AIPanel) ===== */
 function AIPanel({title, busy, text, color=C.lime, onClose}){
   if(!busy && !text) return null;
@@ -3677,7 +4446,7 @@ function AIPanel({title, busy, text, color=C.lime, onClose}){
           <Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/>pensando…
         </div>
       ) : (
-        <div style={{fontSize:13.5, lineHeight:1.55, whiteSpace:"pre-wrap", color:"#dde0cf"}}>{text}</div>
+        <MarkdownText text={text} style={{ color: "#dde0cf" }}/>
       )}
     </div>
   );
@@ -4057,11 +4826,18 @@ function AddFood({
     setAddFoodInputText(val);
     setBusy(true);
     setErr("");
+    const cached = getAICache("food", val);
+    if (cached && Array.isArray(cached) && cached.length) {
+      setAiParsedResults(prev => [...prev, ...cached]);
+      setBusy(false);
+      return;
+    }
     try {
       const out = await callGemini([{ role: "user", content: val }], FOOD_SYS, FOOD_SCHEMA);
       const parsed = cleanAndParseJSON(out);
       if (parsed && parsed.items) {
         setAiParsedResults(prev => [...prev, ...parsed.items]);
+        setAICache("food", val, parsed.items);
       } else {
         throw new Error("No se devolvió un formato correcto.");
       }
@@ -4486,12 +5262,375 @@ function EditEntry({
   );
 }
 
+function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr) {
+  let score = 5;
+  const factors = [];
+
+  // Factor 1: Rest days since last workout
+  const today = selectedDateStr || new Date().toISOString().slice(0, 10);
+  let lastWorkoutDate = null;
+  Object.values(exlog || {}).forEach(sets => {
+    (sets || []).forEach(s => {
+      if (s?.date) {
+        const d = s.date.slice(0, 10);
+        if (d < today && (!lastWorkoutDate || d > lastWorkoutDate)) {
+          lastWorkoutDate = d;
+        }
+      }
+    });
+  });
+  let restDays = 0;
+  if (lastWorkoutDate) {
+    const diff = (new Date(today) - new Date(lastWorkoutDate)) / 86400000;
+    restDays = Math.floor(diff);
+  } else {
+    restDays = 7;
+  }
+  if (restDays === 0) { score -= 1; factors.push("Entrenaste ayer"); }
+  else if (restDays === 1) { score += 0.5; factors.push("1 día de descanso"); }
+  else if (restDays >= 2 && restDays <= 3) { score += 1.5; factors.push(`${restDays} días de descanso`); }
+  else if (restDays > 3) { score += 0.5; factors.push("Descanso prolongado"); }
+
+  // Factor 2: Hydration
+  const waterGoal = 14;
+  const hydPct = Math.min(1, (water || 0) / waterGoal);
+  if (hydPct >= 0.85) { score += 1.5; factors.push("Bien hidratado"); }
+  else if (hydPct >= 0.6) { score += 0.5; factors.push("Hidratación aceptable"); }
+  else if (hydPct < 0.4) { score -= 1.5; factors.push("Baja hidratación"); }
+
+  // Factor 3: Recent fatigue notes (last 7 days)
+  const fatigueKeywords = ["fatiga", "cansado", "cansada", "dolor", "agotado", "agotada"];
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const recentFatigueCount = (notes || []).filter(n => {
+    if (!n?.date) return false;
+    const nDate = (n.date || "").slice(0, 10);
+    if (nDate < weekAgo) return false;
+    const text = (n.text || "").toLowerCase();
+    return fatigueKeywords.some(k => text.includes(k));
+  }).length;
+  if (recentFatigueCount >= 3) { score -= 2; factors.push("Alta fatiga reciente"); }
+  else if (recentFatigueCount >= 1) { score -= 1; factors.push("Fatiga leve anotada"); }
+
+  // Factor 4: Yesterday's caloric intake
+  const yesterday = new Date(new Date(today).getTime() - 86400000).toISOString().slice(0, 10);
+  const yesterdayLog = (foodlog || {})[yesterday] || [];
+  const yesterdayKcal = yesterdayLog.reduce((a, e) => a + (+e.kcal || 0), 0);
+  if (yesterdayKcal > 0) {
+    if (yesterdayKcal >= 2200) { score += 1; factors.push("Buena carga calórica ayer"); }
+    else if (yesterdayKcal < 1500) { score -= 0.5; factors.push("Poca energía ayer"); }
+  }
+
+  score = Math.round(Math.max(1, Math.min(10, score)));
+
+  let label, color;
+  if (score >= 8) { label = "Listo para rendir al máximo"; color = C.lime; }
+  else if (score >= 6) { label = "Buena preparación"; color = C.cyan; }
+  else if (score >= 4) { label = "Preparación moderada"; color = C.amber; }
+  else { label = "Considera descansar"; color = C.rose; }
+
+  return { score, label, color, factors };
+}
+
+const PlantaHidratacion = React.memo(function PlantaHidratacion({ water, waterGoal, isRestDay }) {
+  const wg = waterGoal || 14;
+  const pct = Math.min(1, Math.max(0, (water || 0) / wg));
+
+  const lerpColor = (a, b, t) => {
+    const h = s => [parseInt(s.slice(1,3),16), parseInt(s.slice(3,5),16), parseInt(s.slice(5,7),16)];
+    const hex = (r,g,bl) => `#${[r,g,bl].map(x => Math.round(Math.max(0,Math.min(255,x))).toString(16).padStart(2,'0')).join('')}`;
+    const [ar,ag,ab] = h(a), [br,bg,bb] = h(b);
+    return hex(ar+(br-ar)*t, ag+(bg-ag)*t, ab+(bb-ab)*t);
+  };
+
+  const leafColor = pct <= 0.3
+    ? lerpColor('#6b4218', '#8a7a12', pct / 0.3)
+    : pct <= 0.6
+      ? lerpColor('#8a7a12', '#5a9a1e', (pct - 0.3) / 0.3)
+      : lerpColor('#5a9a1e', '#52d010', (pct - 0.6) / 0.4);
+
+  const stemColor = pct < 0.3 ? '#5c3a18' : pct < 0.6 ? '#4a6a14' : '#2a7c08';
+  const droop = (1 - pct) * 32;
+  const showFlower = pct >= 0.82 && isRestDay;
+  const showDew = pct >= 0.60;
+  const uid = 'ph';
+
+  let statusText, statusColor;
+  if (pct >= 0.85) { statusText = "¡Floreciendo! 🌿"; statusColor = C.lime; }
+  else if (pct >= 0.6) { statusText = "Bien hidratada 💧"; statusColor = C.cyan; }
+  else if (pct >= 0.3) { statusText = "Sedienta… 🥤"; statusColor = C.amber; }
+  else { statusText = "¡Se marchita! 🥀"; statusColor = C.rose; }
+
+  const ts = 'all 0.85s cubic-bezier(0.4,0,0.2,1)';
+
+  // Leaf shape (medium)
+  const leafM = "M 0 0 C 4 -5 17 -19 29 -13 C 35 -9 33 2 25 6 C 15 12 3 6 0 0 Z";
+  const leafS = "M 0 0 C 3 -4 13 -15 21 -10 C 26 -7 24 1 18 5 C 11 9 2 5 0 0 Z";
+  const leafMid = "M 0 0 C 7 -3 15 -3 21 5"; // vein for medium leaf
+  const leafMidS = "M 0 0 C 6 -2 12 -2 18 5";
+
+  return (
+    <div style={{display:'flex', flexDirection:'column', alignItems:'center', gap:6, width:'100%'}}>
+      <svg viewBox="0 0 120 190" width={128} height={192} style={{overflow:'visible', display:'block'}}>
+        <defs>
+          <linearGradient id={`${uid}-body`} x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0%" stopColor="#7a3e1a"/>
+            <stop offset="42%" stopColor="#a05028"/>
+            <stop offset="100%" stopColor="#6a2e10"/>
+          </linearGradient>
+          <linearGradient id={`${uid}-rim`} x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0%" stopColor="#8a4820"/>
+            <stop offset="50%" stopColor="#b86030"/>
+            <stop offset="100%" stopColor="#7a3810"/>
+          </linearGradient>
+          <linearGradient id={`${uid}-soil`} x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#2e1e12"/>
+            <stop offset="100%" stopColor="#1a1008"/>
+          </linearGradient>
+          <linearGradient id={`${uid}-leaf`} x1="0" x2="1" y1="0" y2="1">
+            <stop offset="0%" stopColor={lerpColor(leafColor,'#ffffff',0.12)}/>
+            <stop offset="100%" stopColor={lerpColor(leafColor,'#000000',0.08)}/>
+          </linearGradient>
+          <linearGradient id={`${uid}-water`} x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#4ad6ff" stopOpacity="0.85"/>
+            <stop offset="100%" stopColor="#4ad6ff" stopOpacity="0.30"/>
+          </linearGradient>
+          <filter id={`${uid}-glow`}>
+            <feGaussianBlur stdDeviation="1.2" result="blur"/>
+            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+          </filter>
+        </defs>
+
+        {/* ── Pot ── */}
+        {/* Pot body */}
+        <path d="M 31 162 Q 28 187 40 188 L 80 188 Q 92 187 89 162 Z"
+          fill={`url(#${uid}-body)`}/>
+        {/* Pot rim */}
+        <rect x="26" y="154" width="68" height="11" rx="5.5" ry="5.5"
+          fill={`url(#${uid}-rim)`}/>
+        {/* Highlight stripe on rim */}
+        <rect x="30" y="155" width="30" height="3" rx="1.5" fill="rgba(255,255,255,0.12)"/>
+        {/* Soil */}
+        <ellipse cx="60" cy="158" rx="29" ry="7" fill={`url(#${uid}-soil)`}/>
+        {/* Soil pebbles */}
+        <circle cx="48" cy="157" r="1.8" fill="#3c2810" opacity="0.7"/>
+        <circle cx="64" cy="156" r="1.2" fill="#3c2810" opacity="0.7"/>
+        <circle cx="73" cy="158" r="1.6" fill="#3c2810" opacity="0.7"/>
+        {/* Water level gauge on pot side */}
+        <rect x="84" y={188 - 26*pct} width="5" height={26*pct} rx="2.5"
+          fill={`url(#${uid}-water)`} style={{transition:ts}}/>
+        <rect x="84" y="162" width="5" height="26" rx="2.5" fill="none"
+          stroke="rgba(74,214,255,0.3)" strokeWidth="0.8"/>
+
+        {/* ── Main stem ── */}
+        <path
+          d={`M 60 157 C ${60+droop*0.15} 138 ${59+droop*0.25} 115 ${58+droop*0.15} 65`}
+          stroke={stemColor} strokeWidth="3.8" fill="none" strokeLinecap="round"
+          style={{transition:ts}}/>
+
+        {/* ── Branch stems ── */}
+        {/* Bottom pair */}
+        <path d={`M ${59+droop*0.12} 137 C ${52-droop*0.3} 130 ${40-droop*0.5} 128 ${34-droop*0.45} 123`}
+          stroke={stemColor} strokeWidth="2.2" fill="none" strokeLinecap="round" style={{transition:ts}}/>
+        <path d={`M ${59+droop*0.12} 137 C ${66+droop*0.3} 130 ${78+droop*0.5} 128 ${84+droop*0.45} 123`}
+          stroke={stemColor} strokeWidth="2.2" fill="none" strokeLinecap="round" style={{transition:ts}}/>
+        {/* Middle pair */}
+        <path d={`M ${58+droop*0.1} 110 C ${50-droop*0.35} 103 ${39-droop*0.55} 101 ${33-droop*0.5} 96`}
+          stroke={stemColor} strokeWidth="2" fill="none" strokeLinecap="round" style={{transition:ts}}/>
+        <path d={`M ${58+droop*0.1} 110 C ${66+droop*0.35} 103 ${77+droop*0.55} 101 ${83+droop*0.5} 96`}
+          stroke={stemColor} strokeWidth="2" fill="none" strokeLinecap="round" style={{transition:ts}}/>
+        {/* Top pair */}
+        <path d={`M ${58+droop*0.05} 86 C ${51-droop*0.3} 79 ${42-droop*0.5} 77 ${37-droop*0.42} 72`}
+          stroke={stemColor} strokeWidth="1.7" fill="none" strokeLinecap="round" style={{transition:ts}}/>
+        <path d={`M ${58+droop*0.05} 86 C ${65+droop*0.3} 79 ${74+droop*0.5} 77 ${79+droop*0.42} 72`}
+          stroke={stemColor} strokeWidth="1.7" fill="none" strokeLinecap="round" style={{transition:ts}}/>
+
+        {/* ── Leaves ── */}
+        {/* Bottom left */}
+        <g transform={`translate(${34-droop*0.45}, 123)`} style={{transition:ts}}>
+          <g transform={`rotate(${-18 - droop*0.65})`}>
+            <path d={leafM} fill={`url(#${uid}-leaf)`}/>
+            <path d={leafMid} stroke={stemColor} strokeWidth="0.9" fill="none" opacity="0.55"/>
+          </g>
+        </g>
+        {/* Bottom right */}
+        <g transform={`translate(${84+droop*0.45}, 123)`} style={{transition:ts}}>
+          <g transform={`rotate(${197 + droop*0.65})`}>
+            <path d={leafM} fill={`url(#${uid}-leaf)`}/>
+            <path d={leafMid} stroke={stemColor} strokeWidth="0.9" fill="none" opacity="0.55"/>
+          </g>
+        </g>
+        {/* Middle left */}
+        <g transform={`translate(${33-droop*0.5}, 96)`} style={{transition:ts}}>
+          <g transform={`rotate(${-22 - droop*0.75})`}>
+            <path d={leafM} fill={`url(#${uid}-leaf)`}/>
+            <path d={leafMid} stroke={stemColor} strokeWidth="0.9" fill="none" opacity="0.55"/>
+          </g>
+        </g>
+        {/* Middle right */}
+        <g transform={`translate(${83+droop*0.5}, 96)`} style={{transition:ts}}>
+          <g transform={`rotate(${202 + droop*0.75})`}>
+            <path d={leafM} fill={`url(#${uid}-leaf)`}/>
+            <path d={leafMid} stroke={stemColor} strokeWidth="0.9" fill="none" opacity="0.55"/>
+          </g>
+        </g>
+        {/* Top left */}
+        <g transform={`translate(${37-droop*0.42}, 72)`} style={{transition:ts}}>
+          <g transform={`rotate(${-26 - droop*0.85})`}>
+            <path d={leafS} fill={`url(#${uid}-leaf)`}/>
+            <path d={leafMidS} stroke={stemColor} strokeWidth="0.8" fill="none" opacity="0.55"/>
+          </g>
+        </g>
+        {/* Top right */}
+        <g transform={`translate(${79+droop*0.42}, 72)`} style={{transition:ts}}>
+          <g transform={`rotate(${206 + droop*0.85})`}>
+            <path d={leafS} fill={`url(#${uid}-leaf)`}/>
+            <path d={leafMidS} stroke={stemColor} strokeWidth="0.8" fill="none" opacity="0.55"/>
+          </g>
+        </g>
+
+        {/* ── Dew drops ── */}
+        {showDew && (
+          <g style={{transition:'opacity 0.7s'}} opacity="1">
+            <ellipse cx={27-droop*0.4} cy={118} rx="2.8" ry="3.8"
+              fill="#4ad6ff" opacity="0.6" filter={`url(#${uid}-glow)`}/>
+            <ellipse cx={83+droop*0.45} cy={91} rx="2.2" ry="3.2"
+              fill="#4ad6ff" opacity="0.5" filter={`url(#${uid}-glow)`}/>
+            <ellipse cx={35-droop*0.3} cy={67} rx="2" ry="2.8"
+              fill="#4ad6ff" opacity="0.45" filter={`url(#${uid}-glow)`}/>
+          </g>
+        )}
+
+        {/* ── Apex bud or flower ── */}
+        {showFlower ? (
+          <g transform={`translate(${58+droop*0.05}, ${63-droop*0.4})`} style={{transition:ts}}>
+            {[0,52,103,155,206,257,309].map((angle, i) => (
+              <ellipse key={i} cx={0} cy={-7.5} rx="3.8" ry="6.5"
+                fill={i % 2 === 0 ? '#f9e068' : '#ffd235'} opacity="0.92"
+                transform={`rotate(${angle})`}/>
+            ))}
+            <circle cx={0} cy={0} r="5.5" fill="#f4a830"/>
+            <circle cx={0} cy={0} r="3.2" fill="#e88010"/>
+            <circle cx={-1} cy={-1} r="1" fill="#ffc040" opacity="0.7"/>
+          </g>
+        ) : (
+          <g transform={`translate(${58+droop*0.05}, ${65-droop*0.4})`} style={{transition:ts}}>
+            <ellipse cx={0} cy={-7} rx="4.5" ry="7"
+              fill={pct > 0.35 ? lerpColor('#5a6a10','#38c008',Math.min(1,(pct-0.35)/0.65)) : '#4a3a18'}
+              style={{transition:'fill 0.85s'}}/>
+            <ellipse cx={0} cy={-7} rx="2" ry="3"
+              fill="rgba(255,255,255,0.10)"/>
+          </g>
+        )}
+      </svg>
+
+      <div style={{
+        fontSize: 13, fontWeight: 700, color: statusColor,
+        textAlign: 'center', transition: 'color 0.7s', letterSpacing: '.01em'
+      }}>
+        {statusText}
+      </div>
+    </div>
+  );
+});
+
+const DailyGreetingCard = React.memo(function DailyGreetingCard({
+  todayKcal, exlog, splits, activeSplitKey, selectedDateStr, setView, sendCoachMessage, isRestDay
+}) {
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Buenos días" : hour < 19 ? "Buenas tardes" : "Buenas noches";
+  const greetingIcon = hour < 12 ? "🌅" : hour < 19 ? "☀️" : "🌙";
+
+  const hasTrainedToday = React.useMemo(() =>
+    Object.values(exlog || {}).some(sets =>
+      (sets || []).some(s => (s?.date || '').slice(0, 10) === selectedDateStr)
+    ), [exlog, selectedDateStr]);
+
+  const sendMealSuggestion = (meal) => {
+    setView("coach");
+    const msgs = {
+      desayuno: `Dame 3 opciones de desayuno para ahora. Que sean variadas, altas en proteína y prácticas. Ajústalas a mis macros diarios.`,
+      almuerzo: `Dame 3 opciones de almuerzo para ahora. Altas en proteína, que me dejen con energía para el resto del día. Ajusta a mis macros.`,
+      merienda: `Dame 2-3 ideas de merienda/snack para ahora. Que sean rápidas y ayuden a llegar bien a la cena sin pasarme de calorías.`,
+      cena: `Dame 3 opciones de cena para esta noche. Que sean livianas pero con buena proteína. Ajusta a lo que me queda de macros hoy.`,
+    };
+    setTimeout(() => sendCoachMessage?.(msgs[meal]), 200);
+  };
+
+  const contextButtons = [];
+  if (hour >= 6 && hour < 11) {
+    contextButtons.push({ icon: "🌞", label: "Desayuno", action: () => sendMealSuggestion("desayuno") });
+  } else if (hour >= 11 && hour < 15) {
+    contextButtons.push({ icon: "🍽️", label: "Almuerzo", action: () => sendMealSuggestion("almuerzo") });
+  } else if (hour >= 15 && hour < 18) {
+    contextButtons.push({ icon: "🫐", label: "Merienda", action: () => sendMealSuggestion("merienda") });
+  } else if (hour >= 18 && hour < 22) {
+    contextButtons.push({ icon: "🌆", label: "Cena", action: () => sendMealSuggestion("cena") });
+  }
+
+  if (!hasTrainedToday && !isRestDay) {
+    contextButtons.push({ icon: "🏋️", label: "Pre-entreno", action: () => setView("entreno") });
+  } else if (hasTrainedToday) {
+    contextButtons.push({ icon: "💪", label: "Post-entreno", action: () => {
+      setView("coach");
+      setTimeout(() => sendCoachMessage?.("[AUTO] Acabo de terminar mi entrenamiento de hoy. Dame un análisis rápido de la sesión y qué comer en las próximas 2 horas para optimizar la recuperación."), 200);
+    }});
+  }
+
+  // Botón adaptado según momento del día
+  const isNight = hour >= 19 || hour < 5;
+  const isMorning = hour >= 5 && hour < 12;
+  const ctaLabel = isNight ? "Resumen del día" : isMorning ? "Plan para hoy" : "¿Cómo voy hoy?";
+  const ctaIcon = isNight ? "🌙" : isMorning ? "📋" : "📊";
+
+  const handleCTA = () => {
+    setView("coach");
+    const msg = isNight
+      ? `[Resumen nocturno ${selectedDateStr}] Hazme un resumen de mi día completo: entrenamiento, nutrición, hidratación y qué mejorar mañana.`
+      : isMorning
+      ? `[Plan matutino ${selectedDateStr}] Dame un plan concreto para hoy: qué toca entrenar según mi split, cuántas calorías y proteína apuntar, y cuál es la prioridad del día.`
+      : `[Seguimiento ${selectedDateStr}] ¿Cómo voy con mi plan de hoy? Analiza lo que ya registré y dame sugerencias para el resto del día.`;
+    setTimeout(() => sendCoachMessage?.(msg), 200);
+  };
+
+  return (
+    <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"20px 16px 14px", marginBottom:12}}>
+      <div style={{fontSize:34, fontWeight:900, color:C.ink, marginBottom:14, letterSpacing:"-0.5px"}}>
+        {greeting} <span style={{fontSize:28}}>{greetingIcon}</span>
+      </div>
+      {contextButtons.length > 0 && (
+        <div style={{display:"flex", gap:8, marginBottom:10, flexWrap:"wrap"}}>
+          {contextButtons.map((btn, i) => (
+            <button key={i} onClick={btn.action} style={{
+              flex:1, minWidth:120,
+              background:C.panel2, border:`1px solid ${C.line}`,
+              borderRadius:12, padding:"11px 10px",
+              fontSize:13.5, fontWeight:700, color:C.ink,
+              cursor:"pointer", display:"flex", alignItems:"center", gap:7, justifyContent:"center"
+            }}>
+              <span style={{fontSize:16}}>{btn.icon}</span> {btn.label}
+            </button>
+          ))}
+        </div>
+      )}
+      <button onClick={handleCTA} style={{
+        width:"100%", background:C.panel2, border:`1px solid ${C.line}`,
+        borderRadius:12, padding:"11px 16px",
+        fontSize:13.5, fontWeight:700, color:C.ink,
+        cursor:"pointer", display:"flex", alignItems:"center", gap:8, justifyContent:"center"
+      }}>
+        <Sparkles size={15} color={C.lime}/> {ctaIcon} {ctaLabel}
+      </button>
+    </div>
+  );
+});
+
 function Hoy({
   target, totals, log, setLog, loaded, water, setWater, geminiKey, supplements, handleUpdateSupplements,
   activeSplitKey, suppsInventory, setSuppsInventory, selectedDateStr, setSelectedDateStr,
   proactiveMsg, aiNotifications, setAiNotifications, macroAdjustSuggestion, setMacroAdjustSuggestion, saveState, customPresets,
   weeklyInsight, smartGoals, challenges, updateChallengeProgress, upcomingEvent, experiments, setExperiments, splits,
-  setView, setShowNutritionModal, setModalVals, addFoodInputText, setAddFoodInputText, customSuggestions
+  setView, setShowNutritionModal, setModalVals, addFoodInputText, setAddFoodInputText, customSuggestions,
+  exlog, notes, foodlog, sendCoachMessage
 }){
   const [text, setText] = useState(""); 
   const [busy, setBusy] = useState(false); 
@@ -4675,6 +5814,18 @@ function Hoy({
   const cPct = ((totals.c / totalGrams) * 100).toFixed(1);
   const fPct = ((totals.f / totalGrams) * 100).toFixed(1);
 
+  // Memoized: both iterate exlog/notes/foodlog — avoid recomputing every render
+  const isRestDay = React.useMemo(
+    () => !Object.values(exlog || {}).some(sets =>
+      (sets || []).some(s => (s?.date || '').slice(0, 10) === selectedDateStr)
+    ),
+    [exlog, selectedDateStr]
+  );
+  const readiness = React.useMemo(
+    () => predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr),
+    [exlog, notes, water, foodlog, selectedDateStr]
+  );
+
   const getLocalDateStr = (d) => {
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -4835,11 +5986,24 @@ function Hoy({
     run("¿Qué como ahora?", sys, user);
   };
 
-  const daySummary = () => { 
-    const det = log.map(e => `${e.resumen} (${Math.round(e.kcal)}kcal P${Math.round(e.proteina)})`).join("; ") || "nada registrado"; 
-    const sys = `Eres el coach nutricional de Bruno. Dashboard diario. Resumen directo, honesto y constructivo.`;
-    const user = `El ${formatSelectedDate(selectedDateStr)}, Bruno consumió: ${det}. Totales: ${Math.round(totals.kcal)} kcal, P:${Math.round(totals.p)}g C:${Math.round(totals.c)}g G:${Math.round(totals.f)}g. Brinda un análisis corto de adherencia a los objetivos y consejo rápido de timings.`;
-    run("Resumen del Día", sys, user); 
+  const daySummary = () => {
+    const det = log.map(e => `${e.resumen} (${Math.round(e.kcal)}kcal P:${Math.round(e.proteina)}g C:${Math.round(e.carbo)}g G:${Math.round(e.grasa)}g)`).join("; ") || "nada registrado";
+    const pct = target.kcal > 0 ? Math.round((totals.kcal / target.kcal) * 100) : 0;
+    const remP = Math.max(0, target.p - totals.p);
+    const remC = Math.max(0, target.c - totals.c);
+    const remF = Math.max(0, target.f - totals.f);
+    const hydrPct = Math.round((water / 14) * 100);
+    const activeSplit = (splits || DEFAULT_SPLITS).find(s => s.key === activeSplitKey) || DEFAULT_SPLITS[0];
+    const sys = `Eres el coach nutricional y de fuerza de Bruno. Plan: ${target.kcal} kcal (${target.label}), objetivo P:${target.p}g C:${target.c}g G:${target.f}g. Split hoy: ${activeSplit?.name || "no definido"} (${activeSplit?.fuel || ""}). Responde con análisis honesto y 2-3 acciones concretas para el resto del día.`;
+    const user = `RESUMEN DEL DÍA — ${formatSelectedDate(selectedDateStr)}:
+
+Comidas: ${det}
+Totales: ${Math.round(totals.kcal)} kcal (${pct}% del objetivo) | P:${Math.round(totals.p)}g | C:${Math.round(totals.c)}g | G:${Math.round(totals.f)}g
+Restante: ${Math.round(target.kcal - totals.kcal)} kcal | P:${remP}g | C:${remC}g | G:${remF}g
+Hidratación: ${(water * 0.25).toFixed(1)}L (${hydrPct}% del objetivo diario)
+
+Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concretas para completar el día de forma óptima.`;
+    run("Resumen del Día", sys, user);
   };
 
   const chip = (a) => ({
@@ -4920,6 +6084,34 @@ function Hoy({
         >
           ›
         </button>
+      </div>
+
+      {/* Saludo contextual del día */}
+      <DailyGreetingCard
+        todayKcal={totals?.kcal || 0}
+        exlog={exlog}
+        splits={splits}
+        activeSplitKey={activeSplitKey}
+        selectedDateStr={selectedDateStr}
+        setView={setView}
+        sendCoachMessage={sendCoachMessage}
+        isRestDay={isRestDay}
+      />
+
+      {/* Planta de hidratación */}
+      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"16px 15px 12px", marginBottom:12, display:'flex', flexDirection:'column', alignItems:'center', gap:0}}>
+        <PlantaHidratacion water={water} waterGoal={waterGoal} isRestDay={isRestDay}/>
+      </div>
+
+      <div style={{display:"flex", alignItems:"center", gap:10, background:C.panel, border:`1.5px solid ${readiness.color}33`, borderRadius:14, padding:"10px 14px", marginBottom:12, animation:"pop 0.3s ease"}}>
+        <div style={{width:44, height:44, borderRadius:"50%", background:`${readiness.color}22`, border:`2px solid ${readiness.color}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0}}>
+          <span style={{fontSize:16, fontWeight:900, color:readiness.color}}>{readiness.score}</span>
+        </div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:10, fontWeight:800, color:readiness.color, textTransform:"uppercase", letterSpacing:".07em"}}>Preparación hoy</div>
+          <div style={{fontSize:13, fontWeight:700, color:C.ink}}>{readiness.label}</div>
+          {readiness.factors.length > 0 && <div style={{fontSize:10.5, color:C.muted, marginTop:1}}>{readiness.factors.join(" · ")}</div>}
+        </div>
       </div>
 
       {upcomingEvent && upcomingEvent.date && (() => {
@@ -5118,7 +6310,7 @@ function Hoy({
           <div style={{fontSize:11, fontWeight:800, color:C.cyan, textTransform:"uppercase", letterSpacing:".05em", display:"flex", alignItems:"center", gap:6, marginBottom:4}}>
             <span>📊 Insight de la Semana</span>
           </div>
-          <div style={{fontSize:13.5, color:C.ink, lineHeight:1.5}}>{weeklyInsight.text}</div>
+          <MarkdownText text={weeklyInsight.text} style={{color:C.ink}}/>
         </div>
       )}
 
@@ -5245,75 +6437,57 @@ function Hoy({
         </span>
       </div>
 
-      {/* Tarjetas de macros */}
-      <Bar 
-        icon={Flame} 
-        label="Calorías" 
-        val={totals.kcal} 
-        max={target.kcal} 
-        unit="kcal" 
-        color="var(--accent-primary)"
-        onSettingsClick={() => {
-          setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
-          setShowNutritionModal(true);
-        }}
-      />
-      <Bar 
-        icon={Beef} 
-        label="Proteína" 
-        val={totals.p} 
-        max={target.p} 
-        unit="g" 
-        color="var(--accent-blue)"
-        onSettingsClick={() => {
-          setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
-          setShowNutritionModal(true);
-        }}
-      />
-      <Bar 
-        icon={Wheat} 
-        label="Carbohidratos" 
-        val={totals.c} 
-        max={target.c} 
-        unit="g" 
-        color="var(--accent-amber)"
-        onSettingsClick={() => {
-          setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
-          setShowNutritionModal(true);
-        }}
-      />
-      <Bar 
-        icon={Droplet} 
-        label="Grasas" 
-        val={totals.f} 
-        max={target.f} 
-        unit="g" 
-        color="var(--accent-cyan)"
-        onSettingsClick={() => {
-          setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
-          setShowNutritionModal(true);
-        }}
-      />
-
-      {/* Proporción de macros consumidos */}
-      {totals.p + totals.c + totals.f > 0 && (
-        <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"13px 15px", marginBottom:12}}>
-          <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8}}>
-            <span style={{fontSize:13, fontWeight:700}}>Distribución de Macros Consumidos</span>
-            <span style={{fontSize:11, color:C.muted}}>Total: {Math.round(totals.p + totals.c + totals.f)}g</span>
+      {/* Tarjetas de macros — anillos SVG */}
+      {(() => {
+        const PI = Math.PI;
+        const macros = [
+          { r: 62, sw: 12, color: C.lime,  label: "Kcal",     val: Math.round(totals.kcal), max: target.kcal, unit: "kcal" },
+          { r: 46, sw: 10, color: C.cyan,  label: "Proteína", val: Math.round(totals.p),    max: target.p,    unit: "g" },
+          { r: 30, sw: 10, color: C.amber, label: "Carbos",   val: Math.round(totals.c),    max: target.c,    unit: "g" },
+          { r: 15, sw: 8,  color: C.rose,  label: "Grasas",   val: Math.round(totals.f),    max: target.f,    unit: "g" },
+        ];
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:14, display:"flex", gap:16, alignItems:"center"}}>
+            <svg width={150} height={150} viewBox="0 0 150 150">
+              {macros.map(m => {
+                const circ = 2 * PI * m.r;
+                const pct = Math.min(1, m.max > 0 ? m.val / m.max : 0);
+                const offset = circ - pct * circ;
+                return (
+                  <g key={m.label} transform="rotate(-90 75 75)">
+                    <circle cx={75} cy={75} r={m.r} fill="none" stroke={m.color + "22"} strokeWidth={m.sw}/>
+                    <circle cx={75} cy={75} r={m.r} fill="none" stroke={m.color} strokeWidth={m.sw}
+                      strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
+                      style={{transition:"stroke-dashoffset 0.6s ease"}}/>
+                  </g>
+                );
+              })}
+              <text x={75} y={71} textAnchor="middle" style={{fontSize:15, fontWeight:900, fill:C.ink}}>{Math.round(totals.kcal)}</text>
+              <text x={75} y={85} textAnchor="middle" style={{fontSize:10, fill:C.muted}}>/ {target.kcal} kcal</text>
+            </svg>
+            <div style={{flex:1, display:"flex", flexDirection:"column", gap:7}}>
+              {macros.map(m => {
+                const pct = Math.min(1, m.max > 0 ? m.val / m.max : 0);
+                return (
+                  <div key={m.label} style={{display:"flex", flexDirection:"column", gap:2}}>
+                    <div style={{display:"flex", justifyContent:"space-between", fontSize:11}}>
+                      <span style={{color:m.color, fontWeight:700}}>{m.label}</span>
+                      <span style={{color:C.muted}}>{m.val}<span style={{color:C.muted, fontWeight:400}}>/{m.max}{m.unit}</span></span>
+                    </div>
+                    <div style={{height:5, background:C.panel2, borderRadius:4, overflow:"hidden"}}>
+                      <div style={{height:"100%", width:(pct*100)+"%", background:m.color, borderRadius:4, transition:"width 0.5s ease"}}/>
+                    </div>
+                  </div>
+                );
+              })}
+              <button
+                onClick={() => { setModalVals({ kcal: target.kcal, p: target.p, c: target.c, f: target.f }); setShowNutritionModal(true); }}
+                style={{marginTop:4, padding:"5px 10px", background:"none", border:`1px solid ${C.line}`, borderRadius:8, fontSize:11, color:C.muted, cursor:"pointer", fontWeight:600, alignSelf:"flex-start"}}
+              >Ajustar objetivos</button>
+            </div>
           </div>
-          <div style={{height:10, background:C.panel2, borderRadius:6, overflow:"hidden", display:"flex"}}>
-            <div style={{width:pPct+"%", background:C.cyan, height:"100%"}} title={`Proteína: ${pPct}%`}/>
-            <div style={{width:cPct+"%", background:C.lime, height:"100%"}} title={`Carbohidratos: ${cPct}%`}/>
-            <div style={{width:fPct+"%", background:C.amber, height:"100%"}} title={`Grasas: ${fPct}%`}/>
-          </div>
-          <div style={{display:"flex", justifyContent:"space-between", fontSize:11, marginTop:6}}>
-            <span style={{color:C.cyan, fontWeight:600}}>P: {pPct}% ({Math.round(totals.p)}g)</span>
-            <span style={{color:C.lime, fontWeight:600}}>C: {cPct}% ({Math.round(totals.c)}g)</span>
-            <span style={{color:C.amber, fontWeight:600}}>G: {fPct}% ({Math.round(totals.f)}g)</span>
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Registro de comida — nuevo diseño */}
       <div style={{marginBottom:20}}>
@@ -5715,25 +6889,23 @@ function Hoy({
         </div>
       )}
 
-      {/* Tarjeta de Hidratación */}
-      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"13px 15px", marginBottom:14}}>
-        <div style={{display:"flex", alignItems:"center", justifyTarget:"space-between", justifyContent:"space-between", marginBottom:8}}>
+      {/* Tarjeta de Hidratación — contador de vasos */}
+      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"12px 15px", marginBottom:14}}>
+        <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8}}>
           <span style={{display:"flex", alignItems:"center", gap:8, fontSize:13, fontWeight:700}}>
-            <GlassWater size={16} color={C.cyan}/>Hidratación
+            <GlassWater size={15} color={C.cyan}/>Hidratación
           </span>
           <span style={{fontSize:13, color:C.muted}}>
-            <b style={{color:C.ink, fontSize:15}}>{liters}</b> / {(waterGoal * 0.25).toFixed(1)} L
+            <b style={{color:C.ink, fontSize:14}}>{liters}</b> / {(waterGoal * 0.25).toFixed(1)} L
           </span>
         </div>
         <div style={{display:"flex", alignItems:"center", gap:8}}>
-          <button onClick={() => setWater(water - 1)} style={{width:38, height:38, borderRadius:10, border:`1px solid ${C.line}`, background:C.panel2, color:C.ink, cursor:"pointer", display:"grid", placeItems:"center"}}><Minus size={16}/></button>
-          <div style={{flex:1, display:"flex", gap:3, overflow:"hidden"}}>
+          <button onClick={() => setWater(Math.max(0, water - 1))} style={{width:38, height:38, borderRadius:10, border:`1px solid ${C.line}`, background:C.panel2, color:C.ink, cursor:"pointer", display:"grid", placeItems:"center"}}><Minus size={16}/></button>
+          <div style={{flex:1, display:"flex", gap:2, overflow:"hidden"}}>
             {Array.from({length: waterGoal}).map((_,i) => (
               <div key={i} style={{
-                flex:1, 
-                height:22, 
-                borderRadius:5, 
-                background: i < water ? C.cyan : C.panel2, 
+                flex:1, height:21, borderRadius:4,
+                background: i < water ? C.cyan : C.panel2,
                 border: `1px solid ${i < water ? C.cyan : C.line}`,
                 transition: "all .2s"
               }}/>
@@ -5742,6 +6914,42 @@ function Hoy({
           <button onClick={() => setWater(water + 1)} style={{width:38, height:38, borderRadius:10, border:"none", background:C.cyan, color:"#04212b", cursor:"pointer", display:"grid", placeItems:"center"}}><Plus size={16}/></button>
         </div>
       </div>
+
+      {/* Timing de comidas */}
+      {log.length > 0 && (() => {
+        const meals = [...log].sort((a, b) => (a.t || 0) - (b.t || 0));
+        const lastMeal = meals[meals.length - 1];
+        const lastT = lastMeal?.t || 0;
+        const nextIdeal = lastT ? new Date(lastT + 2.5 * 3600000) : null;
+        const now = Date.now();
+        const nextStr = nextIdeal ? nextIdeal.toLocaleTimeString("es", { hour:"2-digit", minute:"2-digit" }) : null;
+        const isInPast = nextIdeal && nextIdeal.getTime() < now;
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"12px 15px", marginBottom:14}}>
+            <div style={{fontSize:11, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", marginBottom:8}}>Timing de Comidas</div>
+            <div style={{display:"flex", flexDirection:"column", gap:5}}>
+              {meals.slice(-4).map((m) => (
+                <div key={m.id} style={{display:"flex", alignItems:"center", gap:8, fontSize:12}}>
+                  <div style={{width:6, height:6, borderRadius:"50%", background:C.lime, flexShrink:0}}/>
+                  <span style={{color:C.muted, fontVariantNumeric:"tabular-nums", flexShrink:0, minWidth:38}}>
+                    {m.t ? new Date(m.t).toLocaleTimeString("es", { hour:"2-digit", minute:"2-digit" }) : "—"}
+                  </span>
+                  <span style={{color:C.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1}}>{m.resumen}</span>
+                  <span style={{color:C.muted, fontSize:10.5, flexShrink:0}}>{Math.round(m.kcal)} kcal</span>
+                </div>
+              ))}
+            </div>
+            {nextStr && (
+              <div style={{marginTop:8, paddingTop:8, borderTop:`1px solid ${C.line}`, display:"flex", alignItems:"center", gap:6, fontSize:12}}>
+                <Clock size={13} color={isInPast ? C.amber : C.cyan}/>
+                <span style={{color: isInPast ? C.amber : C.cyan, fontWeight:700}}>
+                  {isInPast ? "Ya es hora de comer" : `Próxima comida ideal: ~${nextStr}`}
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Tarjeta de Suplementos del Día */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"13px 15px", marginBottom:14}}>
@@ -5840,20 +7048,48 @@ function Hoy({
         </div>
       </div>
 
-      {/* Botones de IA rápidos */}
-      <div style={{display:"flex", gap:7, marginBottom:7}}>
-        <button onClick={suggestDinner} style={chip(aiBusy==="Cena Sugerida")}><ChefHat size={14}/>Sugerir cena</button>
-        <button onClick={() => setShowMoments(v => !v)} style={chip(showMoments)}><Clock size={14}/>¿Qué como ahora?</button>
-      </div>
-      {showMoments && (
-        <div className="pop" style={{display:"flex", gap:7, flexWrap:"wrap", marginBottom:7}}>
-          {["Pre-entreno", "Post-entreno", "Desayuno rápido", "Snack saludable"].map(m => (
-            <button key={m} onClick={() => whatNow(m)} style={{...chip(false), flex:"1 1 45%", fontSize:11.5, padding:"8px 6px"}}>
-              {m}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Botones de IA contextuales según hora del día */}
+      {(() => {
+        const hour = new Date().getHours();
+        const greeting = hour >= 5 && hour < 12 ? "Buenos días 🌅" : hour >= 12 && hour < 18 ? "Buenas tardes ☀️" : "Buenas noches 🌙";
+        let contextChips;
+        if (hour >= 5 && hour < 10) {
+          contextChips = [
+            { label:"☀️ Desayuno", action: () => whatNow("Desayuno") },
+            { label:"🏃 Pre-entreno", action: () => whatNow("Pre-entreno") },
+          ];
+        } else if (hour >= 10 && hour < 14) {
+          contextChips = [
+            { label:"🥗 Almuerzo", action: () => whatNow("Almuerzo") },
+            { label:"🍎 Snack mañana", action: () => whatNow("Snack de media mañana") },
+          ];
+        } else if (hour >= 14 && hour < 17) {
+          contextChips = [
+            { label:"⚡ Merienda", action: () => whatNow("Merienda") },
+            { label:"🏋️ Post-entreno", action: () => whatNow("Post-entreno") },
+          ];
+        } else if (hour >= 17 && hour < 22) {
+          contextChips = [
+            { label:"🌙 Sugerir cena", action: suggestDinner },
+            { label:"📊 Resumen del día", action: daySummary },
+          ];
+        } else {
+          contextChips = [
+            { label:"📊 Resumen del día", action: daySummary },
+            { label:"😴 Prep. nocturna", action: () => run("Preparación nocturna", "Eres el coach de Bruno. Da una recomendación breve de rutina de sueño y recuperación.", "Dame consejos rápidos para optimizar mi recuperación esta noche según mi entreno y nutrición de hoy.") },
+          ];
+        }
+        return (
+          <div style={{marginBottom:8}}>
+            <div style={{fontSize:11.5, color:C.muted, marginBottom:6, textAlign:"center"}}>{greeting}</div>
+            <div style={{display:"flex", gap:7, marginBottom:7}}>
+              {contextChips.map(c => (
+                <button key={c.label} onClick={c.action} style={chip(false)}>{c.label}</button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
       <button onClick={daySummary} style={{...chip(aiBusy==="Resumen del Día"), width:"100%", marginBottom:2}}>
         <Sparkles size={14}/>Resumen IA del día
       </button>
@@ -5985,38 +7221,9 @@ function Hoy({
 
 /* ===== TAB COACH ===== */
 function Coach({
-  chat, setChat, target, totals, sendCoachMessage, chatBusy, sendDailyGreetingIfNeeded
+  chat, setChat, target, totals, sendCoachMessage, chatBusy, sendDailyGreetingIfNeeded,
+  coachPersonality, setCoachPersonality, metricslog, foodlog, exlog
 }){
-  // Simple markdown renderer for Coach responses
-  const renderMarkdown = (text) => {
-    if (!text) return null;
-    const blocks = text.split('\n\n');
-    return blocks.map((block, idx) => {
-      // List parsing
-      if (block.trim().startsWith('- ') || block.trim().match(/^\d+\.\s/)) {
-        const lines = block.split('\n');
-        return (
-          <ul key={idx} style={{ paddingLeft: '20px', margin: '8px 0' }}>
-            {lines.map((line, lidx) => {
-              const content = line.replace(/^(- |\d+\.\s)/, '');
-              const bolded = content.split(/(\*\*.*?\*\*)/g).map((part, i) => {
-                if (part.startsWith('**') && part.endsWith('**')) return <strong key={i}>{part.slice(2, -2)}</strong>;
-                return part;
-              });
-              return <li key={lidx}>{bolded}</li>;
-            })}
-          </ul>
-        );
-      }
-      
-      // Paragraph with bold parsing
-      const bolded = block.split(/(\*\*.*?\*\*)/g).map((part, i) => {
-        if (part.startsWith('**') && part.endsWith('**')) return <strong key={i}>{part.slice(2, -2)}</strong>;
-        return part;
-      });
-      return <p key={idx} style={{ margin: '8px 0' }}>{bolded}</p>;
-    });
-  };
 
   const [text, setText] = useState(""); 
   const endRef = useRef(null);
@@ -6038,13 +7245,56 @@ function Coach({
     setText(""); 
   };
 
+  const [showContext, setShowContext] = useState(false);
+
+  const contextSummary = React.useMemo(() => {
+    const nutritionDays = Object.keys(foodlog || {}).filter(d => (foodlog[d]||[]).length > 0).length;
+    const workoutSessions = Object.keys(exlog || {}).filter(d => (exlog[d]||[]).length > 0).length;
+    const latestMetrics = Object.entries(metricslog || {}).sort((a,b) => b[0].localeCompare(a[0]))[0];
+    const latestWeight = latestMetrics ? latestMetrics[1]?.weight : null;
+    return { nutritionDays, workoutSessions, latestWeight };
+  }, [foodlog, exlog, metricslog]);
+
+  const PERSONALITIES = [
+    { key:"técnico", label:"⚙️ Técnico", desc:"Análisis y datos" },
+    { key:"motivacional", label:"🔥 Motivador", desc:"Energía y logros" },
+    { key:"nutricionista", label:"🥗 Nutrición", desc:"Foco en comida" },
+    { key:"psicólogo", label:"🧠 Psicólogo", desc:"Mente y hábitos" },
+  ];
+
   return (
     <div className="pop chat-window">
-      
+
       {/* Cabecera del Chat con el Coach */}
-      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10, paddingBottom:8, borderBottom:`1px solid ${C.line}`}}>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, paddingBottom:8, borderBottom:`1px solid ${C.line}`}}>
         <div className="disp" style={{fontSize:22, color:C.lime}}>CHAT CON EL COACH</div>
+        <button onClick={() => setShowContext(v => !v)} style={{background:"none", border:`1px solid ${C.line}`, borderRadius:8, padding:"4px 8px", fontSize:11, color:C.muted, cursor:"pointer"}}>
+          {showContext ? "▲" : "▼"} Contexto
+        </button>
       </div>
+
+      {/* Modos de personalidad */}
+      <div style={{display:"flex", gap:6, overflowX:"auto", paddingBottom:4, marginBottom:8, scrollbarWidth:"none"}}>
+        {PERSONALITIES.map(p => (
+          <button key={p.key} onClick={() => setCoachPersonality(p.key)} style={{
+            flexShrink:0, padding:"5px 10px", borderRadius:20, fontSize:11, fontWeight:700, cursor:"pointer",
+            border:`1px solid ${coachPersonality===p.key ? C.lime : C.line}`,
+            background: coachPersonality===p.key ? `${C.lime}22` : "transparent",
+            color: coachPersonality===p.key ? C.lime : C.muted
+          }}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Barra de contexto colapsable */}
+      {showContext && (
+        <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:10, padding:"8px 12px", marginBottom:8, fontSize:11, color:C.muted, animation:"pop 0.2s ease"}}>
+          <span style={{fontWeight:700, color:C.ink}}>Basado en: </span>
+          {contextSummary.nutritionDays} días de nutrición · {contextSummary.workoutSessions} sesiones de entreno
+          {contextSummary.latestWeight ? ` · peso ${contextSummary.latestWeight} kg` : ""}
+        </div>
+      )}
 
       <div className="chat-bubble-container" style={{display:"flex", flexDirection:"column"}}>
         {chat.length === 0 ? (
@@ -6065,7 +7315,7 @@ function Coach({
         
         {chat.slice(-4).map((m, i) => (
           <div key={i} className={`chat-bubble ${m.role === "user" ? "user" : "assistant"}`}>
-            {m.role === "user" ? m.content : renderMarkdown(m.content)}
+            {m.role === "user" ? m.content : <MarkdownText text={m.content}/>}
           </div>
         ))}
         
@@ -6091,7 +7341,7 @@ function Coach({
         >
           💪 ¿Qué entreno hoy?
         </button>
-        <button 
+        <button
           onClick={() => sendCoachMessage('Basándote en mi progresión histórica y PRs actuales, ¿cuánto debería cargar esta semana en cada ejercicio para seguir progresando sin lesionarme?')}
           disabled={chatBusy}
           style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.rose}`, background:"transparent", color:C.rose, cursor:"pointer", opacity: chatBusy ? 0.5 : 1}}
@@ -6141,6 +7391,9 @@ function Perfil({
   handleSbRegister,
   handleSbLogout,
   syncLocalToSupabase,
+  exportDataJSON,
+  importDataJSON,
+  sbAutoSyncStatus,
   changePreset,
   presetKey,
   customPresets,
@@ -6712,16 +7965,221 @@ function Perfil({
                 {sbError}
               </div>
             )}
+            {sbAutoSyncStatus === "saving" && (
+              <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 2 }}>Guardando en la nube…</div>
+            )}
+            {sbAutoSyncStatus === "saved" && (
+              <div style={{ fontSize: 10, color: "var(--accent-lime)", marginTop: 2 }}>Guardado en la nube ✓</div>
+            )}
           </div>
         )}
+      </div>
+
+      {/* Exportar / Importar datos */}
+      <div style={{ background: "var(--panel-bg-sec)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-ink)", letterSpacing: "0.05em" }}>COPIA DE SEGURIDAD</div>
+        <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.4 }}>
+          Exporta todos tus datos a un archivo JSON para guardarlos o pasarlos a otro dispositivo.
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            onClick={exportDataJSON}
+            className="btn-active-scale"
+            style={{ flex: 1, padding: "10px", background: "var(--accent-lime)", color: "#000", fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer" }}
+          >
+            Exportar JSON
+          </button>
+          <label
+            className="btn-active-scale"
+            style={{ flex: 1, padding: "10px", background: "var(--panel-bg)", border: "1px solid var(--line-color)", color: "var(--text-ink)", fontWeight: 700, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer", textAlign: "center" }}
+          >
+            Importar JSON
+            <input
+              type="file"
+              accept=".json"
+              style={{ display: "none" }}
+              onChange={e => { if (e.target.files[0]) importDataJSON(e.target.files[0]); }}
+            />
+          </label>
+        </div>
       </div>
 
     </div>
   );
 }
 
+/* Datos anatómicos SVG (react-native-body-highlighter, MIT) */
+const BODY_OUTLINE = {
+  front: "M 309.48 168.91 Q 305.84 164.32 303.32 169.76 C 298.49 180.21 308.31 200.03 314.51 208.74 C 316.34 211.31 318.01 208.95 318.58 207.26 A 0.67 0.66 57.6 0 1 319.87 207.55 C 319.06 215.09 318.68 227.40 324.34 232.47 C 327.22 235.05 326.97 235.88 326.92 239.51 Q 326.68 255.16 323.97 266.82 Q 323.85 267.35 323.48 267.73 Q 308.61 282.73 290.26 293.23 C 278.34 300.05 267.53 299.26 253.00 298.03 Q 237.49 296.72 224.74 305.21 C 208.71 315.86 190.95 335.73 189.24 355.50 Q 186.95 381.81 190.53 412.66 C 190.79 414.92 190.69 417.49 191.02 419.92 Q 191.09 420.43 190.88 420.90 C 187.89 427.65 183.99 434.89 181.93 441.29 C 177.25 455.76 176.31 470.23 176.20 486.02 Q 176.20 486.51 175.90 486.90 C 159.84 507.69 147.56 529.29 141.49 554.95 Q 140.10 560.80 138.16 574.66 Q 131.28 623.74 118.11 671.52 C 115.99 679.21 112.98 690.29 104.08 693.63 Q 90.70 698.65 79.29 707.27 C 73.17 711.89 69.48 719.95 66.12 726.62 C 62.44 733.91 47.57 737.30 49.20 746.00 C 49.75 748.96 51.89 750.13 54.75 750.02 Q 67.27 749.50 74.18 740.00 C 76.03 737.45 77.93 736.62 80.54 735.24 Q 81.02 734.98 81.24 735.48 Q 84.59 743.00 80.47 750.73 Q 71.41 767.75 62.21 784.70 Q 60.53 787.81 59.49 791.20 C 57.52 797.69 65.78 800.84 69.45 795.20 C 76.80 783.92 82.72 773.30 92.55 762.52 Q 93.00 762.04 92.84 762.67 Q 87.89 783.24 79.07 802.44 C 77.36 806.17 75.64 812.30 79.19 815.18 C 89.50 823.53 107.08 773.44 109.24 767.88 A 0.37 0.36 -30.3 0 1 109.94 768.06 C 108.51 777.44 106.43 787.14 105.28 796.13 C 104.34 803.43 103.67 808.49 104.41 814.32 C 105.40 822.00 112.74 817.15 114.09 812.77 C 118.56 798.32 120.41 781.74 125.18 766.21 A 0.55 0.55 0.0 0 1 125.93 765.87 C 131.64 768.40 126.65 796.54 133.38 803.49 A 1.35 1.35 0.0 0 0 134.16 803.90 C 138.40 804.59 139.71 797.34 140.15 793.73 Q 141.74 780.80 142.58 767.76 Q 142.86 763.46 144.07 759.34 Q 150.39 737.64 154.77 715.46 Q 156.15 708.50 155.48 697.76 Q 154.48 681.63 161.99 665.46 Q 180.58 625.46 201.25 586.52 C 213.64 563.18 218.66 541.14 220.65 514.18 C 221.24 506.18 223.22 502.59 228.42 495.84 C 237.76 483.72 242.73 464.92 246.12 450.19 Q 246.24 449.64 246.75 449.42 L 250.30 447.82 A 0.49 0.49 0.0 0 1 250.99 448.23 Q 252.78 470.14 257.44 487.01 C 259.04 492.80 264.20 498.21 265.32 505.20 C 265.91 508.82 266.99 512.44 267.11 516.00 Q 267.57 529.33 266.95 540.50 C 265.58 565.32 263.85 592.20 259.98 619.13 C 258.39 630.19 253.14 640.55 250.52 651.43 Q 245.19 673.62 242.32 696.24 C 239.63 717.56 236.59 740.02 236.04 757.75 Q 234.98 791.48 237.98 842.55 Q 239.43 867.18 244.64 891.26 Q 247.76 905.70 255.88 917.90 Q 256.15 918.31 256.08 918.79 C 254.89 926.25 257.03 933.47 255.60 940.95 Q 252.28 958.32 251.77 975.98 C 251.55 983.43 252.85 991.28 253.67 998.93 Q 253.99 1001.95 253.29 1005.00 C 239.19 1067.03 246.93 1130.64 261.77 1190.07 C 266.01 1207.06 266.47 1222.37 264.71 1240.03 C 263.85 1248.62 262.10 1260.41 264.24 1268.75 C 266.05 1275.80 267.54 1287.46 261.78 1293.28 C 256.71 1298.39 242.40 1310.55 240.72 1316.98 C 239.19 1322.86 235.04 1332.26 242.29 1333.71 Q 242.69 1333.79 243.08 1333.66 L 244.23 1333.29 Q 245.05 1333.02 244.81 1333.85 C 242.95 1340.16 249.20 1340.52 253.77 1340.86 C 256.46 1341.06 257.37 1343.60 259.30 1344.71 Q 263.13 1346.91 267.14 1344.43 Q 267.59 1344.15 267.92 1344.56 Q 271.17 1348.61 276.21 1349.09 C 278.90 1349.35 281.27 1347.36 283.62 1346.09 Q 284.10 1345.82 284.44 1346.26 Q 288.33 1351.29 294.72 1351.38 C 295.77 1351.39 297.65 1351.62 298.54 1350.79 Q 301.20 1348.30 306.57 1341.58 C 312.04 1334.74 311.14 1328.85 310.29 1320.16 C 309.43 1311.33 311.17 1303.41 313.76 1295.20 C 315.84 1288.56 313.35 1280.06 314.07 1273.15 C 314.57 1268.39 315.80 1263.68 315.01 1259.02 C 314.06 1253.42 311.98 1247.60 311.31 1242.66 Q 309.57 1229.80 309.57 1219.75 Q 309.57 1192.29 313.54 1161.94 C 315.34 1148.21 319.24 1136.08 324.12 1123.46 Q 325.66 1119.48 326.10 1115.72 C 330.14 1081.34 326.20 1048.44 320.65 1013.26 C 319.84 1008.17 319.39 1002.54 321.72 997.72 C 328.03 984.68 329.28 969.38 329.07 954.15 C 329.01 949.50 327.95 944.55 327.58 939.63 C 327.13 933.64 329.28 925.78 330.82 919.80 C 334.72 904.69 337.76 888.96 341.43 874.30 Q 348.95 844.25 355.42 813.95 C 358.50 799.49 357.70 784.78 357.75 768.06 Q 357.78 756.80 356.36 748.81 Q 356.26 748.24 356.77 748.50 L 363.71 751.99 A 1.07 1.07 0.0 0 0 364.67 751.99 L 371.53 748.56 Q 372.07 748.29 371.98 748.89 C 369.47 765.94 370.28 783.04 371.30 800.17 Q 371.86 809.54 372.73 813.51 C 378.37 839.12 384.90 864.49 390.59 890.08 Q 394.83 909.20 399.51 928.22 C 400.58 932.58 401.13 937.66 400.58 941.57 C 398.11 958.92 398.53 982.22 407.11 998.54 C 408.41 1001.01 408.74 1005.35 408.31 1008.09 C 402.82 1043.75 398.07 1079.22 402.19 1115.33 Q 402.65 1119.34 404.21 1123.44 C 410.53 1140.06 413.55 1150.61 415.25 1164.75 C 418.31 1190.26 420.52 1218.43 416.79 1244.33 C 415.56 1252.86 411.78 1258.57 413.63 1267.80 Q 415.33 1276.21 414.16 1284.74 C 413.11 1292.39 415.65 1298.68 417.31 1305.89 C 419.02 1313.32 418.11 1320.99 417.47 1328.50 C 416.71 1337.55 423.74 1344.86 430.17 1350.90 A 1.48 1.46 -18.7 0 0 430.95 1351.28 Q 439.25 1352.41 444.03 1346.06 Q 444.40 1345.57 444.87 1345.96 Q 453.39 1352.89 460.49 1344.48 Q 460.81 1344.11 461.23 1344.37 C 469.09 1349.37 469.89 1340.80 474.98 1340.71 C 479.52 1340.64 485.21 1340.09 483.54 1333.77 Q 483.38 1333.17 483.97 1333.35 C 488.25 1334.67 490.66 1331.94 490.06 1327.75 C 489.09 1321.04 487.50 1314.41 483.44 1310.30 Q 474.77 1301.53 466.05 1292.83 C 461.19 1287.98 462.25 1276.40 463.74 1270.47 C 466.27 1260.35 464.49 1248.06 463.03 1236.25 C 461.04 1220.05 463.22 1204.28 467.41 1187.04 C 481.60 1128.60 488.89 1065.20 475.23 1006.07 C 473.92 1000.37 475.00 995.00 475.76 989.36 C 477.88 973.68 475.72 958.50 473.08 942.76 C 471.70 934.55 473.60 926.56 472.20 918.79 Q 472.11 918.30 472.39 917.89 C 483.07 902.63 486.53 880.99 488.49 863.25 C 492.12 830.38 492.47 797.34 492.26 764.31 C 492.11 741.56 488.80 719.07 486.12 696.53 C 484.30 681.19 480.76 664.32 477.47 649.99 C 474.89 638.73 469.69 628.87 468.04 617.25 C 465.37 598.45 464.19 580.92 462.40 556.31 Q 460.86 535.06 461.01 522.74 Q 461.13 512.05 463.22 504.00 C 464.54 498.90 468.30 493.91 469.91 489.46 C 474.50 476.74 476.10 461.71 477.56 448.28 Q 477.62 447.74 478.13 447.94 L 481.73 449.35 A 0.77 0.77 0.0 0 1 482.19 449.89 Q 486.03 466.84 492.52 482.96 C 494.16 487.04 496.63 491.75 500.12 495.79 C 505.75 502.32 507.17 507.95 508.00 517.24 C 509.72 536.47 512.15 552.06 518.89 569.24 Q 521.60 576.16 527.50 587.28 Q 543.57 617.60 558.56 648.47 C 566.04 663.89 571.90 675.54 572.85 690.59 Q 572.98 692.57 572.55 700.88 Q 572.12 709.31 573.99 718.25 Q 577.87 736.78 582.37 752.38 C 585.15 761.98 586.32 769.32 586.71 778.53 C 586.92 783.46 587.58 803.53 593.41 804.06 C 599.41 804.61 599.71 774.61 600.39 768.08 A 1.12 1.12 0.0 0 1 600.80 767.33 Q 601.30 766.93 601.62 766.30 A 1.39 1.00 59.0 0 1 603.70 767.19 C 607.27 782.50 609.43 797.55 614.25 812.25 C 615.52 816.12 618.33 820.08 622.81 817.38 A 1.18 1.17 -8.4 0 0 623.35 816.66 Q 624.98 810.32 624.13 803.72 Q 621.83 785.89 618.23 768.64 A 0.53 0.53 0.0 0 1 619.24 768.34 C 622.72 777.06 636.06 814.20 645.24 816.03 C 650.64 817.10 652.13 811.12 650.95 807.31 C 648.59 799.74 644.42 791.59 642.09 784.69 Q 638.29 773.46 635.22 761.98 A 0.15 0.14 -73.3 0 1 635.47 761.84 Q 640.35 767.61 644.90 773.66 C 649.45 779.70 653.60 787.18 658.03 793.93 Q 660.09 797.07 661.70 797.82 C 665.53 799.62 670.61 795.77 669.00 791.28 C 666.63 784.66 661.63 776.66 659.33 772.19 Q 654.22 762.29 648.82 752.53 C 645.43 746.40 644.71 741.93 646.89 735.59 Q 647.08 735.05 647.60 735.27 C 650.55 736.50 652.37 737.45 654.44 740.27 Q 661.27 749.61 673.53 749.92 C 681.25 750.12 680.47 740.89 676.20 738.28 C 671.33 735.31 664.61 731.14 661.97 725.94 C 657.98 718.11 654.62 711.26 649.21 707.28 Q 637.40 698.62 623.76 693.40 C 619.45 691.75 615.12 686.26 613.76 682.47 Q 608.42 667.65 602.70 641.81 Q 594.90 606.62 590.85 578.90 Q 588.46 562.58 587.74 559.15 C 582.02 531.75 569.74 509.81 552.98 487.61 C 551.81 486.06 551.91 485.12 551.97 483.26 Q 552.48 466.57 548.70 449.61 C 546.27 438.71 541.82 430.32 537.44 420.82 Q 537.22 420.36 537.28 419.85 C 539.40 398.94 540.83 377.68 539.05 356.70 C 537.31 336.13 521.34 317.28 504.86 306.23 C 494.75 299.45 485.77 296.97 473.93 298.16 Q 464.41 299.12 453.63 298.41 C 438.05 297.39 418.32 280.58 407.40 270.35 C 405.82 268.87 404.57 267.56 404.10 265.32 Q 401.24 251.68 401.26 237.76 Q 401.26 233.73 404.68 232.04 Q 405.14 231.82 405.39 231.38 C 409.76 223.86 408.77 215.16 408.75 206.85 A 0.38 0.38 0.0 0 1 409.48 206.69 C 410.36 208.62 412.01 211.62 414.22 208.45 C 421.05 198.67 427.45 183.93 425.97 172.00 C 425.49 168.15 422.83 165.91 418.91 167.68",
+  back: "M 1028.14 166.45 Q 1021.22 166.96 1021.73 176.02 C 1022.38 187.38 1027.41 200.00 1034.70 209.56 A 0.95 0.95 0.0 0 0 1035.77 209.88 Q 1037.97 209.08 1038.42 206.75 Q 1038.48 206.41 1038.79 206.56 C 1039.50 206.91 1039.29 219.51 1039.32 221.19 C 1039.41 225.63 1041.33 230.61 1045.48 233.58 A 1.48 1.46 -79.2 0 1 1046.03 234.40 C 1047.33 239.56 1046.14 264.59 1042.52 268.26 Q 1027.38 283.59 1008.53 293.99 C 997.30 300.18 985.80 298.88 972.00 298.05 C 960.16 297.34 951.79 300.13 941.86 307.09 C 927.96 316.83 911.37 335.39 909.24 353.00 C 906.85 372.86 908.46 396.71 910.58 417.97 Q 910.78 420.04 909.97 421.91 C 907.17 428.36 903.51 435.29 901.56 441.28 Q 895.91 458.72 896.11 477.26 Q 896.15 480.50 895.88 486.15 Q 895.86 486.66 895.55 487.06 C 879.06 508.02 866.67 530.27 860.84 556.43 Q 859.72 561.44 857.62 576.15 C 853.15 607.45 846.97 639.64 837.96 670.48 C 835.37 679.35 832.82 690.15 824.31 693.38 Q 811.21 698.35 799.91 706.70 C 793.05 711.77 790.22 717.94 785.68 726.75 C 782.37 733.16 764.38 739.29 769.45 747.77 C 771.01 750.37 774.09 750.14 776.79 749.81 Q 787.25 748.51 793.13 740.83 C 795.42 737.84 797.13 736.50 800.36 735.31 A 0.63 0.63 0.0 0 1 801.16 735.68 C 803.48 741.92 802.81 745.80 799.51 751.90 Q 789.51 770.39 779.78 789.01 C 775.87 796.49 784.57 802.15 789.55 794.51 C 796.72 783.50 802.47 773.20 812.06 762.59 Q 812.62 761.98 812.43 762.79 Q 807.49 783.70 798.01 804.03 Q 795.79 808.79 797.53 813.47 C 798.35 815.65 800.88 816.85 802.95 815.95 C 807.95 813.78 812.74 805.60 815.08 800.58 Q 820.51 788.92 825.23 776.95 Q 827.37 771.52 829.06 768.26 A 0.34 0.34 0.0 0 1 829.69 768.47 C 828.65 774.94 819.92 813.84 825.80 817.66 C 829.47 820.04 832.91 815.52 833.80 812.51 Q 838.73 795.91 842.08 776.75 C 842.69 773.31 843.62 770.03 844.54 766.92 A 1.49 1.49 0.0 0 1 847.45 767.13 C 849.06 778.16 848.17 788.91 850.91 799.85 C 851.57 802.48 854.41 806.12 856.99 802.69 C 861.32 796.92 861.47 780.19 861.98 770.25 C 862.50 760.22 866.62 750.03 868.70 741.28 C 871.57 729.16 876.10 714.64 875.42 700.50 C 874.79 687.46 876.48 676.40 882.00 664.53 Q 899.81 626.31 920.51 587.27 C 928.60 572.01 933.68 558.17 937.01 542.00 Q 938.40 535.24 940.57 511.31 C 941.06 506.01 943.33 501.94 947.04 497.29 C 957.02 484.77 962.25 465.95 965.86 450.00 Q 965.97 449.54 966.40 449.37 L 969.87 447.93 Q 970.39 447.72 970.44 448.27 C 972.08 465.19 974.18 483.97 982.58 498.42 Q 985.25 503.01 985.69 509.45 C 985.76 510.51 986.43 511.70 986.49 512.50 C 986.89 517.68 987.09 525.23 986.82 531.50 Q 985.00 573.11 980.47 614.52 C 978.98 628.13 972.65 640.33 969.66 653.60 C 966.01 669.78 963.02 685.46 961.19 702.45 C 959.24 720.52 956.19 739.39 955.83 756.75 C 954.96 797.57 955.28 842.51 962.96 884.21 C 965.15 896.11 968.33 907.72 975.37 917.40 A 1.48 1.46 27.9 0 1 975.65 918.29 C 975.42 926.20 976.32 934.21 975.03 942.01 C 971.89 960.94 969.95 978.86 973.41 997.96 C 973.70 999.53 973.58 1001.87 973.23 1003.42 C 959.26 1065.20 965.77 1130.76 981.86 1191.82 C 985.51 1205.68 986.32 1220.46 984.96 1234.92 C 984.02 1244.98 982.27 1255.20 983.30 1265.30 C 984.08 1272.87 988.23 1284.18 983.14 1291.21 C 978.75 1297.25 969.45 1303.98 963.07 1312.35 C 960.11 1316.25 952.52 1335.31 964.02 1333.54 Q 964.55 1333.46 964.42 1333.98 C 962.73 1340.59 969.52 1340.54 974.36 1340.95 Q 974.88 1341.00 975.24 1341.37 C 978.64 1344.83 981.89 1347.54 986.66 1344.41 Q 987.11 1344.12 987.46 1344.52 C 992.32 1350.09 997.09 1350.27 1003.06 1346.11 Q 1003.50 1345.80 1003.93 1346.12 C 1005.34 1347.18 1006.20 1348.82 1007.59 1349.58 Q 1011.98 1351.98 1017.08 1351.27 A 1.56 1.56 0.0 0 0 1017.93 1350.86 Q 1024.28 1344.70 1027.72 1339.46 C 1032.14 1332.71 1030.13 1325.67 1029.71 1317.92 C 1029.27 1309.96 1031.28 1302.44 1033.52 1294.97 C 1034.58 1291.42 1034.05 1286.50 1033.60 1282.59 Q 1032.89 1276.40 1034.01 1270.28 C 1034.95 1265.11 1035.75 1261.39 1034.60 1257.67 Q 1029.90 1242.46 1029.51 1227.25 Q 1028.64 1193.94 1033.40 1159.73 C 1035.13 1147.30 1038.92 1136.76 1043.43 1124.47 Q 1045.16 1119.75 1045.73 1115.31 C 1050.32 1079.07 1044.60 1044.51 1039.86 1008.73 C 1038.66 999.61 1043.98 993.60 1045.54 987.51 C 1048.41 976.36 1049.80 959.10 1047.93 945.66 C 1046.88 938.09 1047.48 931.84 1049.21 924.99 C 1053.15 909.35 1056.75 892.75 1059.78 880.01 Q 1066.27 852.63 1072.60 825.22 Q 1075.98 810.55 1076.49 805.75 Q 1077.50 796.31 1077.72 775.82 Q 1077.85 764.16 1076.54 752.58 Q 1076.32 750.58 1075.99 749.61 Q 1075.45 748.03 1076.95 748.78 L 1083.35 752.00 A 1.10 1.08 44.4 0 0 1084.32 752.00 L 1091.50 748.31 A 0.24 0.24 0.0 0 1 1091.84 748.59 Q 1090.49 753.63 1090.36 758.75 C 1089.82 779.99 1089.54 802.24 1094.28 822.45 Q 1101.55 853.47 1108.92 884.46 C 1111.25 894.25 1114.60 910.13 1117.95 922.87 C 1119.13 927.36 1119.75 931.95 1120.50 936.49 C 1121.14 940.42 1119.45 945.92 1119.24 949.53 Q 1118.26 966.73 1121.38 983.68 C 1121.98 986.96 1123.21 991.52 1124.54 993.96 C 1128.10 1000.50 1128.52 1004.24 1127.36 1012.10 C 1122.34 1046.29 1118.51 1078.84 1121.48 1113.50 C 1121.72 1116.32 1122.66 1120.49 1123.91 1123.73 C 1131.43 1143.10 1134.58 1156.98 1136.42 1177.99 C 1138.35 1200.12 1139.52 1222.20 1136.35 1244.60 Q 1135.88 1247.88 1134.29 1252.69 C 1132.00 1259.62 1132.37 1264.14 1133.83 1271.98 C 1135.50 1280.93 1132.17 1288.45 1134.90 1297.66 C 1136.88 1304.36 1138.19 1310.69 1137.87 1317.88 C 1137.58 1324.48 1135.49 1332.56 1139.15 1338.36 Q 1142.72 1344.04 1149.63 1350.84 Q 1149.97 1351.18 1150.46 1351.25 Q 1158.71 1352.49 1163.67 1346.15 A 0.64 0.64 0.0 0 1 1164.58 1346.04 Q 1173.02 1352.85 1180.03 1344.60 Q 1180.37 1344.20 1180.83 1344.46 Q 1186.12 1347.40 1190.08 1343.66 Q 1192.28 1341.58 1193.29 1341.22 C 1197.87 1339.60 1204.81 1341.71 1203.29 1333.67 A 0.39 0.39 0.0 0 1 1203.82 1333.23 L 1204.86 1333.62 Q 1205.25 1333.77 1205.65 1333.71 C 1212.46 1332.65 1209.17 1324.33 1208.00 1319.87 C 1205.32 1309.62 1192.63 1299.79 1185.30 1292.30 C 1180.77 1287.68 1182.22 1274.71 1183.62 1269.06 C 1186.76 1256.35 1182.79 1239.97 1182.29 1230.50 C 1181.63 1217.80 1182.70 1204.60 1185.99 1191.35 C 1200.90 1131.35 1208.58 1067.26 1194.98 1006.22 C 1193.56 999.84 1194.88 994.32 1195.73 987.24 C 1197.46 972.87 1195.00 955.62 1192.39 940.62 C 1191.27 934.14 1192.32 927.30 1192.25 920.69 Q 1192.25 920.23 1192.09 919.80 L 1191.79 918.97 Q 1191.59 918.45 1191.92 918.00 C 1199.57 907.39 1203.42 893.36 1205.50 881.25 C 1212.13 842.49 1212.38 800.86 1211.97 761.04 C 1211.76 739.76 1208.12 718.12 1205.90 696.81 Q 1204.13 679.89 1197.85 652.94 C 1194.73 639.58 1188.50 627.37 1187.05 613.69 Q 1183.04 575.93 1181.17 542.06 Q 1180.56 530.97 1180.85 518.01 C 1180.96 512.91 1182.20 504.08 1184.51 499.52 C 1186.81 494.98 1189.81 490.71 1191.01 485.74 Q 1195.45 467.32 1197.09 448.35 A 0.55 0.55 0.0 0 1 1197.86 447.90 L 1201.25 449.41 Q 1201.74 449.63 1201.86 450.16 C 1205.49 466.08 1210.60 484.96 1221.09 497.82 C 1229.48 508.13 1227.82 523.50 1229.73 535.92 C 1232.46 553.65 1237.66 569.19 1246.25 585.54 Q 1262.47 616.39 1284.56 662.22 Q 1292.50 678.70 1292.52 695.41 Q 1292.52 695.47 1292.20 701.94 C 1291.63 713.32 1294.91 723.91 1297.35 734.87 C 1300.01 746.89 1305.13 759.34 1305.74 772.33 C 1305.98 777.24 1306.66 804.29 1313.58 804.01 A 1.29 1.29 0.0 0 0 1314.41 803.66 C 1321.43 797.06 1316.55 769.02 1321.52 766.22 A 1.20 1.19 -21.2 0 1 1323.27 766.99 C 1326.58 781.35 1329.25 795.81 1332.92 809.99 C 1334.01 814.20 1338.07 821.55 1342.84 816.86 Q 1343.20 816.50 1343.28 816.00 Q 1344.28 809.42 1343.76 805.00 Q 1341.60 786.63 1337.95 768.42 A 0.48 0.48 0.0 0 1 1338.86 768.15 C 1342.31 776.96 1355.85 815.37 1366.03 816.16 C 1370.51 816.50 1371.54 810.41 1370.44 807.06 C 1367.79 798.97 1363.64 790.62 1361.28 783.45 Q 1357.86 773.08 1355.02 762.60 A 0.28 0.28 0.0 0 1 1355.50 762.34 Q 1359.72 767.36 1363.75 772.57 C 1368.83 779.14 1373.25 787.32 1378.17 794.66 Q 1379.99 797.36 1381.66 797.98 C 1384.30 798.97 1389.15 796.58 1388.99 793.50 Q 1388.85 790.72 1386.66 786.58 Q 1378.13 770.40 1369.24 754.42 C 1365.36 747.45 1364.08 743.12 1366.68 735.63 Q 1366.81 735.24 1367.20 735.38 Q 1371.90 736.99 1372.91 738.60 Q 1379.67 749.28 1393.03 749.97 C 1401.07 750.38 1400.13 741.50 1395.34 738.12 C 1390.41 734.62 1384.54 731.36 1381.93 726.55 C 1378.04 719.37 1374.79 711.78 1368.18 706.82 Q 1357.23 698.60 1343.50 693.43 C 1335.51 690.42 1332.54 680.64 1330.25 672.50 C 1321.70 642.22 1315.13 611.45 1310.75 580.29 Q 1308.97 567.62 1308.28 563.74 C 1302.89 533.66 1289.99 510.94 1272.05 486.75 Q 1271.76 486.36 1271.76 485.88 C 1271.89 470.59 1270.82 455.36 1265.92 440.80 C 1263.95 434.94 1260.59 428.46 1257.79 422.38 Q 1256.94 420.52 1257.10 418.48 C 1258.73 398.21 1260.25 378.73 1258.88 358.36 C 1257.39 336.36 1241.06 316.98 1223.33 305.40 C 1213.33 298.87 1205.11 297.32 1193.06 298.08 C 1179.40 298.94 1169.27 299.86 1157.52 293.24 Q 1139.58 283.12 1124.50 267.54 Q 1124.15 267.19 1124.04 266.70 Q 1121.33 254.82 1121.08 242.66 C 1120.97 237.52 1120.38 234.21 1124.51 231.78 Q 1124.95 231.52 1125.21 231.07 C 1128.92 224.63 1129.03 215.40 1128.17 207.76 Q 1128.08 207.01 1128.59 206.65 Q 1128.95 206.40 1129.15 206.78 L 1130.41 209.10 A 1.80 1.79 -42.1 0 0 1133.47 209.25 C 1138.33 202.11 1153.60 172.22 1141.68 166.80 Q 1141.16 166.57 1140.69 166.88 L 1138.38 168.39"
+};
+const MUSCLE_PATHS = {
+  front: {
+    "chest":["M272.91 422.84c-18.95-17.19-22-57-12.64-78.79 5.57-12.99 26.54-24.37 39.97-25.87q20.36-2.26 37.02.75c9.74 1.76 16.13 15.64 18.41 25.04 3.99 16.48 3.23 31.38 1.67 48.06q-1.35 14.35-2.05 16.89c-6.52 23.5-38.08 29.23-58.28 24.53-9.12-2.12-17.24-4.38-24.1-10.61z","M416.04 435c-15.12.11-34.46-6.78-41.37-21.48q-1.88-3.99-2.84-12.18c-2.89-24.41-5.9-53.65 8.44-74.79 4.26-6.26 10.49-7.93 18.36-8.56q11.66-.92 23.32-.35c10.58.53 18.02 2.74 26.62 7.87 12.81 7.65 19.73 14.52 22.67 29.75 4.94 25.57.24 64.14-28.21 74.97q-12.26 4.67-26.99 4.77z"],
+    "obliques":["M264.21 435.53c-4.88-3.13-5.75-12.11-5.39-17.36q.03-.53.51-.75 1.8-.84 3.43.85 10.05 10.45 22.57 16.9c3.64 1.89 5.54 3.62 4.79 7.8q-.42 2.35-2.82 1.87-12.45-2.49-23.09-9.31z","M287.33 452.44c-4.05 4.46-10.38 11.38-16.28 14.3a.84.83 51.1 01-.9-.1c-6.29-5.17-12.54-18.97-14.21-25.09q-.91-3.34.85-8.81.12-.39.35-.05c2.41 3.65 4.59 7.74 8.67 9.76q10.18 5.05 21.27 9.01a.61.61 0 01.25.98z","M297.3 487.82c-7.36-4.23-16.68-11.37-20.55-17.57q-.32-.5.09-.92 8.72-9.04 19.84-17.87 1.46-1.17 2.81-1.67a.44.44 0 01.59.43c-.28 10.08-.4 20.42.65 30.43q.34 3.26-.68 6.15a1.9 1.9 0 01-2.75 1.02z","M257.35 456.18l13.68 16.63a1.86 1.82 22.9 01.4.95c.59 5.4-2.02 12.71-3.8 17.56q-.3.84-.84.13-11.85-15.55-9.77-35.17.04-.45.33-.1z","M271.69 494.07a1.53 1.52-61.8 01-.49-1.64l4.2-13.58a.98.98 0 011.51-.5c3.2 2.32 21.89 14.05 22.26 16.7q1.15 8.32.66 16.79a.9.9 0 01-1.34.73q-14.24-8.05-26.8-18.5z","M299.35 544.62c-7.52-6.03-16.15-13.43-24.23-21.24-6.93-6.7-6-17.19-4.88-26.06a.44.44 0 01.72-.28q13.31 11.88 28.41 21.38.43.27.6.75c2.33 6.49.95 18.37-.07 25.23q-.09.59-.55.22z","M299.09 575.53c-7.98-3.65-27.57-15.86-28.06-26.2q-.57-11.91.46-24.3a.36.36 0 01.67-.15q.84 1.36 2.17 2.54 10.59 9.45 21.68 18.31c4.37 3.49 4.34 6.46 4.16 11.74q-.3 8.82-.42 17.64-.01.72-.66.42z","M308.17 657.58c-7.39-.13-12.41-4.13-17.14-9.39q-11.86-13.22-23.92-26.37-.33-.36-.33-.85.09-23.18 1.81-46.22.53-7.13 2.49-14.41a.71.71 0 011.2-.3q11.54 12.06 25.82 21.1 3.36 2.12 3.62 5.17 2.06 23.67 3.86 47.36c.58 7.62 2.31 13.36 4.43 20.82q.47 1.66-.96 2.79-.39.31-.88.3z","M438.7 444.36c-2.09-4.03-.13-6.83 3.63-8.81 10.22-5.36 16.79-11 24.23-18.07a1.71 1.71 0 012.89 1.12c.33 4.74-.81 14.39-5.53 17.22-4.68 2.82-18.74 10.02-24.39 9.14q-.57-.09-.83-.6z","M457.39 466.73c-3.72-1.02-13.2-10.29-16.5-14.49a.52.52 0 01.24-.81q10.94-3.75 21.31-9c3.96-2.01 6.3-5.98 8.57-9.58q.38-.59.55.09c.82 3.33 1.54 6.17.38 9.58-2.55 7.44-7.62 18.79-13.66 24.01a.96.96 0 01-.89.2z","M428.43 487.22c-1.01-1.79-.82-4.55-.71-6.72q.78-15.08.48-30.27-.01-.59.55-.4 1.72.59 3.02 1.64 11.58 9.37 18.82 16.95c3.86 4.05-16.2 17.42-19.56 19.48a1.87 1.86 59.6 01-2.6-.68z","M470.76 456.28a.25.25 0 01.44.13q2.03 19.67-9.8 35.22-.37.48-.6-.08c-1.37-3.29-5.86-16.13-3.51-18.91q6.3-7.47 13.47-16.36z","M452.27 478.5c1.13.49 4.28 12.47 4.78 14.38q.14.5-.23.88-1.29 1.35-2.65 2.41-10.44 8.12-21.76 14.97-1.49.9-2.91 1.33a.81.81 0 01-1.05-.71q-.73-8.62.67-17.15.08-.47.44-.8c1.74-1.6 21.96-15.73 22.34-15.51a.58.03 31 00.37.2z","M428.22 519.14q.11-.36.43-.56 15.3-9.66 28.83-21.69a.43.42-22.6 01.71.29c.51 8.26 2.25 18.67-4.46 25.4q-11.8 11.84-25.03 22.09-.43.34-.49-.2c-.75-6.82-1.97-18.92.01-25.33z","M456.54 524.55a.04.04 0 01.07.02q1.52 13.67.41 27.4-.04.47-.28.88c-4.97 8.3-18.23 19.62-27.88 22.63q-.57.17-.58-.43-.05-10.31-.27-20.53-.1-4.8 2.63-7.09c8.54-7.13 18.56-14.62 25.9-22.88z","M418.89 657.11q-1.12-1.67-.43-3.63 3.27-9.38 4.04-18.23 1.97-22.81 3.58-45.65c.16-2.32.72-6.41 2.84-7.71q14.97-9.23 27.16-21.93.41-.42.71.08 1.29 2.15 1.53 4.2 3.23 27.74 3.13 56.8a1.3 1.28-24.5 01-.33.86q-12.74 13.93-25.55 27.75c-4.8 5.17-9.09 7.87-15.73 7.96q-.61.01-.95-.5z"],
+    "abs":["M311.02 531.71a.23.23 0 01-.19-.21q-.39-10.47 1.9-20.76c1.26-5.69 7.66-9.9 13.1-12.9 9.09-5.01 18.93-11.15 28.56-14.92a1.24 1.21-42.6 01.94.03c3.28 1.52 4.78 3.87 4.82 7.68q.13 13.16-.15 26.31c-.08 3.85.78 8.39-.87 13.1q-.17.46-.59.72-2.65 1.65-4.29 1.82-21.06 2.22-43.23-.87z","M321 577.76c-5.17-.33-8.71-.44-10-6.26q-3.2-14.44-.59-27.83.11-.53.64-.63c7.58-1.44 13.62-2.45 22.45-4.56q11.5-2.76 23.94-1.88c3.67.26 3.3 3.46 3.4 6.21q.46 12.55-.33 26.94-.25 4.41-1.81 8.08-.21.49-.73.6-1.39.28-3.22.29-16.89.14-33.75-.96z","M347.73 429.25c7.46-3.61 10.5 6.27 10.99 11.52.48 5.06 3.46 30.61-2.78 32.93q-4.17 1.55-6.89 3.33-17.56 11.54-35.88 21.46a1.6 1.59-21.9 01-2.3-.98c-2.87-10.41-10.59-43.96 1.66-50.95 11.3-6.45 23.96-11.86 35.2-17.31z","M350.35 712.81c-29.15-9.93-37.98-100.69-39.47-126.61a.99.99 0 01.33-.8c3.58-3.26 27.61-1.47 34.62-.93 4.41.34 15.27 1.31 15.26 7.53-.05 40.77.64 82.05-1.96 122.72a1.29 1.29 0 01-1.86 1.08c-2.3-1.14-4.12-2.04-6.92-2.99z","M371.94 473.31c-5.46-2.59-2.97-24.26-2.77-29.56.25-6.8 2.41-18.63 12.64-13.8q16.26 7.67 32.34 15.72 6.18 3.1 7.13 10.05c.58 4.26 1.35 8.49 1.07 12.72q-.84 12.55-4.33 26.56-.54 2.16-1.1 3.44-.25.58-.81.31c-15.78-7.29-30.79-19.08-44.17-25.44z","M382.57 533.27c-4.17-.18-9.56-.3-13.15-2.69q-.17-.11-.24-.31c-1.82-5.55-.86-11.17-.96-15.66-.18-8.4-.78-17.36.06-25.71.29-2.85 1.88-4.42 4.15-5.79q.42-.26.91-.19 1.71.25 3.21 1.03 12.48 6.44 24.75 13.26c4.96 2.75 12.21 7.02 13.72 12.41q2.93 10.56 2.39 21.49a.77.76-1.8 01-.67.71q-16.89 2.18-34.17 1.45z","M373.75 578.69c-2.47 0-4.31.22-5-2.7-1.8-7.7-3.05-34.29-.19-38.81q.27-.43.77-.47 13.14-1.24 25.77 1.83c8.41 2.04 14.51 3.01 21.85 4.36a1.29 1.28.6 011.05 1.07q2.16 14.12-.73 28.07c-1.08 5.24-5.22 5.26-10.36 5.63q-14.26 1.04-33.16 1.02z","M416.32 584.73q1.14.41 1.07 1.62c-1.62 26.44-9.96 116.68-40.43 126.74-2.27.75-4.15 2.12-6.35 2.73q-1.18.33-1.3-.89-.86-9.2-1.06-17.75c-.83-35.67-.91-71.2-1.01-106.88q0-.5.31-.89c4.95-6.46 41.69-7.25 48.77-4.68z"],
+    "biceps":["M189.52 492.51c-2.43.62-7.38.57-7.51-3.08-.56-16.01-.42-35.49 5.11-50.26 3.19-8.54 13.89-30.22 23.27-32.72 10.08-2.68 12.68 16.59 12.6 22.8-.22 15.98-7.51 34.79-15.05 48.71-4.29 7.94-9.95 12.38-18.42 14.55z","M526.69 486.31c-9.9-8.61-17.75-33.21-20.65-47.73-1.41-7.06-1.34-29.61 8.58-32.16 10.33-2.66 23.81 25.34 26.6 32.91q2.6 7.04 3.6 16.13 1.62 14.66 1.66 32.28c.03 11.04-16.45 1.48-19.79-1.43z"],
+    "triceps":["M206.2 514.2c-5.41-.67-6.55-7.29-4.69-11.42 11.08-24.55 22.84-50.62 30.54-75.51 1.37-4.41 3.08-8.59 3.95-12.45q2.94-13.12 5.79-26.26.42-1.98 1.82-3.39a.52.52 0 01.81.1q1.04 1.69 1.94 4.56 4.63 14.65 5.15 24.92c.57 11.36-5.11 24.55-8.65 35.5q-7.69 23.78-20.25 45.39c-2.45 4.23-11.51 19.18-16.41 18.56z","M517.69 512.06c-20.07-22.12-28.95-51.73-38.01-79.03-3.27-9.87-3.58-19.18-1.34-29.38 1.29-5.88 2.49-13.03 5.61-18.52q.32-.57.72-.06 1.35 1.67 1.79 3.69c2.67 12.33 5.14 24.49 9.07 36.52 8.25 25.28 18.58 49.8 31.1 77.2q1.42 3.1 1.05 5.33c-.81 4.89-5.46 9.25-9.99 4.25z"],
+    "neck":["M354.01 315.07q-3.49-3.65-5.9-8.23c-6.46-12.3-11.03-25.42-16.12-38.77-2.92-7.66-1.98-19.44-1.61-27.6q.03-.58.47-.21c9.06 7.39 11.33 17.46 15.67 27.62 5.4 12.61 15.4 33.31 9.11 46.92a1 .99 35.5 01-1.62.27z","M345.77 316c-4.12-1.96-12.78-6.76-15.07-11.38-4.29-8.65-2.69-16.02-2.28-25.25a1 1 0 011.95-.28c4.29 12.42 10.5 24.4 15.71 36.61q.23.55-.31.3z","M372.75 314.71c-5.78-9.67 1.71-31.17 6.17-40.68 5.95-12.68 8.21-24.68 18.35-33.9a.49.49 0 01.82.35c.28 8.68.84 19.39-1.97 27.72-5.26 15.58-11.39 33.46-21.42 46.62a1.18 1.18 0 01-1.95-.11z","M398.01 278.49a.5.49 35.5 01.87-.14c2.01 2.7 1.62 11.6 1.61 15.13-.04 12.42-8.2 17.45-17.9 22.58a.35.35 0 01-.48-.46c5.51-12.02 11.85-24.46 15.9-37.11z","M362.65 290.52q-1.14-1.37-1.86-3.41-5.33-15.15-12.14-29.75c-2.37-5.06-1.07-9.07-7.92-10.99q-1.01-.28.02-.47c5.98-1.08 15.25.91 21.33 2q2.37.42 4.81-.09 10.09-2.13 20.45-2.12a.37.37 0 01.08.73c-6.34 1.46-5.45 5.64-7.57 10.21q-6.1 13.1-11 26.69-1.3 3.62-2.9 6.81a1.99 1.99 0 01-3.3.39z"],
+    "trapezius":["M285.01 307.01a.89.89 0 01-.11-1.64q19.44-9.61 35.65-24.8 1.68-1.57 3.31-.31.4.32.45.82 1.25 12.61-1.57 25.41c-.74 3.32-2.55 4.23-5.9 4.48q-16.02 1.24-31.83-3.96z","M414 311.19c-5.24-.12-7.81-.64-8.9-6.27q-2.33-12.09-1.17-23.94.06-.61.61-.89 1.66-.85 3.65.99 16.12 14.87 33.97 23.63 3.65 1.79-.27 2.89-13.88 3.91-27.89 3.59z"],
+    "deltoids":["M274.06 311.69q3.94 2.77 4.33 8.14.04.48-.38.73c-9.98 5.88-24.35 7.45-28.82 19.75-2.31 6.36-.97 17.35-1.43 23.68q-.55 7.51-5.73 14.07-10.37 13.11-13.81 16.67c-3.41 3.53-6.81 1.76-10.69-.47-15.42-8.87-24.95-25.45-22.52-43.22 2.05-14.92 12.71-25.79 24.06-35.02 16.99-13.82 35.58-17.99 54.99-4.33z","M450.39 320.75q-.95-.52-.7-1.58c1.57-6.61 5.8-9.1 12.14-11.9 24.99-11.03 43.76 3.33 60.17 20.74 20.73 21.99 11.81 56.44-14.82 68.19-4.41 1.94-6.79-1.03-9.81-4.51-5.81-6.7-13.46-14.12-15.99-22.8-3.93-13.43 4.32-27.54-9.64-37.62q-8.22-5.93-17.99-9.08-1.84-.59-3.36-1.44z"],
+    "adductors":["M280.26 647.4c11.65 10.74 22.18 21.04 31.02 34.3 15.82 23.72 27.55 49.72 34.01 77.58 1.34 5.79-6.14 20.34-12.62 20.22q-.52-.01-.72-.49-.67-1.59-1.21-3.13c-14.68-41.71-27.96-79.71-46.87-117.01-1.9-3.74-3.05-7.33-4.06-11.2a.27.27 0 01.45-.27z","M331.64 898.32q-.17.57-.23-.02c-2.23-25.01-8.47-50.09-14.25-74.53q-19.4-82.1-42.46-163.69-.58-2.08.33-.13c19.88 42.53 38.94 86.51 51.64 132.07 9.49 34.06 15.59 71.67 4.97 106.3z","M334.46 789.17c1.56-2.63 14.39-20.38 16.2-20.37a1.71 1.7-89.2 011.7 1.76q-1.12 34.88-7.4 68.95c-.38 2.06-1.41 4.27-2.16 6.23q-.24.62-.34-.04-3.68-25.45-8.44-50.7c-.34-1.79-.63-4 .44-5.83z","M395.47 779.4c-5.7 1.33-11.34-11.87-12.46-15.86q-.61-2.18-.02-4.65 10.17-42.64 35.06-78.81c9.47-13.77 18.83-22.36 29.85-32.56q.55-.5.4.22-1.12 5.7-3.73 10.83c-19.44 38.38-33.3 79.2-47.77 119.65a1.84 1.83-86.4 01-1.33 1.18z","M453.65 658.99q.67-1.43.23.09-26.73 93.75-48.63 189.74c-1.98 8.7-3.66 17.9-5.44 26.84q-2.19 11.05-2.78 22.43a.15.15 0 01-.3.04c-8.18-24.48-6.74-51.98-1.87-76.86 11.07-56.49 34.44-110.42 58.79-162.28z","M377.91 768.67c1.49.84 1.76 1.49 2.66 2.66q6.16 8.04 12.23 16.13c1.88 2.52 1.97 4.18 1.38 7.45q-4.57 25.23-8.43 50.57-.11.71-.4.05-1.89-4.29-2.54-8.09-5.57-32.28-6.98-65.01-.09-2 .81-3.44a.95.94 30.8 011.27-.32z"],
+    "quadriceps":["M292.42 935.6q-.95-.52-1.57-1.4-4.1-5.79-7-13.53-7.8-20.79-13.3-42.33c-9.06-35.53-19.33-71.36-25.03-107.59-5.33-33.86 4-74.19 20.7-103.37q.35-.62.53.07c14.44 55.57 39.03 107.94 41.45 165.34 1.11 26.34.66 52.96-3.6 79.03-.63 3.83-4.73 27.81-12.18 23.78z","M275.11 942.93q-2.42-2.18-3.57-5.24c-3.98-10.61-7.68-21.02-12.81-31.32-7.85-15.76-10.77-34.56-13.2-51.46-2.11-14.63-2.31-31.47-3.93-47.18-.22-2.16-1.04-12.78.46-13.79q1.36-.92 2.08.55c1.5 3.08 3.12 6.12 3.66 9.58q8.21 52.38 26.36 102.15c2.87 7.87 9.98 30.5 1.85 36.74a.71.7-42.5 01-.9-.03z","M322.69 945.72c-3.73 6.14-10.77-2.43-12.6-5.6-3.16-5.47-2.62-14.93-1.78-20.81 4.03-28.09 5.6-52.81 3.48-80.78q-.06-.79.28-.08 15.77 32.83 14.26 68.9c-.4 9.54-2.94 22.48-2.91 34.13q.01 3.02-.73 4.24z","M437.82 933.52c-8.9 14.18-15.15-26.74-15.46-29.25q-5.26-43.04-1.19-86.08c4.9-51.8 26.91-99.32 40.38-150.92q.18-.66.5-.06c17.25 31.67 25.39 68.28 20.54 104.36q-2.29 17.02-8.71 42.76-7.56 30.25-15.2 60.47-6.13 24.25-15.06 47.61-1.83 4.79-5.8 11.11z","M451.79 942.6c-9.95-10.01 4.97-42.91 8.94-55.41q12.55-39.53 19.27-80.47c.49-2.97 2.64-12.34 5.41-13.28a.83.83 0 011.09.64q.74 4 .45 7.92c-1.99 26.52-3.37 58.99-11.01 87.73q-2.53 9.5-7.46 18.8c-4.38 8.24-6.97 16.72-10.08 25.27q-1.66 4.54-4.55 8.63a1.35 1.35 0 01-2.06.17z","M406.69 946.81c-3.24-2.77-1.48-10.64-2.01-14.71q-2.23-17.18-2.57-22.16c-1.75-25.07 3.61-49.11 13.98-71.92q.23-.51.2.05c-1.2 19.15-1.28 38.18.83 57.38q1.68 15.4 3.39 30.8c.43 3.92-.31 9.71-2.09 13.33-1.62 3.28-7.58 10.77-11.73 7.23z"],
+    "knees":["M297.69 1008.37c-7.27 7.29-16.34 3.42-19.64-5.18q-6.18-16.11-9.57-30.68c-1.99-8.6-2.24-19.68 9.72-19.91q13.12-.24 26.05 2.15 1.71.32 3.29 1.02a1.17 1.15 4.2 01.63.72c3.17 10.27 2.5 23.36.05 33.69q-2.37 10.01-10.53 18.19z","M288.03 1059.54c-6.99-5.81 13.75-46.43 17.3-53.91q7.3-15.38 10.9-32.01c.74-3.42 2-6.31 4.18-8.64a1.36 1.35 54.7 012.23.39c3.97 9.09 1.66 13.86-1.67 24.65q-10.23 33.19-27.2 63.57-1.8 3.23-4.2 5.84a1.13 1.12-49 01-1.54.11z","M430.44 1008.31c-12.92-12.62-14.34-33.49-10.92-50.31.31-1.53 1.09-2.53 2.73-2.86q11.44-2.25 23.08-2.59c14.13-.42 17.31 5.67 14.54 18.63q-3.13 14.69-9.12 30.37c-3.45 9.03-11.63 15.25-20.31 6.76z","M438.96 1059.52q-2.25-1.89-3.8-4.64-20.15-35.92-31.06-75.66-2.11-7.68 1.95-14.16a1.16 1.16 0 011.91-.08c2.26 3.06 3.4 5.4 4.26 9.37 3.98 18.54 10.94 32.53 20.07 51.09 3.51 7.14 11.38 26.16 8.5 33.61a1.16 1.16 0 01-1.83.47z"],
+    "tibialis":["M263.52 973.59a.6.6 0 011.09-.14q1.38 2.22 1.83 5.06c7.87 49.97 18.01 99.59 25 149.68q4.63 33.19 4.31 67.55-.04 3.45-2.15 5.76-.4.44-.75-.03-1.89-2.58-3.08-5.51c-11.63-28.6-20.46-58.12-24.26-88.68q-4.96-39.97-5.72-69.53c-.13-5.27-.17-12.59.35-18.98q1.7-20.77 2.52-41.6c.04-1.16.52-2.43.86-3.58z","M463.39 973.68a.7.7 0 011.25-.1c.27.46.64 1.34.68 1.93q1.26 20.88 2.53 41.76.66 10.82.39 19.98-1.23 40.77-7.51 82.25c-3.91 25.87-12.19 51.55-21.96 75.76q-1.13 2.79-3.27 6.13-.29.44-.71.12c-2.68-2.06-2.32-6.7-2.29-10.32.26-31.03 2.71-55.52 8.76-91.4q9.27-55.06 18.94-110.05c.8-4.5.99-10.52 3.19-16.06z"],
+    "calves":["M252.09 1032.57c.24-3.71 2.14-22.17 4.63-24.18a1.03 1.02-17.9 011.67.85c-.45 7.89-1.27 16-1.49 23.45q-.57 18.93-.66 37.88-.02 3.63.34 6.85c2.08 18.76 5.56 37.32 9.3 55.8 3.82 18.84 9.13 37.64 13.11 56.63q2.44 11.68 2.08 17.95c-.32 5.7-3.08 20.49-8.51 23.92a.62.62 0 01-.84-.16q-1.2-1.65-.95-3.55c.92-7.26 1.45-14.15-.3-21.52q-8.25-34.74-13.62-59.06c-1.86-8.44-3.17-17.18-3.93-26.3q-3.69-44.24-.83-88.56z","M315.01 1025.17a.16.16 0 01.32.02c4.06 25.75 8.98 52.72 8.71 77.81q-.13 12.06-5.74 26.31c-7.2 18.3-8.93 38.57-15.95 56.93q-.18.48-.21-.03c-1.87-34.47-5.67-65.91-8.56-103.28q-.97-12.49 4.44-23.14 7.47-14.69 15.14-29.29c.81-1.55 1.35-3.62 1.85-5.33z","M455.5 1231.67c-7.13-5.81-9.23-24.34-8.2-31.86 1.41-10.32 4.63-23.14 7.98-36.33q9.54-37.46 15.15-75.74c2.86-19.5 1.53-40.15.75-59.8-.22-5.67-.98-12.51-1.23-18.75a.97.97 0 011.87-.4c.35.86.92 1.76 1.12 2.68q2.96 14.31 3.31 20.53 2.37 43.28-.49 84.75-1.21 17.42-5.43 35.77-6.33 27.51-12.84 54.98-2.01 8.49-.11 18.36c.36 1.9.11 3.95-.68 5.55a.79.79 0 01-1.2.26z","M412.77 1025.44a.14.14 0 01.27-.04c4.88 11.62 10.93 22.01 17.28 34.78 4.07 8.19 4.71 14.41 4.1 24.25-2.13 34.3-6.27 68.85-8.45 101.59q-.05.69-.31.05-1.48-3.67-2.28-6.75c-4.34-16.75-8.78-38.38-16.39-57.57q-1.4-3.55-2.2-10.11c-1.78-14.73-.2-31.24 2.04-45.88q3.06-20.02 5.94-40.32z"],
+    "forearm":["M127.23 683.05c-4.07-2.12 1.27-27.07 2.25-31.57 4.98-23.03 9.17-46.17 13.91-69.25q1.53-7.47 2.13-15.13c.93-12.09.81-22.15 6.23-31.59 7.1-12.33 13.54-29.16 26.1-36.73a1.98 1.97 62.7 012.84.91c1.92 4.48 1.93 8.28 2.06 14.15.44 19.77-1.3 41.04-8.72 59.67-11 27.62-22.22 55.21-32.62 82.91-4.04 10.76-7.56 20.66-12.82 26.39q-.59.65-1.36.24z","M201.5 527.4a.84.84 0 01.67.65c3.98 17.15-2.93 39.36-10.95 54.41-4.6 8.63-13.06 20.43-18.21 31.33q-13.21 27.92-24.58 56.64-2.51 6.35-6.61 11.02a1.43 1.43 0 01-2.5-.81q-.36-3.78.84-7.17 10.31-29.18 21.57-57.99c6.32-16.18 14.55-31.65 20.66-47.87 3.69-9.82 5.36-22.36 7.32-30.62 1.49-6.27 4.19-11.06 11.79-9.59z","M207.33 540.4a.6.59-63.1 011.03-.34l5.38 6.02q.4.45.33 1.06-.52 4.1-1.29 5.84-6.91 15.65-13.69 31.35c-5.41 12.53-16.33 28.4-23.51 44.89-8.3 19.08-16.03 39.32-26.75 57.16a.36.36 0 01-.62 0l-.19-.32q-.17-.28-.06-.59 10.08-29.91 23.05-58.65 2.9-6.42 5.47-11.21c4.62-8.59 10.86-16.17 14.62-23.02q13.23-24.13 16.23-52.19z","M600.08 683.04c-5-4.14-8.97-15.46-11.29-21.56-5.82-15.25-11.38-30.55-17.58-45.7q-9.15-22.39-18.02-44.89c-5.58-14.19-7.32-31.42-7.99-46.57-.29-6.44-.68-19.43 2.67-25.02a1.71 1.71 0 012.25-.63c6.72 3.52 11.29 9.96 14.87 16.5q6.25 11.38 12.68 22.66c1.97 3.45 2.93 7.66 3.41 12.06 1.16 10.6 1.55 21.29 3.66 31.65 3.93 19.29 7.38 38.63 11.47 57.92 1.5 7.07 9.3 39.08 5.12 43.5a.91.91 0 01-1.25.08z","M586.58 681.46q-4.35-4.47-6.75-10.61-11.35-28.91-24.59-57.01c-5.72-12.13-14.32-22.86-19.97-35.1-7.1-15.36-12.9-33.32-9.27-50.31a1.44 1.43-87.1 011.23-1.12c7.47-.88 9.29 2.88 11.02 9.2 3.39 12.42 4.76 25.91 9.75 36.7 15.55 33.65 27.61 64.94 39.31 98.42 1.13 3.24 2.05 5.47 1.62 9.04a1.38 1.37 26.3 01-2.35.79z","M579.58 686.43q-3.92-5.77-6.87-12.13-8.05-17.34-19.75-44.5-2.68-6.24-6.46-13.62c-5.14-10.05-13.15-22.36-17.34-31.85q-9.55-21.68-13.66-31.36-1.09-2.58-1.33-5.87-.04-.61.37-1.07l5.24-5.85a.69.69 0 011.2.4q2.74 27.05 15.49 50.75 1.7 3.17 8.26 12.86 7.02 10.39 12.18 21.88 8.71 19.41 20.19 50.1 2.22 5.92 3.13 9.98a.36.36 0 01-.65.28z"],
+    "hands":["M100.98 745.85c-9.03-6.62-15.78-13.18-13.3-24.59 2.67-12.29 15.01-20.6 25.37-26.21 7.76-4.21 18.22-1.68 26.15.97 7.14 2.39 11.11 6.16 11.1 13.86q-.04 18.51-4.75 36.37c-5.47 20.76-34.48 6.99-44.57-.4z","M53.81 746.32a.91.91 0 01-.74-.95c.14-2.49-.23-6.34 2.25-7.8 4.66-2.71 11.37-5.53 14.15-10.3q6.32-10.86 16.56-20.3 1.27-1.17.64.44c-1.45 3.73-2.86 7.21-3.87 11.59-2.76 11.9-14.62 30-28.99 27.32z","M87.21 745.05c1.44.46 8.14 2.66 8.61 4.55 1.26 5.12-4.42 8.54-7 12.25-7.73 11.1-15.12 23.38-24.25 33.28a1.22 1.22 0 01-2.11-.86c.11-3.93.38-7.1 2.43-10.65q10.27-17.71 19.31-36.11.32-.65 2.13-2.27.38-.35.88-.19z","M108.11 758.12a2.16 2.16 0 011.07 2.87q-10.49 22.55-19.92 45.81c-1.45 3.56-4.37 5.15-7.82 6.04a1.35 1.34-8.1 01-1.69-1.26c-.11-3.05.37-5.87 1.58-8.9q8.1-20.28 15.15-40.96c.41-1.2.62-3.33 1.69-4.85a1.21 1.21 0 01.91-.49q4.72-.21 9.03 1.74z","M134.09 799.9q-1.16-1.7-1.41-3.73-2.1-17.07-1.18-34.29.03-.6.61-.75l6.93-1.85q.68-.19.65.52-.51 10.9-.85 21.71c-.28 8.58.1 12.65-4.17 18.4a.36.36 0 01-.58-.01z","M108.13 814.65a1.48 1.48 0 01-1.62-1.47c-.02-2.83-.14-5.66.32-8.53q2.9-17.79 5.4-35.65.53-3.84 1.58-7.56a.66.66 0 01.76-.48l7.26 1.24a.97.97 0 01.78 1.14q-4.76 23.96-9.1 46.26-.9 4.64-5.38 5.05z","M591.31 755.99c-8.06-2.93-8.66-9.76-10.28-17.06q-3.22-14.42-3.1-29.3.04-4.06 1.46-6.55c4.34-7.57 18.16-9.91 25.63-10.35 8.75-.51 18.37 6.96 24.99 12.27q8.92 7.17 10.74 17.52c2.45 13.89-12.11 23.41-22.7 29.04-6.95 3.69-18.63 7.39-26.74 4.43z","M641.97 706.78q10.85 9.65 17.61 21.91c1.63 2.97 9.74 6.76 12.87 8.59 2.9 1.7 3.03 4.81 2.55 8.5q-.06.42-.48.49c-8.16 1.32-11.99-1.93-17.72-7.23-10.35-9.58-10.5-20.33-15.33-31.9q-.54-1.29.5-.36z","M638 760.07c-2.54-3.42-7.52-6.03-5.44-11.11q.18-.44.61-.63l7.41-3.3q1.29-.58 2.05.62 3.33 5.23 5.69 10.04 6.84 13.94 14.71 27.33c1.35 2.29 4.28 10.16 2.25 12.11a1.22 1.22 0 01-1.77-.08c-9.43-10.98-16.85-23.36-25.51-34.98z","M647.83 812.68c-4 .24-7.71-2.87-9.11-6.38q-9.28-23.27-19.74-45.33a2.05 2.05 0 01.92-2.71q4.5-2.28 9.62-1.7a1.09 1.07 83.8 01.89.73q7.5 23.06 16.57 45.5 1.8 4.46 1.5 9.24a.7.7 0 01-.65.65z","M596.17 761.18a.84.84 0 01.62.81c-.01 4.86.95 35.3-2.71 37.67q-.49.32-.82-.17-3.41-5.21-3.51-8.49-.45-15.62-1.16-31.23-.03-.72.66-.52l6.92 1.93z","M621.09 814.28c-4.35 1.91-5.92-3.77-6.5-6.56q-4.52-21.91-8.88-43.95a1.41 1.41 0 011.14-1.66l6.8-1.18a.92.92 0 011.06.76q2.79 16.32 5.09 32.91c.85 6.17 2.2 12.25 1.8 18.95q-.03.52-.51.73z"],
+    "ankles":["M291.88 1208.11c5.48-1.03 11.85 5.55 13.38 10.37q2.45 7.74 1.47 16.83-.09.83-.45.08c-4.31-9.05-8-16.99-15.39-23.88a1.98 1.98 0 01.99-3.4z","M275.88 1270.94c-4.41-3.87-7.4-7.17-4.91-13.37q4.78-11.92 5.49-21.32.62-8.27 6.22-12.84c9-7.33 20.8 15 23.1 22.1 2.55 7.91 4.83 16.36 4.49 24.5-.31 7.14-2.02 17.4-6.49 23.1q-.3.38-.53-.05c-5.67-10.74-18.6-14.41-27.37-22.12z","M430.92 1209.12c2.24-1.35 10.54-2.02 6.02 2.65q-9.99 10.32-14.82 23.8a.28.28 0 01-.55-.08c-.52-10.27-.48-20.45 9.35-26.37z","M445.01 1223.26c8.45 6.56 6.46 16.66 9.35 25.59q1.76 5.43 3.47 10.88c3.84 12.26-27.75 21.49-32.21 32.42q-1.02 2.51-2.17.05c-6.91-14.82-6.79-29.36-1.78-44.58q2.82-8.57 8.02-16.04c3.02-4.35 9.61-12.76 15.32-8.32z"],
+    "feet":["M264.5 1334.5c-3.98-.34-18.59-4.25-19.04-9.44a1.4 1.4 0 01.27-.94c9.66-13.03 20.9-25.49 28.65-39.78q.25-.47.78-.37 9.76 1.78 17.73 7.65a1.19 1.18 43 01.07 1.86c-1.32 1.11-1.65 2.62-1.06 4.35 2.96 8.57-.92 16.55-4.81 25.34-1.79 4.06-1.76 8.99-2.81 13.62a1.56 1.56 0 01-1.99 1.14q-8.36-2.64-17.79-3.43z","M291.87 1340.12c-2.25-2.64-2.07-5.93-.78-9.35q3.34-8.88 4.02-18.35.43-6.02 1.25-8.74 1.32-4.37 3.45-8.22a.66.65 53.7 011.21.19q1.97 9.26 6.28 17.3c2.59 4.85-.82 11.49-2.92 16.14a1.81 1.78-35.8 00-.16.94q.42 4.3-1.9 7.94-.22.33-.61.43l-8.79 2.06a1.06 1.06 0 01-1.05-.34z","M444.66 1337.65q-1.08-1.3-1.28-3.09c-.52-4.48-.73-8.39-2.77-12.64-3.51-7.31-7.06-16.37-4.43-23.19.77-1.99.92-3.79-.76-5.13a1.29 1.28 46.4 01.04-2.04q7.96-5.76 17.59-7.64.46-.1.69.32c7.25 13.1 17.21 24.83 26.45 36.56q1.11 1.41 2.51 3.8a1.17 1.14-51 01.09.95c-1.75 5.01-12.93 7.89-17.77 8.55q-9.87 1.36-19.54 3.82a.82.8-26.2 01-.82-.27z","M426.94 1338.55c-2.01-.34-2.96-5.48-3-7.12-.15-6.02-6.29-11.65-3.12-17.89q4.35-8.53 6.34-17.75a.78.78 0 011.47-.17c2.12 4.52 4.18 9.08 4.35 14.33q.35 10.43 3.97 20.24c1.19 3.22 1.52 5.83.39 8.78a2.32 2.31 19.3 01-2.87 1.38q-3.44-1.09-7.53-1.8z"],
+    "head":["M 418.91 167.68 c 3.92 -1.77 6.58 0.47 7.06 4.32 c 1.48 11.93 -4.92 26.67 -11.75 36.45 c -2.21 3.17 -3.86 0.17 -4.74 -1.76 a 0.38 0.38 0 0 0 -0.73 0.16 c 0.02 8.31 1.01 17.01 -3.36 24.53 c -0.167 0.293 -4.39 4.62 -10.799 9.508 c -23.591 18.112 -41.591 16.112 -61.446 -0.797 c -4.736 -3.649 -5.925 -5.041 -8.805 -7.621 c -5.66 -5.07 -5.28 -17.38 -4.47 -24.92 c 0.05 -0.51 -0.468 -0.892 -0.933 -0.687 a 0.653 0.653 0 0 0 -0.357 0.397 c -0.57 1.69 -2.24 4.05 -4.07 1.48 c -6.2 -8.71 -16.02 -28.53 -11.19 -38.98 c 1.68 -3.627 3.733 -3.91 6.16 -0.85 a 182.853 182.853 0 0 1 3.78 23.29 a 1.02 1.02 0 0 0 1.56 0.77 c 2.79 -1.75 2.61 -18.93 2.63 -24.22 c 0.02 -4.53 1.12 -8.94 3.8 -13.1 c 4.36 -6.76 4.86 -11.51 5.57 -19.82 c 0.47 -5.53 4.34 -8.12 9.77 -8.21 c 6.39 -0.12 12.69 -0.07 19 -0.93 c 4.02 -0.55 7.4 -1.43 11.53 -0.75 c 6.7 1.1 13.44 1.64 20.22 1.62 c 4.607 -0.013 7.523 0.227 8.75 0.72 c 5.96 2.37 5.56 9.73 6.11 15.22 c 0.44 4.34 2.097 8.447 4.97 12.32 c 6.57 8.88 2.19 25.6 5.64 36.36 a 1.14 1.14 0 0 0 2.22 -0.23 c 0.887 -8.36 2.18 -16.45 3.88 -24.27 z z z z"],
+    "hair":["M418.91 167.68q-2.55 11.73-3.88 24.27a1.14 1.14 0 01-2.22.23c-3.45-10.76.93-27.48-5.64-36.36q-4.31-5.81-4.97-12.32c-.55-5.49-.15-12.85-6.11-15.22q-1.84-.74-8.75-.72-10.17.03-20.22-1.62c-4.13-.68-7.51.2-11.53.75-6.31.86-12.61.81-19 .93-5.43.09-9.3 2.68-9.77 8.21-.71 8.31-1.21 13.06-5.57 19.82-2.68 4.16-3.78 8.57-3.8 13.1-.02 5.29.16 22.47-2.63 24.22a1.02 1.02 0 01-1.56-.77q-1.14-11.78-3.78-23.29-1.48-6.99-1.9-9.7c-2.49-15.94.13-40.13 13.53-51.15 9.39-7.72 28.53-11.63 40.37-11.51 4.2.05 8.74-.3 12.68.22 13.82 1.82 31.67 5.83 39.42 18.92 9.01 15.21 9.88 35.14 5.33 51.99z"]
+  },
+  back: {
+    "neck":["M1022.74 290.63a.62.61 25.9 01-.36-1.03q1.71-1.83 4.11-3.11c8.19-4.35 19.4-8.3 23.38-17.48q8.48-19.57 8.22-40.85-.05-4.38.57-5.76c1.98-4.38 9.65-3.66 13.85-2.91 4.3.76 4.71 3.25 4.68 7.3q-.2 24.11-.88 48.2c-.12 4.25 1.6 15.84-4.88 16.32-14.57 1.08-32.6 1.81-48.69-.68z","M1095.75 291.46c-4.3-.25-4.9-3.99-4.95-7.71q-.46-29.47-1-58.94c-.13-7.39 11.74-6.23 15.99-4.85 4.2 1.36 3.01 6.89 2.88 10.79-.28 8.88 5.15 41.1 15.32 46.78q8.6 4.81 17.27 9.51 1.97 1.07 3.26 2.36a.8.79 63.6 01-.45 1.35c-16.12 2.17-33.78 1.56-48.32.71z"],
+    "trapezius":["M1071.06 308.94c5.6 4.92 6.96 17.83 7.43 24.88q1.5 22.3.93 44.68-1.2 46.76-5.66 94a.57.56 3.7 01-.59.51q-.68-.03-.94-1.01-4.29-15.9-9.79-25.19c-10.24-17.31-18.8-31.84-25.59-49.4-10.19-26.38-15.6-54.28-26.46-80.58q-3.07-7.43-7.61-14.07-.3-.43.2-.6 12.47-4.28 25.48-4.85c5.54-.25 12.15.86 18.32 1.41 9.7.87 16.77 3.6 24.28 10.22z","M1163.98 302.12a.43.43 0 01.22.65q-7.08 10.77-11.41 23.37c-10.53 30.61-17.8 62.94-31.3 91.07-5.11 10.64-15.17 25.22-20.12 36.26q-4.08 9.08-6.59 18.83a.77.77 0 01-1.51-.12q-4.27-45.15-5.52-90.99c-.56-20.28-.74-39.92 2.75-60.43 1.04-6.13 2.77-9.98 7.85-13.85 9.8-7.48 18.02-7.73 30.1-9.11 12.02-1.39 23.92.4 35.53 4.32z"],
+    "deltoids":["M980.66 319.58c.19.14.55.19.65.32a.8.8 0 01-.16 1.15c-6.78 4.75-15.26 9.77-20.03 15.58-6.41 7.78-8.76 16.96-9.44 27.04-.39 5.92-1.68 9.5-5.59 13.43-10.02 10.08-19.04 16.47-31.14 20.41q-.75.25-.75-.55.19-18.4-.09-36.3-.14-9.4 1.07-14.22c4.04-16.07 22.8-33.85 39.68-35.64 9.99-1.06 17.34 2.46 25.8 8.78z","M1227.3 316.44c14.62 9.44 25.48 21.03 25.46 39.51q-.02 20.56-.01 41.37a.37.37 0 01-.51.35c-5.08-2.06-10.41-3.98-14.9-6.97-7.84-5.24-21.14-14.95-21.77-24.95-.69-10.75-2.81-20.85-9.76-29.25-4.68-5.65-12.96-10.58-19.6-15.26q-1.23-.87.01-1.71c4.6-3.13 9.91-6.78 15.25-7.98q13.58-3.03 25.83 4.89z"],
+    "upper-back":["M987.06 381.44c-8.48-5.06-14.14-13.28-18.82-22.92q-5.3-10.92-6.46-14.04c-1.49-4.01 35.14-19.22 39.61-20.97q2.75-1.08 4.33-.72c4.33.96 6.61 9.96 7.46 13.7q5.43 23.89 14.65 55.74.78 2.7-.88 4.39c-5.37 5.5-34.69-12.08-39.89-15.18z","M1017.44 583.31q-9.11-9.57-16.97-22.03-2.28-3.62-2.91-7.25c-3.28-18.82-5.77-38.04-10.52-56.55-3.53-13.73-4.74-25.19-6.61-41.43-.85-7.35-5.67-13.34-8.22-18.75q-4.93-10.47-6.44-22.88-.33-2.72 1.89-1.11c7.25 5.27 16.36 6.16 26.91 7.56 8.86 1.19 23.41-3.18 28.94-10.76 3.34-4.58 4.7-6.5 8.86-8.77a.67.66-26.4 01.92.3q10.02 21.8 19.93 43.78c2.56 5.69 12.11 15.88 10.77 21.83-3.65 16.09-9.88 31.96-16.24 47.13-9.72 23.21-18.61 46.72-27.2 70.36q-.24.67-.88.35-1.03-.52-2.23-1.78z","M1017.71 404.73c-23.86 13.25-54.31 7.11-60.45-22.75-1.2-5.81-2.5-15.84.64-20.55 3.63-5.44 7.17 4.18 8.17 6.14 7.71 15.14 31.62 29.16 48.2 31.13q1.84.21 5.26 2.06.4.21.26.64-.86 2.65-2.08 3.33z","M1141.45 397.63a2.17 2.14-3.6 01-1.88-1.64q-.71-2.97.18-5.95 8.74-29.19 11.75-43.29c1.73-8.11 3.07-16.77 6.94-22.08 1.92-2.62 4.28-2.27 7.19-1.15q20.52 7.9 39.09 18.77a1.37 1.36 25.9 01.58 1.67c-6.05 15.46-12.98 30.84-28.43 39.45-9.45 5.26-25.83 15.17-35.42 14.22z","M1149.69 404.8q-2.04-1.15-2.45-3.5-.09-.53.41-.75c4.64-2.04 9.78-2.51 14.63-3.87 11.01-3.1 22.03-10.83 30.34-18.57q6.33-5.89 7.58-8.93c1.02-2.49 3.79-9.5 7-9.46q.52.01.87.39 2.71 3.01 2.81 7.2c.33 13.77-2.24 26.93-13.26 35.95-13.88 11.36-33.12 9.94-47.93 1.54z","M1161.19 419.98c6.1 1.57 11.6.99 17.75.06 8.36-1.27 14.83-2.76 21.34-7.27a.54.53 74.1 01.84.47q-.64 11.88-5.76 22.85c-2.42 5.2-6.64 10.84-8.04 16.67q-1.02 4.24-1.43 8.92-1.64 18.72-6.34 37.47c-4.73 18.91-7.13 38.67-10.8 57.85q-.24 1.24-2.2 4.3c-4.57 7.14-12.22 19.43-19.34 23.88a.44.43-25.6 01-.64-.22c-8.26-22.57-16.6-45.11-25.91-67.23-6.67-15.85-13.27-32.14-17.27-48.42q-1.58-6.41 2.91-12.01 5.21-6.51 8.57-14.14 9.25-21 19.01-41.64a.47.47 0 01.65-.21q6.17 3.37 9.51 9.64c2.45 4.6 12.22 7.75 17.15 9.03z"],
+    "triceps":["M931.03 442.29c-2.01 2.57-6.52 9.71-10.12 9.17q-.52-.08-.8-.52-1.35-2.09-1.84-4.44c-2.25-10.87-3.28-22.88 1.35-33.38 5.45-12.33 18.27-23.68 29.61-31.2a.47.46 68.7 01.71.32l6.42 38.52q.09.54-.26.97c-.47.58-1.12 1.52-1.71 1.94q-9.11 6.58-18.08 13.36-2.9 2.2-5.28 5.26z","M958.15 427.11a.41.41 0 01.55.27q4.44 16.16-2.23 31.41-3.37 7.73-5.91 19.98c-1.51 7.28-8.93 12.21-11.81 18.82-2.42 5.56-2.41 12.5-3.51 16.66-2.14 8.06-8.51 14.15-13.91 20.13a.93.93 0 01-1.54-.25q-.57-1.3-.75-2.89c-1.93-16.91 2.52-33.52 5.71-49.99 2.16-11.21-1.54-24.15 9.68-34.59q9.54-8.86 19.55-17.23c1.3-1.08 2.7-1.72 4.17-2.32z","M903.57 519.67a1.84 1.82-5.4 01-1.12-.92q-3.54-6.97-3.68-15.19c-.37-21.2 3.8-42.53 9.5-63.44q.33-1.23.92-.1 4.64 8.78 8.6 18.67c2.88 7.21 4.19 12.98 1.88 20.57q-6.07 19.96-14.02 39.23-.65 1.58-2.08 1.18z","M1213.94 424.56q-2.02-1.5-3.08-3.02-.31-.46-.22-1 3.32-19.22 6.42-38.46.09-.56.56-.25 14.9 9.82 24.8 22.71c9.8 12.75 9.72 30.37 5.41 45.13a2.62 2.62 0 01-3.76 1.57c-3.26-1.77-6.22-6.71-8.62-9.67-5.24-6.46-14.75-12-21.51-17.01z","M1246.2 534.5q-.95-.3-1.75-1.22c-4.65-5.4-9.13-9.88-11.46-15.51-2.96-7.13-1.37-15.5-5.64-22.09-4.06-6.26-8.72-9.91-10.89-17.58-1.62-5.68-2.81-11.46-4.97-17.02-4.56-11.69-6.45-20.86-3.33-33.56a.59.58-74 01.75-.42q1.69.56 3.22 1.79 11.23 9.08 21.54 19.18c5.39 5.28 6.92 10.13 7.24 18.16.9 22.52 10.62 44.97 6.59 67.49a1.01 1 13.9 01-1.3.78z","M1258.43 439.96q2.01 5.38 3.1 10.68c3.58 17.36 7.13 34.77 6.89 52.61q-.11 8.3-3.94 15.61a1.61 1.6 33.4 01-2.44.5c-1.45-1.19-1.9-3.58-2.43-4.94q-9.23-23.41-13.19-38.15c-2.63-9.81 6.82-27.63 11.53-36.35q.28-.5.48.04z"],
+    "lower-back":["M986.76 627.1c-3.13-13.13-7.31-49.77 7.27-58.07 2.4-1.37 4.8-.82 6.7 1.29 6.15 6.8 16.22 18.56 18.77 28.15a1.35 1.3 52.6 01-.11.98c-2.51 4.53-9.96 8.09-15.83 11.36q-5.47 3.06-11.33 10.52c-1.23 1.56-2.6 4.3-4.5 6.06a.59.58-28.2 01-.97-.29z","M1023.15 607.96a2.06 2.04-74.3 01-.94-1.69c-.17-10.98 5.04-24.58 8.79-34.9q15.61-42.83 36-83.59a1.11 1.1-62.5 011.51-.48c1.25.66 3.21 12.98 3.46 15.08q6.94 59.25 2.82 116.88-.62 8.66-3.1 19.37-.13.53-.59.24l-47.95-30.91z","M1090.76 581.75q.62-5.16 0-10.27.22-29.79 3.05-59.5 1.1-11.58 3.91-22.88.31-1.27.44-1.43 1.08-1.43 1.88.17 23.38 46.97 40.14 96.18c1.8 5.28 5.84 16.69 4.38 22.96a1.64 1.64 0 01-.71 1.01l-47.63 30.72q-1.12.72-1.34-.6-4.54-28-4.12-56.36z","M1151.19 603.31q-5.39-3.38-2.19-9.05 8.03-14.22 17.88-24.62c3.49-3.69 9.04.89 10.97 3.99q2.92 4.66 3.8 10.14 3.5 21.77-1.21 43.02a.96.96 0 01-1.77.28c-6.92-11.85-16.03-16.56-27.48-23.76z"],
+    "forearm":["M878.44 534.38a.15.15 0 01.18-.13c.47.12 6.68 15.77 7.07 17.22q6.66 24.73 5.52 50.29c-.4 8.9-3.45 17.35-6.64 25.55-7.94 20.38-17.41 41.88-29.59 60.09a1.04 1.02-54.2 01-1.49.25c-.34-.26.37-1.45.47-1.83q5.58-20.8 8.97-42.08 8.65-54.15 15.51-109.36z","M893 518.93a.39.38 24.6 01.69-.25q5.97 7.83 13.11 15.27c8.08 8.4 1.41 28.73-5.88 37.12a1.05 1.05 0 01-1.63-.05c-6.09-7.93-5.41-18.74-4.97-28.44.36-8.12-.76-15.7-1.32-23.65z","M869.06 547.19c2.16.36 1.67 6.21 1.57 7.8q-2.54 38.84-9.11 77.16c-3.04 17.71-8.47 41.3-22.09 54.09a.38.38 0 01-.62-.41c14.51-40.44 19-84.26 26.8-126.31q.9-4.88 1.48-10.82.18-1.81 1.97-1.51z","M864.24 682.58q15.09-28.18 25.12-58.55c8.14-24.63 13.67-42.4 20.79-60.35q3.31-8.37 12.08-9.63c1.35-.2 3.68-.75 4.86.21q1.13.93.61 2.3-5.8 15.45-12.04 29.88c-5.79 13.39-14.92 28.68-20.32 40.14-6.12 13-28.07 59.18-31.64 56.64a.21.21 0 01.03-.36q.15-.07.34-.13.12-.04.17-.15z","M1272.99 519.43c.27-.33.33-.75.75-1.05a.32.32 0 01.5.29c-.7 7.22-1.77 14.33-1.66 21.54.13 8.94 2.13 24-5.35 31.17q-.37.35-.73 0c-7.63-7.55-14.2-28.29-6.52-36.92q6.6-7.41 13.01-15.03z","M1312.82 688.04c-4.78-6.01-7.2-10.8-11.76-19.56q-12.39-23.79-21.03-47.53c-4.86-13.36-5.22-26.17-3.83-40.19q1.13-11.5 2.69-19.53 2.72-13.98 9.59-26.79a.17.17 0 01.32.06q7.26 63.12 17.22 120.49 2.43 14.04 7.03 30.55c.22.79.74 1.33.36 2.4a.34.34 0 01-.59.1z","M1296.52 558.51c-.22-2.94-1.44-10.25 2-12.04a.62.61-18.4 01.89.44q6.25 35.69 12.21 71.07c3.88 23 8.77 46.2 16.73 68.19a.29.29 0 01-.47.31c-11.67-10.67-18.09-31.15-20.89-45.98q-7.27-38.55-10.47-81.99z","M1303.5 683.6c-2.89-.66-10.16-13.21-12.11-17.02-8.8-17.21-16.92-34.81-25.84-51.89-5.36-10.27-10.98-20.49-15.39-30.95q-5.86-13.86-11.07-27.8a1.63 1.62 79.5 011.5-2.2c13.02-.16 15.5 7.18 19.65 18.81q9.04 25.33 17.43 50.89 9.65 29.37 23.82 56.84.87 1.69 2.13 3.12.24.28-.12.2z"],
+    "gluteal":["M1045.06 626.19q1.42.61 4.11 4.4.27.39-.19.52c-14.47 4.12-26.13 7.4-38.13 15.77q-15.37 10.71-30.53 21.6a.55.54 74.9 01-.86-.5c1.19-13.13 10.35-35.23 20.46-45.06 9.14-8.88 34.99-1.11 45.14 3.27z","M1007.94 762.81c-16.94-16.64-29.37-37.66-31.47-61-2.06-22.84 15.63-34.95 32.18-45.71 8.2-5.33 46.51-27.32 54.37-17.65 5.92 7.29 13.38 15.84 15.44 25.21q3.01 13.63 2.44 27.6-.94 22.59-6.27 44.49c-2.43 9.96-2.9 17.16-2.59 26.75.47 14.83-18.52 17.18-29.12 14.07-6.38-1.87-13.79-4.83-21.35-6.25q-7.39-1.38-13.63-7.51z","M1117.94 631.04q-.13-.03-.27-.06-.12-.02-.06-.13 2.58-4.2 7.05-5.92 12.71-4.87 26.13-5.81c12.93-.91 17.1 3.08 23.28 13.06 5.71 9.22 13.32 24.7 13.44 36.06q.01.76-.61.32-16.65-11.74-33.2-23.51c-10.03-7.14-23.72-10.58-35.76-14.01z","M1124.12 776.61c-9.28 2.74-26.75 1.29-28.86-10.88-1.05-6.03.27-14.88-1.3-23.27q-.54-2.94-2.15-9.35c-3.2-12.81-4.02-23.33-5.08-35.27-1.07-12.03-.57-22 1.64-33.17q1.1-5.6 4.19-10.41 8.74-13.58 11.87-16.59c4.96-4.77 15.84.18 21.19 2.11q19.7 7.12 40.17 21.43c9.59 6.7 19.29 14.31 22.93 25.17 4.81 14.37-.65 33.88-7.42 46.87q-7.79 14.97-21.39 28.9-6.74 6.9-15.26 8.36c-7.07 1.21-13.68 4.08-20.53 6.1z"],
+    "adductors":["M1070.06 785.19c2.95 1.36 1.8 10.43 1.49 13.04q-3.98 33.27-14.66 64.61a.39.39 0 01-.76-.17c.9-7.05 2.31-14.29 2.16-20.92q-.68-30.14-18.71-54.52-.29-.39.18-.49c7.42-1.52 23.53-4.69 30.3-1.55z","M1127.24 787.66c-15.99 21.49-22.3 48.51-16.08 74.83a.47.46-63.2 01-.88.29q-1.99-4.69-3.65-10.24-8.29-27.75-11.6-56.54c-.65-5.71-1.1-11.77 6.87-11.9q13-.19 25.68 2.83a.31.24 41.2 01.1.53q-.12.01-.27.07-.1.04-.17.13z"],
+    "hamstring":["M963.27 741.53a.71.7 31.7 011.19-.28q1.51 1.62 2.47 3.99c4.6 11.41 8.93 22.66 11.07 34.72 3.38 19.14 4.84 38.23 3.12 57.74q-1.68 19.06-2.99 38.15c-.51 7.55-.88 15.71.07 23.18q1.08 8.54 1.39 17.57a.52.52 0 01-.98.25q-1.03-2.07-1.8-4.62-5.13-16.92-7.25-34.49-5.01-41.45-6.86-83.17-1.09-24.75-.07-49.51.06-1.59.64-3.53z","M1030.2 791.53q.17-.36.38-.03c5.26 8.11 9.94 16.15 12.47 25.64 3.12 11.72 5.87 24.36 4.31 36.24q-.5 3.8-3.57 14.02c-10.75 35.81-12.83 74.2-18.5 111.1q-.82 5.4-2.55 10.55-.23.68-.59.07c-4.72-8.07-5.18-25.09-5.34-34.81-.7-43.69 1.92-87.82 6.38-131.28 1.41-13.74 1.99-21.15 7.01-31.5z","M998.81 761.94q14.07 14.17 20.1 33.62c.98 3.15-.78 9.61-.93 12.91q-1.3 27.63-2.3 55.27c-.55 15.31-1.54 30.27-5.12 45.26q-8.62 36.18-22.76 68.73-3.65 8.41-10.15 17.19-.45.61-.41-.14c.11-1.93.82-4.15.99-5.71q2.45-22.72 6.08-45.26c2.83-17.66 4.18-35.95 4.33-52.37.33-36.43-.75-73.34 1.47-109.68.33-5.32 1.07-16.16 4.7-20.25q.33-.36.81-.45 1.95-.37 3.19.88z","M1052.52 855.62a.04.04 0 01.08.01q1.07 9.9 2.17 19.87.33 3.04-2.37 14.18c-3.83 15.8-8.15 31.11-8.9 47.47-.99 21.61-3.11 45.66-9.92 66.3q-1.49 4.52-.87-.2 3.38-25.36 3.7-51.99c.05-3.74-.4-10.32.2-15.58 2.19-19.2 7.39-38.25 11.75-57.05 1.78-7.64 2.93-15.21 4.16-23.01z","M1183.25 947.53c2.57 14.85 4.32 31.11 6.22 46.14q.35 2.74-1.11.39c-14.67-23.67-23.34-52.15-30.55-79.32q-5.08-19.14-5.97-39.05-1.36-30.37-2.44-60.74c-.22-6.09-2.56-15.63-.55-21.57q5.87-17.35 18.96-31.07c10.77-11.28 10.17 46.55 10.16 48.97-.13 41.09-.45 74.18 1.91 110.07.57 8.75 1.88 17.53 3.37 26.18z","M1136.43 791.52q.27-.42.49.03c3.12 6.46 4.84 12.26 5.68 19.83 5.07 45.8 8.05 94.61 7.56 140.76-.13 11.8-.46 26.22-5.13 37.08a.44.44 0 01-.83-.06q-2.51-9.14-3.69-18.41-3.54-27.64-7.36-55.24c-2.49-18-5.47-35.67-11.09-52.26q-4.35-12.82-2.08-26.75c1.76-10.77 3.58-21.61 8.46-31.16q3.58-6.99 7.99-13.82z","M1115.03 856.73c2.03 18.72 7.11 37.44 11.47 55.77 2.25 9.46 3.94 19.51 3.95 30.11q.02 31.7 4.08 63.16.16 1.26-.29.07-2.7-7.15-4.19-14.6c-4.44-22.21-5.71-40.52-6.87-61.23-.24-4.24-1.19-9.64-2.23-13.92q-3.94-16.25-7.7-32.55c-2.09-9.04.08-18.69 1.6-27.66q.07-.38.32-.09.16.19.01.4-.19.24-.15.54z","M1202.61 741.08a.44.44 0 01.72.03c.52.82.9 1.86.95 2.91q.73 15.98.37 31.97-1.16 52.95-7.85 105.49-1.88 14.74-5.97 29.04-1 3.52-1.92 4.95-1.57 2.47-1.39-.37c.58-9.44 1.83-19.17 1.71-28.16-.32-24.52-4.94-49.11-3.95-72.75.69-16.54 2.5-33.51 7.54-49.38q2.99-9.4 6.61-18.6.74-1.88 3.18-5.13z"],
+    "calves":["M982.69 1149.31c-3.07-2.23-3.98-6.24-5.24-11.03-7.19-27.14-7.88-53.18-6.67-82.78q1.03-25.29 9.23-47.45c4.77-12.89 15.33-24.77 23.79-36q.82-1.09.74.27c-1.37 22.86-2.72 45.67-3.11 68.49-.52 30.56-1.51 61.11-.42 91.68.24 6.83-2.77 16.29-10.08 18.37q-4.39 1.25-8.24-1.55z","M983.99 1163.56c7.15-5.59 16.16-.63 17 8.23q4.31 45.02 5.22 90.26c.16 8.25-.8 15.79-2.19 23.65q-.45 2.52-1.43 3.66-.95 1.11-1.22-.33c-5.03-26.7-8.28-53.49-11.87-80.36q-1.68-12.52-3.24-18.71-2.04-8.12-5.53-18.24c-1.03-3 .8-6.25 3.26-8.16z","M1013.69 1150.31c-4.8-2.61-4.66-16.17-4.36-20.75 2.34-36.49 3.44-73.94 1.04-110.45-1.03-15.55.02-31.49.62-47.06q.03-.66.25-.03c2.28 6.45 4.52 12.88 7.39 19.11 5.12 11.14 11.5 22.91 14.83 33.92q2.34 7.74 3.97 16.46 5.3 28.43 5.62 56.09c.2 18.32-7.9 40-22.63 51.79q-3.42 2.73-6.73.92z","M1014.14 1164.37c7-1.83 14.1 2.2 14.11 9.95q.06 29.04-5.62 57.41c-3.87 19.28-6.24 38.23-8.43 57.48a.37.37 0 01-.74-.01q-3.12-43.48-3.58-86.64-.15-14.16.76-28.3c.18-2.83.02-8.98 3.5-9.89z","M1172.94 1149.31c-6.06-4.56-6.94-11.4-6.8-19.4.96-52.67-.49-105.31-3.54-157.9q-.04-.72.41-.16 7.96 10.07 15.43 20.44c9.11 12.64 13.61 28.98 15.78 44.21 4.96 34.71 3.75 72.94-5.97 106.5-1.97 6.82-9.18 10.93-15.31 6.31z","M1144.41 1147.33q-17.19-17.37-20.08-40.86-.89-7.22-.13-19.97 1.18-20.06 4.69-41.33c2.33-14.1 5.8-25.22 12.41-38.61q8.19-16.59 14.35-34.15a.14.13-37.7 01.26.03q1.01 15.71 1.26 31.44c.18 11.61-1.34 24.91-1.58 36.43-.72 34.7 1.22 62.05 2.06 93.19.17 6.32-1.1 26.1-13.24 13.83z","M1173.74 1161.73c6.88-2 14.34 3.23 11.98 10.91-2.24 7.3-4.78 14.44-5.99 21.96-5.07 31.52-8.04 63.18-14.13 94.6a.72.71-61.9 01-1.21.37c-.14-.14-.35-.39-.4-.59q-3.53-13.58-3.19-28.23 1.04-44.67 5.06-87.04c.58-6.1 1.93-10.25 7.88-11.98z","M1154.32 1165a1.58 1.57-84.6 01.97 1.18c.79 4.42 1.42 8.78 1.57 13.4.96 29.17-.47 62.66-2.04 90.23q-.78 13.79-1.39 19.52a.23.23 0 01-.45 0c-2.79-21.25-5.41-41.99-9.64-63.03-3.44-17.08-4.29-34.91-4.68-52.3-.19-8.37 8.99-11.61 15.66-9z"],
+    "ankles":["M998.25 1320.52c-4.62.24-8.17-1.08-8.78-6.28-1.6-13.81-.75-28.85-2.16-42.41q-.39-3.74.24-7.03a.69.69 0 011.23-.28c2.35 3.15 4.22 5.75 5.14 9.66 1.54 6.57 1.91 22.57 9.97 24.09q13.33 2.5 15.93-10.47c.92-4.57 1-12.33 5.05-17.25q.42-.51.42.15c.11 14.39.4 30.86-3.08 44.54-.79 3.13-3.31 4.23-6.51 4.4q-8.73.45-17.45.88z","M1149.5 1319.51c-6.93-.63-6.82-18.08-7.14-23.7q-.73-12.53-.59-25.09.01-.71.45-.15 2.74 3.49 3.29 7.17c1.67 11.25 3.21 25.34 19.7 19.99 4.87-1.58 7.03-18.57 7.89-23.21.79-4.2 2.74-7 5.28-10.13a.56.56 0 01.98.22c1.12 4.6.04 12.39-.37 17.26-.92 10.77-.32 21.48-1.52 32.37q-.7 6.23-7.01 6.18-12.13-.11-20.96-.91z"],
+    "feet":["M962.87 1327.38q-.62-.51-.05-1.07l1.99-1.99q.39-.39.93-.41 25.66-.82 51.26 1 1.34.1 4.43 1.47.46.2.69.64 1.84 3.5 2.87 7.23c2.32 8.38-6.63 7.24-12.23 6.68q-15.37-1.53-30.5-4.56c-8.21-1.65-13.33-3.95-19.39-8.99z","M1154.35 1341.35c-12.48 1.36-13.27-3.88-8.67-13.37 1.82-3.76 12.72-3.65 16.39-3.77q19.44-.63 38.9-.44c2.41.02 3.31 1 4.61 2.76q.32.44-.09.79c-5.43 4.67-10.52 7.17-17.95 8.74q-16.46 3.47-33.19 5.29z"],
+    "hands":["M789.41 726.84c3.98-6.79 9.89-14.6 16.56-20.14a.31.31 0 01.48.35c-4.39 11.06-5.38 21.94-14.02 30.72-5.82 5.93-10.7 9.81-19.04 8.57q-.55-.08-.59-.63c-.24-3.07-.26-7.29 3.1-8.85 4.82-2.26 10.72-5.28 13.51-10.02z","M807.27 745.31c17.61 3.49 2.75 13.52-.73 18.99q-10.05 15.82-21.86 30.37-1.56 1.92-2.52-.58a2.41 2.33-55.4 01-.16-.96q.2-5.26 2.75-9.71c6.94-12.09 13.12-24.52 19.72-36.79q.91-1.7 2.8-1.32z","M819.3 744.82c-7.79-6.06-14.51-12.4-11.88-23.38 3.07-12.83 14.66-20.7 25.14-26.38 9.57-5.18 37.61-.75 37.6 13.68q-.01 16.24-3.67 31.99c-2.38 10.26-4.49 16.44-16.87 16.3-10.71-.13-21.93-5.7-30.32-12.21z","M827.99 758.27a2.08 2.07 26.6 01.91 2.73q-10.47 22.03-19.66 45.04-2.25 5.63-8.23 6.74a1.45 1.44 84.3 01-1.7-1.4q-.1-4.29 1.51-8.31 7.3-18.34 13.86-36.96c.74-2.1 1.53-6.08 2.97-8.96q.26-.5.82-.57 5.05-.64 9.52 1.69z","M841.68 762.32a.76.75-79.1 01.6.89q-4.51 23.14-9.28 45.87c-.73 3.49-2.09 5.73-5.85 5.43q-.52-.04-.61-.56-.74-4.54-.32-7.21 2.89-18.57 5.59-37.18.38-2.65 1.67-8.22.13-.54.68-.44l7.52 1.42z","M854.75 799.53a.78.78 0 01-1.37-.02q-.91-1.75-1.15-4.29-1.62-16.58-1.2-33.25a.84.84 0 01.61-.78l7.09-1.93q.59-.16.56.45-.58 14.77-1.12 29.56c-.14 4.06-1.54 6.86-3.42 10.26z","M1336.39 751.96c-8.72 4.49-29.38 10.28-33.61-3.6q-5.68-18.65-5.83-38.24c-.06-7.59 4.01-11.75 11.09-14.08 8.85-2.92 19.02-5.3 27.54-.35 8.74 5.09 18.39 11.28 22.45 21.01 3.05 7.3 3.34 13.66-1.78 20.01-5.21 6.47-12.49 11.45-19.86 15.25z","M1374.32 737.5c-8.05-8.14-9.61-19.67-13.85-30.75a.22.22 0 01.35-.24q10.3 8.96 17.1 20.77c2.57 4.47 9.08 7.59 13.57 9.79 3.11 1.52 2.96 5.9 2.71 8.73q-.05.52-.57.59c-8.87 1.17-13.48-2.98-19.31-8.89z","M1383.76 795.45c-.59-.21-.96-.17-1.39-.68-8.84-10.3-15.85-21.5-23.44-32.41-2.81-4.02-8.81-7.64-7.45-13.14q.15-.6.7-.84l7.85-3.44q.66-.29 1.13.25 2.36 2.73 4.17 6.49 7.36 15.23 16.89 31.47c2.33 3.96 3.04 7.59 2.32 11.85a.58.58 0 01-.78.45z","M1365.79 812.62c-2.7-.28-6.42-2.66-7.49-5.33q-8.74-21.76-19.85-45.74c-2.12-4.58 6.55-5.17 9.12-5.21 1.8-.03 1.93.71 2.38 2.18q5.72 18.34 15.35 42.12c.74 1.84 4.81 12.43.49 11.98z","M1308.16 759.17l7.44 2.1q.23.07.24.31.75 16.26-.86 32.41-.3 3-1.25 5.48a.79.79 0 01-1.42.12q-3.9-6.58-3.82-13.9.16-13.07-.83-26.11-.05-.57.5-.41z","M1340.07 814.35c-2.7.82-4.99-1.16-5.54-3.71q-5.06-23.49-9.82-47.47a.77.76-10.7 01.62-.9l7.52-1.38q.59-.11.73.47c2.08 8.53 3.26 19.85 4.22 25.75q2.09 12.92 3.19 21.14.34 2.54-.33 5.46a.86.84 88.4 01-.59.64z"],
+    "head":["M1028.14 166.45c1.03 5.06 1.36 9.61 6.41 11.53 13.06 4.95 16.74 15.51 23.52 27.48 1.387 2.447 3.863 3.623 7.43 3.53a910.025 910.025 0 0136.94-.25c6.23.09 9.27-7.55 11.48-12.3 4.31-9.27 10.37-15.83 20.28-18.94.333-.1.603-.287.81-.56 1.92-2.58 3.043-5.43 3.37-8.55l2.31-1.51a.977.977 0 01.99-.08c11.92 5.42-3.35 35.31-8.21 42.45-.761 1.11-2.423 1.028-3.06-.15l-1.26-2.32c-.133-.253-.32-.297-.56-.13-.34.24-.48.61-.42 1.11.86 7.64.75 16.87-2.96 23.31-.173.3.839.041-3.7 4.71-3.34 3.436-74.18 3.78-75.48-1.38a1.465 1.465 0 00-.55-.82c-4.15-2.97-6.07-7.95-6.16-12.39-.03-1.68.18-14.28-.53-14.63-.207-.1-.33-.037-.37.19-.3 1.553-1.183 2.597-2.65 3.13a.951.951 0 01-1.07-.32c-7.29-9.56-12.32-22.18-12.97-33.54-.34-6.04 1.797-9.23 6.41-9.57zm29.95 61.71c.173 14.187 18.967 14.703 19.1-1.37.03-4.05-.38-6.54-4.68-7.3-4.2-.75-11.87-1.47-13.85 2.91-.413.92-.603 2.84-.57 5.76zm31.71-3.35c.36 19.647 18.59 14.82 18.87 5.94.13-3.9 1.32-9.43-2.88-10.79-4.25-1.38-16.12-2.54-15.99 4.85z"],
+    "hair":["M1138.38 168.39q-.49 4.68-3.37 8.55-.31.41-.81.56c-9.91 3.11-15.97 9.67-20.28 18.94-2.21 4.75-5.25 12.39-11.48 12.3q-18.46-.25-36.94.25-5.35.14-7.43-3.53c-6.78-11.97-10.46-22.53-23.52-27.48-5.05-1.92-5.38-6.47-6.41-11.53q-6.64-26.16 4.43-48.88c8.13-16.7 34.61-21.41 51.58-21.04 4.89.11 9.69-.11 14.42.85 18.79 3.8 33.17 8.5 39.34 28.66q6.38 20.88.47 42.35z"]
+  }
+};
+
+// slug -> nombre muscular español (slugs no listados se dibujan como base)
+const SLUG_MUSCLE = {
+  front: { chest:"Pectoral", deltoids:"Deltoides", biceps:"Bíceps", triceps:"Tríceps",
+           forearm:"Antebrazo", quadriceps:"Cuádriceps", abs:"Abdominales",
+           calves:"Gemelos", trapezius:"Espalda" },
+  back:  { deltoids:"Deltoides", triceps:"Tríceps", forearm:"Antebrazo", gluteal:"Glúteos",
+           hamstring:"Isquios", calves:"Gemelos", trapezius:"Espalda",
+           "upper-back":"Espalda", "lower-back":"Espalda" }
+};
+
+/* ===== MAPA DE CALOR MUSCULAR ===== */
+function MuscleHeatmap({ exlog, days, onChangeDays }) {
+  const muscleSets = useMemo(() => {
+    const cutoff = days >= 999 ? 0 : Date.now() - days * 86400000;
+    const counts = {};
+    Object.entries(exlog || {}).forEach(([exName, sets]) => {
+      const muscles = (MUSCLES[exName] || []).map(m => m === "Deltoide ant." ? "Deltoides" : m);
+      (sets || [])
+        .filter(s => s.type !== "warmup" && (days >= 999 || new Date(s.date).getTime() >= cutoff))
+        .forEach(() => muscles.forEach(m => { counts[m] = (counts[m] || 0) + 1; }));
+    });
+    return counts;
+  }, [exlog, days]);
+
+  const BASE = { fill: "rgba(38,50,30,0.92)", stroke: "rgba(70,92,54,0.55)" };
+  const heat = (name) => {
+    const s = muscleSets[name] || 0;
+    if (!s) return BASE;
+    const pct = Math.min(1, s / 21);
+    const a = 0.28 + pct * 0.72;
+    return { fill: `rgba(255,86,108,${a.toFixed(2)})`, stroke: `rgba(255,150,160,${Math.min(1, a + 0.15).toFixed(2)})` };
+  };
+
+  // Dibuja un lado del cuerpo con paths anatómicos reales (función, no componente)
+  const renderSide = (side) => {
+    const map = SLUG_MUSCLE[side] || {};
+    return (
+      <>
+        {Object.entries(MUSCLE_PATHS[side]).map(([slug, paths]) => {
+          const muscle = map[slug];
+          const st = muscle ? heat(muscle) : BASE;
+          return paths.map((d, i) => (
+            <path key={slug + i} d={d} fill={st.fill} stroke={st.stroke}
+              strokeWidth="0.8" vectorEffect="non-scaling-stroke" strokeLinejoin="round"/>
+          ));
+        })}
+        <path d={BODY_OUTLINE[side]} fill="none" stroke="rgba(110,135,82,0.7)"
+          strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round"/>
+      </>
+    );
+  };
+
+  const sorted = Object.entries(muscleSets).sort(([,a],[,b]) => b - a);
+  const total = Object.values(muscleSets).reduce((s,v) => s+v, 0);
+
+  return (
+    <div style={{background:"var(--panel-bg-sec)", border:"1px solid var(--line-color)", borderRadius:14, padding:14}}>
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12}}>
+        <div style={{fontSize:11, fontWeight:700, color:"var(--text-muted)", textTransform:"uppercase", letterSpacing:".08em"}}>
+          🔥 Mapa Muscular
+        </div>
+        <div style={{display:"flex", gap:4}}>
+          {[[7,"7 días"],[30,"30 días"],[999,"Todo"]].map(([d,lbl]) => (
+            <button key={d} onClick={() => onChangeDays(d)} className="btn-active-scale"
+              style={{padding:"3px 9px", borderRadius:20, fontSize:10, fontWeight:800, cursor:"pointer",
+                background: days===d ? "rgba(205,255,74,0.15)" : "var(--panel-bg)",
+                border: `1px solid ${days===d ? "rgba(205,255,74,0.5)" : "var(--line-color)"}`,
+                color: days===d ? "var(--accent-primary)" : "var(--text-muted)"}}>
+              {lbl}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {total === 0 ? (
+        <div style={{textAlign:"center", padding:"18px 0", fontSize:11, color:"var(--text-muted)"}}>
+          Registra series en el tab Entreno para activar el mapa de calor.
+        </div>
+      ) : (
+        <>
+          <div style={{display:"flex", justifyContent:"center", gap:6}}>
+            <div style={{textAlign:"center"}}>
+              <svg viewBox="0 0 724 1448" style={{width:128, height:256, display:"block"}}>
+                {renderSide("front")}
+              </svg>
+              <div style={{fontSize:9, fontWeight:700, color:"var(--text-muted)", letterSpacing:".07em"}}>FRENTE</div>
+            </div>
+            <div style={{textAlign:"center"}}>
+              <svg viewBox="724 0 724 1448" style={{width:128, height:256, display:"block"}}>
+                {renderSide("back")}
+              </svg>
+              <div style={{fontSize:9, fontWeight:700, color:"var(--text-muted)", letterSpacing:".07em"}}>ESPALDA</div>
+            </div>
+          </div>
+
+          {/* Barra leyenda */}
+          <div style={{padding:"8px 4px 0"}}>
+            <div style={{height:7, borderRadius:99, background:"linear-gradient(to right,rgba(38,50,30,0.92),rgba(255,86,108,0.5),rgba(255,86,108,1))"}}/>
+            <div style={{display:"flex", justifyContent:"space-between", fontSize:9, color:"var(--text-muted)", marginTop:3}}>
+              <span>0</span><span>Series / período</span><span>≥21</span>
+            </div>
+          </div>
+
+          {/* Chips de músculos más trabajados */}
+          <div style={{marginTop:10, display:"flex", gap:5, flexWrap:"wrap"}}>
+            {sorted.slice(0,7).map(([m,s]) => {
+              const a = Math.min(1, 0.2 + (s/21)*0.8);
+              return (
+                <span key={m} style={{fontSize:10, fontWeight:700, padding:"2px 9px", borderRadius:20,
+                  background:`rgba(255,86,108,${(a*0.22).toFixed(2)})`,
+                  border:`1px solid rgba(255,86,108,${(a*0.55).toFixed(2)})`,
+                  color:`rgba(255,120,135,${a.toFixed(2)})`}}>
+                  {m} · {s}
+                </span>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ===== AGENTE ENTRENADOR ===== */
-function TrainerAgent({ onClose, data, busy, onRunAnalysis, exlog, exercises, notes, metricslog, splits, plateauAlerts, overloadSuggestions, muscleImbalances }) {
+function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, pdfBusy, exlog, exercises, notes, metricslog, splits, plateauAlerts, overloadSuggestions, muscleImbalances }) {
   const local = data?._local || null;
 
   const muscleVol = React.useMemo(() => {
@@ -6729,8 +8187,10 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, exlog, exercises, no
     return calcMuscleVolumeBalance(exlog, exercises);
   }, [local, exlog, exercises]);
 
-  const weeklyLoad = local?.weeklyLoad || calcWeeklyTrainingLoad(exlog);
-  const deloadCheck = local?.deloadCheck || detectDeloadNeed(exlog, notes, metricslog);
+  const weeklyLoad = React.useMemo(() => local?.weeklyLoad || calcWeeklyTrainingLoad(exlog), [local, exlog]);
+  const deloadCheck = React.useMemo(() => local?.deloadCheck || detectDeloadNeed(exlog, notes, metricslog), [local, exlog, notes, metricslog]);
+
+  const [heatmapDays, setHeatmapDays] = useState(7);
 
   const STATUS_COLORS = {
     neglected: { bg:"rgba(244,63,94,0.12)", border:"rgba(244,63,94,0.3)", text:"#f43f5e" },
@@ -6761,6 +8221,9 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, exlog, exercises, no
           </div>
           <button onClick={onClose} style={{background:"none", border:"none", color:"#9aa088", cursor:"pointer", padding:4}}><X size={20}/></button>
         </div>
+
+        {/* Muscle Heatmap */}
+        <MuscleHeatmap exlog={exlog} days={heatmapDays} onChangeDays={setHeatmapDays}/>
 
         {/* Phase Indicator */}
         <div className="pop" style={{padding:"12px 14px", display:"flex", alignItems:"center", justifyContent:"space-between"}}>
@@ -6926,6 +8389,17 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, exlog, exercises, no
           <div style={{fontSize:12, color:"#f43f5e", background:"rgba(244,63,94,0.08)", border:"1px solid rgba(244,63,94,0.2)", borderRadius:9, padding:"10px 12px"}}>{data._error}</div>
         )}
 
+        {/* PDF para coach */}
+        {generateWeeklyPDF && (
+          <button
+            onClick={generateWeeklyPDF}
+            disabled={pdfBusy || busy}
+            style={{width:"100%", padding:"13px 0", borderRadius:12, border:`1px solid ${C.amber}`, cursor:(pdfBusy||busy)?"not-allowed":"pointer", background:"transparent", color:C.amber, fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyContent:"center", gap:8, opacity:(pdfBusy||busy)?0.6:1, transition:"opacity .2s"}}
+          >
+            {pdfBusy ? <><Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>Generando reporte…</> : <>📄 PDF para mi coach</>}
+          </button>
+        )}
+
         {/* AI CTA */}
         <button
           onClick={onRunAnalysis}
@@ -6934,6 +8408,379 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, exlog, exercises, no
         >
           {busy ? <><Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/>Analizando...</> : <><Sparkles size={16}/>{data && !data._error ? "Actualizar Análisis" : "Analizar con IA"}</>}
         </button>
+
+      </div>
+    </div>
+  );
+}
+
+/* ===== MODO FOCO ===== */
+function FocusMode({ onClose, splits, exlog }) {
+  const circuitSplit = splits.find(s => s.key === "E") || DEFAULT_SPLITS.find(s => s.key === "E");
+  const circuitExs = circuitSplit?.ex || [];
+  const exDuration = 60;
+  const [formCues, setFormCues] = useState({});
+  const [formCueBusy, setFormCueBusy] = useState({});
+  const today = new Date().toISOString().slice(0, 10);
+  const [setsDone, setSetsDone] = useState({});
+  useEffect(() => {
+    loadKey("focus_sets_" + today, {}).then(saved => {
+      if (saved && Object.keys(saved).length) setSetsDone(saved);
+    });
+  }, [today]);
+  useEffect(() => {
+    if (Object.keys(setsDone).length) saveKey("focus_sets_" + today, setsDone);
+  }, [setsDone, today]);
+  const markSetDone = (exName) => {
+    setSetsDone(prev => ({ ...prev, [exName]: (prev[exName] || 0) + 1 }));
+    startRest();
+  };
+  const resetSets = (exName) => setSetsDone(prev => ({ ...prev, [exName]: 0 }));
+
+  const generateFormCue = async (exName) => {
+    if (formCues[exName] || formCueBusy[exName]) return;
+    setFormCueBusy(prev => ({ ...prev, [exName]: true }));
+    try {
+      const tip = await callGemini(
+        [{ role: "user", content: `Dame UN tip conciso de técnica de ejecución para: ${exName}. Máx 2 oraciones. Enfocate en el error más común y cómo corregirlo.` }],
+        "Eres un entrenador experto en biomecánica. Responde en español, directo y técnico. Sin preámbulos."
+      );
+      setFormCues(prev => ({ ...prev, [exName]: tip?.trim() || "" }));
+    } catch (_) {}
+    setFormCueBusy(prev => ({ ...prev, [exName]: false }));
+  };
+
+  // --- WAKE LOCK: mantener pantalla encendida mientras el panel esté abierto ---
+  const wakeLockRef = useRef(null);
+  useEffect(() => {
+    if (!("wakeLock" in navigator)) return;
+    navigator.wakeLock.request("screen").then(wl => { wakeLockRef.current = wl; }).catch(() => {});
+    return () => { if (wakeLockRef.current) { wakeLockRef.current.release(); wakeLockRef.current = null; } };
+  }, []);
+
+  // --- REST TIMER ---
+  const [restTotal, setRestTotal] = useState(90);
+  const [restElapsed, setRestElapsed] = useState(0);
+  const [restRunning, setRestRunning] = useState(false);
+  const restIntervalRef = useRef(null);
+  const restRemaining = Math.max(0, restTotal - restElapsed);
+
+  useEffect(() => {
+    if (!restRunning) { clearInterval(restIntervalRef.current); return; }
+    restIntervalRef.current = setInterval(() => {
+      setRestElapsed(prev => {
+        const next = prev + 1;
+        if (next >= restTotal) {
+          clearInterval(restIntervalRef.current);
+          setRestRunning(false);
+          if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+          return restTotal;
+        }
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(restIntervalRef.current);
+  }, [restRunning, restTotal]);
+
+  const startRest = () => { setRestElapsed(0); setRestRunning(true); };
+  const stopRest = () => { clearInterval(restIntervalRef.current); setRestRunning(false); setRestElapsed(0); };
+  const setPreset = (s) => { setRestTotal(s); setRestElapsed(0); setRestRunning(false); };
+
+  // --- CIRCUIT TIMER ---
+  const [circuitRunning, setCircuitRunning] = useState(false);
+  const [totalSecs, setTotalSecs] = useState(0);
+  const circuitIntervalRef = useRef(null);
+  const prevBoundaryRef = useRef(-1);
+
+  const currentExIdx = circuitExs.length > 0 ? Math.floor(totalSecs / exDuration) % circuitExs.length : 0;
+  const currentRound = circuitExs.length > 0 ? Math.floor(totalSecs / (exDuration * circuitExs.length)) + 1 : 1;
+  const secsInEx = exDuration - (totalSecs % exDuration);
+  const nextExIdx = (currentExIdx + 1) % circuitExs.length;
+
+  useEffect(() => {
+    if (!circuitRunning) { clearInterval(circuitIntervalRef.current); return; }
+    circuitIntervalRef.current = setInterval(() => {
+      setTotalSecs(prev => {
+        const next = prev + 1;
+        const boundary = Math.floor(next / exDuration);
+        if (boundary > prevBoundaryRef.current) {
+          prevBoundaryRef.current = boundary;
+          if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+        }
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(circuitIntervalRef.current);
+  }, [circuitRunning]);
+
+  const startCircuit = () => { setTotalSecs(0); prevBoundaryRef.current = -1; setCircuitRunning(true); };
+  const stopCircuit = () => { clearInterval(circuitIntervalRef.current); setCircuitRunning(false); setTotalSecs(0); prevBoundaryRef.current = -1; };
+
+  const fmtTime = (s) => `${Math.floor(s/60).toString().padStart(2,"0")}:${(s%60).toString().padStart(2,"0")}`;
+
+  const MUSCLE_COLORS = { "Cuádriceps":C.lime, "Glúteos":C.lime, "Isquios":C.lime, "Pectoral":C.cyan, "Tríceps":C.cyan, "Espalda":C.amber, "Deltoides":C.amber, "Bíceps":C.rose };
+  const exColor = (name) => MUSCLE_COLORS[(MUSCLES[name] || [])[0]] || C.muted;
+
+  // --- CARRUSEL POR SPLIT ---
+  const [focusSplit, setFocusSplit] = useState(splits[0]?.key || "A");
+  const [overrides, setOverrides] = useState({});
+
+  const getLastEntry = (exName) => {
+    const work = (exlog[exName] || []).filter(s => s.type !== "warmup");
+    if (work.length === 0) return { w: 0, reps: "8" };
+    const last = [...work].sort((a,b) => new Date(b.date) - new Date(a.date))[0];
+    return { w: parseFloat(last.w) || 0, reps: String(parseInt(last.reps) || 8) };
+  };
+  const getVals = (exName) => overrides[exName] || getLastEntry(exName);
+  const adjWeight = (exName, delta) => {
+    const cur = getVals(exName);
+    setOverrides(prev => ({ ...prev, [exName]: { ...cur, w: Math.max(0, (cur.w||0) + delta) } }));
+  };
+  const adjReps = (exName, delta) => {
+    const cur = getVals(exName);
+    setOverrides(prev => ({ ...prev, [exName]: { ...cur, reps: String(Math.max(1, (parseInt(cur.reps)||8) + delta)) } }));
+  };
+  const triggerRest = () => { stopRest(); setRestElapsed(0); setRestRunning(true); };
+
+  return (
+    <div className="trainer-agent-sheet" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="trainer-agent-panel">
+
+        {/* Header */}
+        <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+          <div style={{display:"flex", alignItems:"center", gap:8}}>
+            <Clock size={16} color={C.cyan}/>
+            <span style={{fontFamily:"var(--font-display)", fontSize:20, letterSpacing:".05em", color:C.ink}}>MODO FOCO</span>
+          </div>
+          <button onClick={onClose} style={{background:"none", color:C.muted, cursor:"pointer", padding:4, display:"flex", border:"none"}}><X size={20}/></button>
+        </div>
+
+        {/* REST TIMER */}
+        <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:14, padding:16}}>
+          <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".08em", marginBottom:12}}>⏱ Timer de Descanso</div>
+
+          <div style={{textAlign:"center", marginBottom:8}}>
+            <span style={{fontFamily:"var(--font-display)", fontSize:60, lineHeight:1, color: restRunning ? C.lime : C.ink, transition:"color .3s"}}>
+              {fmtTime(restRemaining)}
+            </span>
+          </div>
+
+          <div style={{height:5, background:C.line, borderRadius:99, marginBottom:12, overflow:"hidden"}}>
+            <div style={{height:"100%", width:`${restTotal > 0 ? (restElapsed/restTotal)*100 : 0}%`, background:C.lime, borderRadius:99, transition:"width .8s linear"}}/>
+          </div>
+
+          <div style={{display:"flex", gap:5, marginBottom:8}}>
+            {[60,90,120,180].map(s => (
+              <button key={s} onClick={() => setPreset(s)}
+                style={{flex:1, padding:"5px 0", borderRadius:6, background: restTotal===s ? "rgba(205,255,74,0.12)" : C.panel, border:`1px solid ${restTotal===s ? "rgba(205,255,74,0.5)" : C.line}`, color: restTotal===s ? C.lime : C.muted, fontSize:11, fontWeight:800, cursor:"pointer"}}>
+                {s}s
+              </button>
+            ))}
+          </div>
+
+          <div style={{display:"flex", gap:6}}>
+            <button onClick={() => setPreset(Math.max(10, restTotal-10))}
+              style={{flex:1, padding:"9px 0", borderRadius:8, background:C.panel, border:`1px solid ${C.line}`, color:C.muted, fontSize:13, fontWeight:700, cursor:"pointer"}}>−10s</button>
+            <button onClick={restRunning ? stopRest : startRest}
+              style={{flex:2, padding:"9px 0", borderRadius:8, background: restRunning ? "rgba(255,107,138,0.12)" : "rgba(205,255,74,0.12)", border:`1px solid ${restRunning ? "rgba(255,107,138,0.4)" : "rgba(205,255,74,0.35)"}`, color: restRunning ? C.rose : C.lime, fontSize:14, fontWeight:800, cursor:"pointer"}}>
+              {restRunning ? "⏹ Parar" : "▶ Iniciar"}
+            </button>
+            <button onClick={() => setPreset(Math.min(300, restTotal+10))}
+              style={{flex:1, padding:"9px 0", borderRadius:8, background:C.panel, border:`1px solid ${C.line}`, color:C.muted, fontSize:13, fontWeight:700, cursor:"pointer"}}>+10s</button>
+          </div>
+        </div>
+
+        {/* CIRCUIT */}
+        <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:14, padding:16}}>
+          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10}}>
+            <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".08em"}}>🏃 Circuito Sin Equipo</div>
+            {circuitRunning && (
+              <div style={{fontSize:11, fontWeight:800, color:C.cyan, background:"rgba(74,214,255,0.1)", border:"1px solid rgba(74,214,255,0.25)", borderRadius:6, padding:"2px 8px"}}>
+                Ronda {currentRound}
+              </div>
+            )}
+          </div>
+
+          <div style={{fontSize:12, fontWeight:700, color:C.muted, marginBottom:10}}>
+            {circuitSplit?.name || "Sin equipo"} · {circuitExs.length} × {exDuration}s
+          </div>
+
+          {circuitRunning ? (
+            <div style={{textAlign:"center", paddingBottom:8}}>
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, letterSpacing:".08em", marginBottom:4}}>
+                EJERCICIO {currentExIdx+1} / {circuitExs.length}
+              </div>
+              <div style={{fontFamily:"var(--font-display)", fontSize:22, letterSpacing:".02em", color: exColor(circuitExs[currentExIdx]), marginBottom:6}}>
+                {circuitExs[currentExIdx]}
+              </div>
+              <div style={{fontFamily:"var(--font-display)", fontSize:72, lineHeight:1, color:C.ink, marginBottom:8}}>
+                {secsInEx}
+              </div>
+              <div style={{height:5, background:C.line, borderRadius:99, marginBottom:10, overflow:"hidden"}}>
+                <div style={{height:"100%", width:`${(secsInEx/exDuration)*100}%`, background: exColor(circuitExs[currentExIdx]), borderRadius:99, transition:"width .8s linear"}}/>
+              </div>
+              <div style={{fontSize:11, color:C.muted}}>
+                SIGUIENTE → <span style={{color: exColor(circuitExs[nextExIdx]), fontWeight:700}}>
+                  {circuitExs[nextExIdx]}{currentExIdx+1 === circuitExs.length ? ` · Ronda ${currentRound+1}` : ""}
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div style={{display:"flex", flexDirection:"column", gap:5, marginBottom:10}}>
+              {circuitExs.map((ex, i) => (
+                <div key={i} style={{display:"flex", alignItems:"center", justifyContent:"space-between", padding:"7px 10px", background:C.panel, border:`1px solid ${C.line}`, borderRadius:8}}>
+                  <div style={{display:"flex", alignItems:"center", gap:8}}>
+                    <span style={{fontFamily:"var(--font-display)", fontSize:17, color:C.lime, width:18, textAlign:"center"}}>{i+1}</span>
+                    <span style={{fontSize:13, fontWeight:600, color:C.ink}}>{ex}</span>
+                  </div>
+                  <span style={{fontSize:11, color:C.muted, fontWeight:700}}>60s</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button onClick={circuitRunning ? stopCircuit : startCircuit}
+            style={{width:"100%", padding:"13px 0", borderRadius:10, cursor:"pointer", background: circuitRunning ? "rgba(255,107,138,0.12)" : "linear-gradient(90deg,rgba(205,255,74,0.15),rgba(74,214,255,0.15))", border:`1px solid ${circuitRunning ? "rgba(255,107,138,0.4)" : "rgba(205,255,74,0.3)"}`, color: circuitRunning ? C.rose : C.lime, fontSize:14, fontWeight:800, letterSpacing:".03em"}}>
+            {circuitRunning ? "⏹ Detener Circuito" : "▶ Iniciar Circuito"}
+          </button>
+        </div>
+
+        {/* CARRUSEL DE EJERCICIOS POR SPLIT */}
+        <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:14, padding:16}}>
+          <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".08em", marginBottom:12}}>
+            💪 Ejercicios por Split
+          </div>
+
+          {/* Split tabs */}
+          <div style={{display:"flex", gap:5, marginBottom:14, overflowX:"auto", paddingBottom:2}}>
+            {splits.map(sp => {
+              const active = focusSplit === sp.key;
+              return (
+                <button key={sp.key} onClick={() => setFocusSplit(sp.key)}
+                  className="btn-active-scale"
+                  style={{flexShrink:0, padding:"5px 11px", borderRadius:20, fontSize:11, fontWeight:800, cursor:"pointer",
+                    background: active ? "rgba(205,255,74,0.15)" : C.panel,
+                    border: `1px solid ${active ? "rgba(205,255,74,0.5)" : C.line}`,
+                    color: active ? C.lime : C.muted}}>
+                  {sp.key} · {sp.name.split("+")[0].split(" ").slice(0,2).join(" ")}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Horizontal card carousel */}
+          {(() => {
+            const spExs = splits.find(s => s.key === focusSplit)?.ex || [];
+            if (spExs.length === 0) return <div style={{fontSize:12, color:C.muted, textAlign:"center", padding:"12px 0"}}>Sin ejercicios en este split.</div>;
+            return (
+              <>
+                <div style={{display:"flex", gap:10, overflowX:"auto", paddingBottom:10, scrollSnapType:"x mandatory", WebkitOverflowScrolling:"touch"}}>
+                  {spExs.map(exName => {
+                    const vals = getVals(exName);
+                    const last = getLastEntry(exName);
+                    const seriesTotal = (exlog[exName] || []).filter(s => s.type !== "warmup").length;
+                    const col = exColor(exName);
+                    const muscles = (MUSCLES[exName] || []).slice(0,2);
+                    const hasHistory = last.w > 0;
+                    const btnStyle = (active) => ({
+                      width:32, height:32, borderRadius:7, cursor:"pointer", fontSize:18, fontWeight:700,
+                      display:"flex", alignItems:"center", justifyContent:"center",
+                      background: active ? "rgba(205,255,74,0.12)" : C.panel2,
+                      border: `1px solid ${active ? "rgba(205,255,74,0.4)" : C.line}`,
+                      color: active ? C.lime : C.muted
+                    });
+                    return (
+                      <div key={exName} style={{
+                        flexShrink:0, width:188, background:C.panel, border:`1px solid ${C.line}`,
+                        borderRadius:13, padding:13, scrollSnapAlign:"start",
+                        display:"flex", flexDirection:"column", gap:9
+                      }}>
+                        {/* Name */}
+                        <div style={{fontSize:12.5, fontWeight:800, color:C.ink, lineHeight:1.25, minHeight:32}}>{exName}</div>
+
+                        {/* Muscle chips + history */}
+                        <div style={{display:"flex", gap:4, flexWrap:"wrap", alignItems:"center"}}>
+                          {muscles.map(m => (
+                            <span key={m} style={{fontSize:9, fontWeight:700, color:col, background:`${col}18`, border:`1px solid ${col}30`, borderRadius:4, padding:"1px 5px"}}>{m}</span>
+                          ))}
+                          {seriesTotal > 0 && <span style={{fontSize:9, color:C.muted, marginLeft:"auto"}}>{seriesTotal} series</span>}
+                        </div>
+
+                        {/* Last record hint */}
+                        {hasHistory && (
+                          <div style={{fontSize:10, color:C.muted}}>Última: <span style={{color:col, fontWeight:700}}>{last.w}kg × {last.reps}</span></div>
+                        )}
+
+                        {/* Weight control */}
+                        <div>
+                          <div style={{fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:5}}>Peso (kg)</div>
+                          <div style={{display:"flex", alignItems:"center", gap:5}}>
+                            <button onClick={() => adjWeight(exName, -2.5)} style={btnStyle(false)}>−</button>
+                            <span style={{flex:1, textAlign:"center", fontFamily:"var(--font-display)", fontSize:24, color:C.ink, lineHeight:1}}>{vals.w || 0}</span>
+                            <button onClick={() => adjWeight(exName, 2.5)} style={btnStyle(true)}>+</button>
+                          </div>
+                        </div>
+
+                        {/* Reps control */}
+                        <div>
+                          <div style={{fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:5}}>Reps</div>
+                          <div style={{display:"flex", alignItems:"center", gap:5}}>
+                            <button onClick={() => adjReps(exName, -1)} style={btnStyle(false)}>−</button>
+                            <span style={{flex:1, textAlign:"center", fontFamily:"var(--font-display)", fontSize:24, color:C.ink, lineHeight:1}}>{parseInt(vals.reps)||8}</span>
+                            <button onClick={() => adjReps(exName, 1)} style={btnStyle(true)}>+</button>
+                          </div>
+                        </div>
+
+                        {/* Rest button */}
+                        <button onClick={triggerRest} className="btn-active-scale"
+                          style={{width:"100%", padding:"8px 0", borderRadius:8, cursor:"pointer",
+                            background:"rgba(205,255,74,0.1)", border:"1px solid rgba(205,255,74,0.28)",
+                            color:C.lime, fontSize:11, fontWeight:800}}>
+                          ▶ Descanso {restTotal}s
+                        </button>
+
+                        {/* Set tracking */}
+                        <div style={{display:"flex", alignItems:"center", gap:8, marginTop:8}}>
+                          <button
+                            onClick={() => markSetDone(exName)}
+                            style={{flex:1, padding:"9px", borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", fontWeight:800, fontSize:12.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
+                          >
+                            ✓ Serie hecha
+                          </button>
+                          <div style={{fontSize:12, fontWeight:700, color:C.muted, minWidth:54, textAlign:"center"}}>
+                            {(setsDone[exName] || 0)} series
+                          </div>
+                          {(setsDone[exName] || 0) > 0 && (
+                            <button onClick={() => resetSets(exName)} style={{background:"none", border:`1px solid ${C.line}`, borderRadius:8, padding:"7px 9px", color:C.muted, fontSize:11, cursor:"pointer"}}>
+                              Reset
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Form cue */}
+                        {formCues[exName] ? (
+                          <div style={{fontSize:10.5, color:C.amber, lineHeight:1.4, background:`${C.amber}11`, border:`1px solid ${C.amber}33`, borderRadius:7, padding:"6px 8px"}}>
+                            💡 {formCues[exName]}
+                          </div>
+                        ) : (
+                          <button onClick={() => generateFormCue(exName)}
+                            disabled={formCueBusy[exName]}
+                            style={{width:"100%", padding:"5px 0", borderRadius:7, cursor:"pointer", background:"transparent",
+                              border:`1px solid ${C.amber}44`, color:C.amber, fontSize:10, fontWeight:700}}>
+                            {formCueBusy[exName] ? "…" : "💡 Tip técnico"}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{fontSize:10, color:C.muted, textAlign:"center"}}>
+                  ← Deslizá para ver todos los ejercicios →
+                </div>
+              </>
+            );
+          })()}
+        </div>
 
       </div>
     </div>
@@ -7095,6 +8942,13 @@ function Entreno({
   };
 
   const allExistingExercises = Object.values(exercises || {}).flat().map(e => e.name);
+  const allExerciseObjects = (() => {
+    const seen = new Set();
+    return Object.values(exercises || {}).flat().filter(e => {
+      if (seen.has(e.name)) return false;
+      seen.add(e.name); return true;
+    }).map(e => ({ ...e, equipo: e.equipo || SEED_EQUIPO[e.name] || "peso libre", tecnico: e.tecnico || SEED_TECNICO[e.name] || "" }));
+  })();
 
   const findBestMatch = (name, existingList) => {
     const clean = (s) => s.toLowerCase().trim().replace(/s$/, "");
@@ -7329,58 +9183,98 @@ function Entreno({
     }
   };
 
-  const addExercise = async() => { 
-    if(!addText.trim() || addBusy) return; 
-    setAddBusy(true); 
+  const addExercise = async() => {
+    if(!addText.trim() || addBusy) return;
+    setAddBusy(true);
     setAddErr("");
     try{
       if(addMode === "nombre"){
-        const sys = "Eres un entrenador personal experto. Analiza el ejercicio brindado, identifica su nombre técnico e identifica obligatoriamente al menos los 3 músculos principales involucrados (por ejemplo, para Sentadilla podrías listar Cuádriceps femoral, Glúteo mayor, e Isquiotibiales). Devuelve un JSON. Ejemplo:\n" +
-                    "{\n" +
-                    "  \"tecnico\": \"Extensión de rodilla en máquina\",\n" +
-                    "  \"musculos\": [\"Cuádriceps femoral\", \"Vasto lateral\", \"Vasto medial\"]\n" +
-                    "}";
-        const schema = {
-          type: "OBJECT",
-          properties: {
-            tecnico: { type: "STRING" },
-            musculos: {
-              type: "ARRAY",
-              items: { type: "STRING" },
-              description: "Lista con al menos 3 músculos principales trabajados"
+        let tecnico = "", equipo = "peso libre", musculos = [];
+        // Local-first: si el ejercicio ya existe, reusar su metadata sin llamar a la IA
+        const matchName = findBestMatch(addText.trim(), allExerciseObjects.map(e => e.name));
+        const matchObj = matchName ? allExerciseObjects.find(e => e.name === matchName) : null;
+        if (matchObj && (matchObj.musculos?.length || matchObj.tecnico)) {
+          tecnico = matchObj.tecnico || "";
+          equipo = matchObj.equipo || "peso libre";
+          musculos = matchObj.musculos || [];
+        } else {
+          const cached = getAICache("exname", addText.trim());
+          if (cached) {
+            tecnico = cached.tecnico || ""; equipo = cached.equipo || "peso libre"; musculos = cached.musculos || [];
+          } else {
+            try {
+              const sys = "Eres un entrenador personal experto. Analiza el ejercicio brindado, identifica su nombre técnico, el tipo de equipo usado y al menos los 3 músculos principales. Devuelve un JSON. Ejemplo:\n" +
+                          "{\n" +
+                          "  \"tecnico\": \"Extensión de rodilla en máquina\",\n" +
+                          "  \"equipo\": \"máquina\",\n" +
+                          "  \"musculos\": [\"Cuádriceps femoral\", \"Vasto lateral\", \"Vasto medial\"]\n" +
+                          "}\n" +
+                          "Valores válidos para equipo: \"peso libre\", \"máquina\", \"polea\", \"cuerpo libre\".";
+              const schema = {
+                type: "OBJECT",
+                properties: {
+                  tecnico: { type: "STRING" },
+                  equipo: { type: "STRING" },
+                  musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Al menos 3 músculos principales" }
+                },
+                required: ["tecnico", "equipo", "musculos"]
+              };
+              const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
+              tecnico = o.tecnico || "";
+              equipo = o.equipo || "peso libre";
+              musculos = o.musculos || [];
+              setAICache("exname", addText.trim(), { tecnico, equipo, musculos });
+            } catch(aiE) {
+              setAddErr("⚠️ " + aiErr(aiE) + " — ejercicio añadido sin metadatos.");
             }
-          },
-          required: ["tecnico", "musculos"]
-        };
-        const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
-        setExercises({...exercises, [sel]: [...dayExs, {name: addText.trim(), tecnico: o.tecnico || "", musculos: o.musculos || []}]});
+          }
+        }
+        setExercises({...exercises, [sel]: [...dayExs, {name: addText.trim(), tecnico, equipo, musculos}]});
       } else {
-        const sys = "El usuario describe un ejercicio físico. Identifícalo, indica su nombre técnico e identifica obligatoriamente al menos los 3 músculos principales involucrados (por ejemplo, para Vuelos laterales podrías listar Deltoides lateral, Supraespinoso, e Hombro anterior). Devuelve un JSON. Ejemplo:\n" +
-                    "{\n" +
-                    "  \"nombre\": \"Vuelos laterales en polea\",\n" +
-                    "  \"tecnico\": \"Abducción de hombro en polea baja\",\n" +
-                    "  \"musculos\": [\"Deltoides lateral\", \"Supraespinoso\", \"Trapecio\"]\n" +
-                    "}";
-        const schema = {
-          type: "OBJECT",
-          properties: {
-            nombre: { type: "STRING" },
-            tecnico: { type: "STRING" },
-            musculos: {
-              type: "ARRAY",
-              items: { type: "STRING" },
-              description: "Lista con al menos 3 músculos principales trabajados"
-            }
-          },
-          required: ["nombre", "tecnico", "musculos"]
-        };
-        const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
-        setExercises({...exercises, [sel]: [...dayExs, {name: o.nombre || addText.trim(), tecnico: o.tecnico || "", musculos: o.musculos || []}]});
+        let nombre = addText.trim(), tecnico = "", equipo = "peso libre", musculos = [];
+        const cachedD = getAICache("exdesc", addText.trim());
+        if (cachedD) {
+          nombre = cachedD.nombre || addText.trim();
+          tecnico = cachedD.tecnico || "";
+          equipo = cachedD.equipo || "peso libre";
+          musculos = cachedD.musculos || [];
+        } else {
+          try {
+            const sys = "El usuario describe un ejercicio físico. Identifícalo, indica su nombre técnico, el tipo de equipo y al menos los 3 músculos principales. Devuelve un JSON. Ejemplo:\n" +
+                        "{\n" +
+                        "  \"nombre\": \"Vuelos laterales en polea\",\n" +
+                        "  \"tecnico\": \"Abducción de hombro en polea baja\",\n" +
+                        "  \"equipo\": \"polea\",\n" +
+                        "  \"musculos\": [\"Deltoides lateral\", \"Supraespinoso\", \"Trapecio\"]\n" +
+                        "}\n" +
+                        "Valores válidos para equipo: \"peso libre\", \"máquina\", \"polea\", \"cuerpo libre\".";
+            const schema = {
+              type: "OBJECT",
+              properties: {
+                nombre: { type: "STRING" },
+                tecnico: { type: "STRING" },
+                equipo: { type: "STRING" },
+                musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Al menos 3 músculos principales" }
+              },
+              required: ["nombre", "tecnico", "equipo", "musculos"]
+            };
+            const o = cleanAndParseJSON(await callGemini([{role:"user", content:addText.trim()}], sys, schema));
+            nombre = o.nombre || addText.trim();
+            tecnico = o.tecnico || "";
+            equipo = o.equipo || "peso libre";
+            musculos = o.musculos || [];
+            setAICache("exdesc", addText.trim(), { nombre, tecnico, equipo, musculos });
+          } catch(aiE) {
+            // Fallback: add with description as name, no AI metadata
+            setAddErr("⚠️ " + aiErr(aiE) + " — añadido sin identificar, puedes editar el nombre después.");
+          }
+        }
+        setExercises({...exercises, [sel]: [...dayExs, {name: nombre, tecnico, equipo, musculos}]});
       }
-      setAddText(""); 
+      setAddText("");
       setAdding(false);
-    } catch(e){ 
-      setAddErr("No pude procesar el ejercicio. Intenta con una descripción más directa."); 
+    } catch(e){
+      setAddErr("⚠️ " + aiErr(e));
     }
     setAddBusy(false);
   };
@@ -8512,28 +10406,81 @@ function Entreno({
         ) : (
           <div>
             <div style={{display:"flex", gap:7, marginBottom:10}}>
-              <button onClick={() => setAddMode("nombre")} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "nombre" ? C.lime : C.line}`, background: addMode === "nombre" ? "rgba(107,78,255,.12)" : "transparent", color: addMode === "nombre" ? C.lime : C.muted}}>
+              <button onClick={() => { setAddMode("nombre"); setAddText(""); }} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "nombre" ? C.lime : C.line}`, background: addMode === "nombre" ? "rgba(107,78,255,.12)" : "transparent", color: addMode === "nombre" ? C.lime : C.muted}}>
                 Sé el nombre
               </button>
-              <button onClick={() => setAddMode("describir")} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "describir" ? C.lime : C.line}`, background: addMode === "describir" ? "rgba(107,78,255,.12)" : "transparent", color: addMode === "describir" ? C.lime : C.muted}}>
+              <button onClick={() => { setAddMode("describir"); setAddText(""); }} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "describir" ? C.lime : C.line}`, background: addMode === "describir" ? "rgba(107,78,255,.12)" : "transparent", color: addMode === "describir" ? C.lime : C.muted}}>
                 Describirlo
               </button>
             </div>
-            <textarea 
-              value={addText} 
-              onChange={e => setAddText(e.target.value)} 
-              rows={addMode === "describir" ? 3 : 1} 
-              className="ph" 
-              placeholder={addMode === "nombre" ? "Ej: Hip thrust con barra" : "Ej: En máquina sentado, empujo los agarres hacia afuera separando los muslos..."} 
-              style={{width:"100%", resize:"none", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none"}}
-            />
+
+            {addMode === "nombre" ? (
+              <div style={{position:"relative"}}>
+                <input
+                  value={addText}
+                  onChange={e => setAddText(e.target.value)}
+                  className="ph"
+                  placeholder="Buscar ejercicio… ej: Hip thrust, Curl"
+                  style={{width:"100%", boxSizing:"border-box", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none"}}
+                />
+                {(() => {
+                  const q = addText.trim().toLowerCase();
+                  if (!q) return null;
+                  const filtered = allExerciseObjects.filter(e => e.name.toLowerCase().includes(q));
+                  if (!filtered.length) return null;
+                  const groups = {};
+                  filtered.forEach(e => { const eq = e.equipo || "peso libre"; (groups[eq] = groups[eq]||[]).push(e); });
+                  EQUIPO_ORDER.forEach(eq => { if (groups[eq]) groups[eq].sort((a,b) => a.name.localeCompare(b,"es")); });
+                  return (
+                    <div style={{position:"absolute", top:"calc(100% + 4px)", left:0, right:0, background:C.bg, border:`1px solid ${C.line}`, borderRadius:12, zIndex:60, overflow:"hidden", boxShadow:"0 8px 28px rgba(0,0,0,0.45)", maxHeight:320, overflowY:"auto"}}>
+                      {EQUIPO_ORDER.filter(eq => groups[eq]).map(eq => (
+                        <div key={eq}>
+                          <div style={{padding:"6px 12px 4px", fontSize:9.5, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", background:"rgba(0,0,0,0.18)", position:"sticky", top:0}}>
+                            {EQUIPO_LABEL[eq]}
+                          </div>
+                          {groups[eq].map(ex => (
+                            <div key={ex.name}
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={() => {
+                                const existing = allExerciseObjects.find(o => o.name === ex.name);
+                                if (existing) {
+                                  const alreadyInDay = dayExs.some(d => d.name === existing.name);
+                                  if (!alreadyInDay) setExercises({...exercises, [sel]: [...dayExs, {name:existing.name, tecnico:existing.tecnico||"", equipo:existing.equipo||"peso libre", musculos:existing.musculos||[]}]});
+                                  setAddText(""); setAdding(false);
+                                } else {
+                                  setAddText(ex.name);
+                                }
+                              }}
+                              className="btn-active-scale"
+                              style={{padding:"9px 12px", cursor:"pointer", borderTop:`1px solid ${C.line}`}}>
+                              <div style={{fontSize:13, color:C.ink, fontWeight:600}}>{ex.name}</div>
+                              {ex.tecnico && <div style={{fontSize:11, color:C.muted, marginTop:2, lineHeight:1.3}}>{ex.tecnico}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            ) : (
+              <textarea
+                value={addText}
+                onChange={e => setAddText(e.target.value)}
+                rows={3}
+                className="ph"
+                placeholder="Ej: En máquina sentado, empujo los agarres hacia afuera separando los muslos..."
+                style={{width:"100%", resize:"none", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none"}}
+              />
+            )}
+
             <div style={{display:"flex", gap:8, marginTop:8}}>
-              <button 
-                onClick={addExercise} 
-                disabled={addBusy} 
-                style={{flex:1, padding:"10px", borderRadius:10, border:"none", background: addBusy ? C.panel2 : C.lime, color: addBusy ? C.muted : "#0c0e0b", cursor:"pointer", fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:6}}
+              <button
+                onClick={addExercise}
+                disabled={addBusy}
+                style={{flex:1, padding:"10px", borderRadius:10, border:"none", background: addBusy ? C.panel2 : C.lime, color: addBusy ? C.muted : "#0c0e0b", cursor:"pointer", fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
               >
-                {addBusy ? <><Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/>Procesando…</> : (addMode === "nombre" ? "Añadir ejercicio" : "Identificar y añadir")}
+                {addBusy ? <><Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/>Procesando…</> : (addMode === "nombre" ? "Añadir ejercicio nuevo" : "Identificar y añadir")}
               </button>
             </div>
             {addErr && <div style={{color:C.rose, fontSize:12, marginTop:8}}>{addErr}</div>}
@@ -9246,9 +11193,15 @@ function Registro({
     }
     return null;
   }, [selectedDateStr, metricslog, statsPeriod]);
-  const [text, setText] = useState(""); 
+  const [text, setText] = useState("");
   const [weight, setWeight] = useState("");
-  
+  const [cmpOpen, setCmpOpen] = useState(false);
+  const [cmpDateA, setCmpDateA] = useState("");
+  const [cmpDateB, setCmpDateB] = useState("");
+  const [cmpPhotoAnalysis, setCmpPhotoAnalysis] = useState("");
+  const [cmpPhotoBusy, setCmpPhotoBusy] = useState(false);
+  const photoFileRef = useRef(null);
+
   const [muscInput, setMuscInput] = useState("");
   const [fatInput, setFatInput] = useState("");
   const [viscInput, setViscInput] = useState("");
@@ -9271,7 +11224,7 @@ function Registro({
     setMuscInput(entry.musculo !== undefined ? String(entry.musculo) : "");
     setFatInput(entry.grasaPct !== undefined ? String(entry.grasaPct) : "");
     setViscInput(entry.visceral !== undefined ? String(entry.visceral) : "");
-    
+
     setBrazoDer(entry.brazoDer !== undefined ? String(entry.brazoDer) : "");
     setBrazoIzq(entry.brazoIzq !== undefined ? String(entry.brazoIzq) : "");
     setMusloDer(entry.musloDer !== undefined ? String(entry.musloDer) : "");
@@ -9280,6 +11233,10 @@ function Registro({
     setPantorrillaIzq(entry.pantorrillaIzq !== undefined ? String(entry.pantorrillaIzq) : "");
     setCintura(entry.cintura !== undefined ? String(entry.cintura) : "");
     setPecho(entry.pecho !== undefined ? String(entry.pecho) : "");
+
+    const allDates = Object.keys(metricslog).sort().reverse();
+    if (!cmpDateA && allDates.length >= 2) setCmpDateA(allDates[1]);
+    if (!cmpDateB && allDates.length >= 1) setCmpDateB(allDates[0]);
   }, [selectedDateStr, metricslog]);
 
   useEffect(() => {
@@ -9672,15 +11629,71 @@ function Registro({
       ? `Promedio nutricional de los últimos 7 días: ${Math.round(totalKcal / loggedDays)} kcal/día (P: ${Math.round(totalP / loggedDays)}g, C: ${Math.round(totalC / loggedDays)}g, G: ${Math.round(totalF / loggedDays)}g).`
       : "Sin registros nutricionales recientes.";
 
-    try{ 
-      const sys = `Eres el coach de Bruno. ${getProfileStr(metricsToUse.weight, metricsToUse.musculo, metricsToUse.grasaPct, metricsToUse.visceral)} Déficit de grasa progresivo, manteniendo masa muscular magra. Corto y al grano.`;
-      const out = await callGemini([{role:"user", content:`Historial de peso de Bruno: ${series}. Composición actual: Músculo ${metricsToUse.musculo}kg, Grasa ${metricsToUse.grasaPct}%, Visceral Grado ${metricsToUse.visceral}. ${nutAvgText} Analiza la tendencia y da sugerencias calóricas.`}], sys);
-      setTrend(out); 
+    // Historial de composición corporal (últimas mediciones)
+    const compHistory = Object.entries(metricslog || {})
+      .filter(([, m]) => m && (m.musculo || m.grasaPct))
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(-6)
+      .map(([d, m]) => `${d}: ${m.musculo ? m.musculo + 'kg músculo' : ''} ${m.grasaPct ? m.grasaPct + '% grasa' : ''}`.trim())
+      .join(" → ");
+
+    // Historial de perímetros (últimas 3 mediciones)
+    const perimHistory = Object.entries(metricslog || {})
+      .filter(([, m]) => m && (m.brazoDer || m.cintura || m.pecho))
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(-3)
+      .map(([d, m]) => `${d}: brazo ${m.brazoDer || '?'}cm, cintura ${m.cintura || '?'}cm, pecho ${m.pecho || '?'}cm`)
+      .join(" | ");
+
+    // Top PRs de entrenamiento
+    const prs = {};
+    Object.entries(exlog || {}).forEach(([name, sets]) => {
+      (sets || []).forEach(s => {
+        if (s && s.w && s.type !== "warmup") {
+          if (!prs[name] || s.w > prs[name]) prs[name] = s.w;
+        }
+      });
+    });
+    const prText = Object.entries(prs).slice(0, 8).map(([n, w]) => `${n}: ${w}kg`).join(", ") || "Sin datos";
+
+    // Días entrenados últimas 4 semanas
+    const recentWorkoutDays = new Set();
+    Object.values(exlog || {}).forEach(sets => {
+      (sets || []).forEach(s => {
+        if (s && s.date) {
+          const d = new Date(s.date);
+          const daysAgo = (Date.now() - d.getTime()) / 86400000;
+          if (daysAgo <= 28) recentWorkoutDays.add(s.date.slice(0, 10));
+        }
+      });
+    });
+
+    try{
+      const sys = `Eres el coach personal de Bruno. ${getProfileStr(metricsToUse.weight, metricsToUse.musculo, metricsToUse.grasaPct, metricsToUse.visceral)}
+Objetivo principal: reducción de grasa corporal manteniendo masa muscular. Dieta hiperproteica.
+Responde en español con análisis específico y 3-5 sugerencias concretas y accionables basadas en los datos reales. Formato: 1 párrafo de análisis + lista de sugerencias numeradas.`;
+      const userMsg = `DATOS DE BRUNO para análisis completo:
+
+📊 HISTORIAL DE PESO (cronológico): ${series}
+
+💪 COMPOSICIÓN CORPORAL (historial): ${compHistory || "Sin datos previos"}
+Actual → Músculo: ${metricsToUse.musculo}kg | Grasa: ${metricsToUse.grasaPct}% | Visceral: Grado ${metricsToUse.visceral}
+
+📏 PERÍMETROS CORPORALES: ${perimHistory || "Sin datos"}
+
+🍽️ NUTRICIÓN: ${nutAvgText}
+
+🏋️ ENTRENAMIENTO: ${recentWorkoutDays.size} días entrenados en últimas 4 semanas
+PRs actuales: ${prText}
+
+Analiza la tendencia de peso y composición corporal, identifica si está progresando hacia su objetivo de definición, y da sugerencias ESPECÍFICAS de calorías, macros y frecuencia de entrenamiento basadas en estos datos reales.`;
+      const out = await callGemini([{role:"user", content:userMsg}], sys);
+      setTrend(out);
       saveKey("last_trend", out);
-    } catch(e){ 
-      setTrend(aiErr(e)); 
-    } 
-    setBusy(false); 
+    } catch(e){
+      setTrend(aiErr(e));
+    }
+    setBusy(false);
   };
 
   const renderGoalBar = (title, val, unit, min, max, idealMin, idealMax, valColor) => {
@@ -10154,46 +12167,228 @@ function Registro({
         </button>
       </div>
 
-      {/* Caja de Composición Corporal InBody (Barras de Objetivo) */}
-      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
-        <div style={{fontSize:12.5, fontWeight:800, marginBottom:12, display:"flex", alignItems:"center", gap:6}}>
-          <Activity size={15} color={C.lime}/> Panel de Composición Corporal Inteligente
-        </div>
-        
-        {renderGoalBar("Peso Corporal", lastW, "kg", 60, 110, 75, 88, C.cyan)}
-        {renderGoalBar("Masa Muscular", activeMetrics.musculo, "kg", 45, 85, 55, 66, C.lime)}
-        {renderGoalBar("Masa Grasa Corporal", parseFloat(fatWeight), "kg", 5, 35, 8, 15, C.amber)}
-        
-        <div style={{height:9, background:C.panel2, borderRadius:6, overflow:"hidden", display:"flex", marginTop:16, marginBottom:10}}>
-          <div style={{width:muscPct+"%", background:C.cyan, height:"100%"}} title="Músculo"/>
-          <div style={{width:fatBarPct+"%", background:C.amber, height:"100%"}} title="Grasa"/>
-          <div style={{width:remPct+"%", background:C.line, height:"100%"}} title="Otros (Agua/Huesos)"/>
-        </div>
-        <div style={{display:"flex", justifyContent:"space-between", fontSize:10.5, color:C.muted}}>
-          <span>Músculo: {muscPct}%</span>
-          <span>Grasa: {fatBarPct}%</span>
-          <span>Otros: {remPct}%</span>
-        </div>
+      {/* ===== INFORME DE COMPOSICIÓN CORPORAL ===== */}
+      {(() => {
+        const H = 1.80, AGE = 34;
+        const W = lastW || 93.9;
+        const M = activeMetrics.musculo || 64.7;
+        const G = activeMetrics.grasaPct || 26.2;
+        const V = activeMetrics.visceral || 9;
 
-        {/* Indicador de grasa visceral */}
-        <div style={{fontSize:11, color:C.muted, display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:14}}>
-          <span>Grasa Visceral: <b style={{color:C.rose}}>Grado {activeMetrics.visceral}</b></span>
-          <span style={{color: activeMetrics.visceral >= 10 ? C.rose : activeMetrics.visceral >= 6 ? C.amber : C.lime, fontWeight:700}}>
-            {activeMetrics.visceral >= 10 ? "Alerta" : activeMetrics.visceral >= 6 ? "Moderado" : "Saludable"}
-          </span>
-        </div>
-        <div className="visceral-indicator">
-          {Array.from({length: 12}).map((_, i) => {
-            let color = C.line;
-            if (i < activeMetrics.visceral) {
-              color = activeMetrics.visceral >= 10 ? C.rose : activeMetrics.visceral >= 6 ? C.amber : C.lime;
-            }
-            return (
-              <div key={i} className="visceral-dot" style={{ backgroundColor: color }}/>
-            );
-          })}
-        </div>
-      </div>
+        const fatKg   = W * G / 100;
+        const leanKg  = W - fatKg;
+        const bmi     = W / (H * H);
+        const bmr     = Math.round(10 * W + 6.25 * 180 - 5 * AGE + 5);
+        const skelM   = M * 0.615; // músculo esquelético ≈ 61.5% del total
+        const smi     = skelM / (H * H);
+        const waterEst  = leanKg * 0.73;
+        const boneEst   = leanKg * 0.068;
+        const subcutFat = fatKg * 0.82;
+
+        // Porcentajes barra segmentada
+        const pMusc = Math.round(M / W * 100);
+        const pAgua = Math.round(waterEst / W * 100);
+        const pGras = Math.round(fatKg / W * 100);
+        const pHues = Math.max(0, 100 - pMusc - pAgua - pGras);
+
+        // Puntuación corporal (25 pts cada dimensión)
+        const sBmi  = bmi>=18.5&&bmi<25?25:bmi<27?17:bmi<30?10:5;
+        const sFat  = G<=13?25:G<=17?21:G<=20?17:G<=25?11:G<=30?6:2;
+        const sVisc = V<=4?25:V<=6?20:V<=9?13:V<=11?7:3;
+        const sMusc = smi>=12?25:smi>=10?21:smi>=8?16:smi>=6?10:6;
+        const score = sBmi + sFat + sVisc + sMusc;
+        const scoreCol = score>=75?C.lime:score>=55?C.amber:C.rose;
+        const scoreLabel = score>=80?"Composición excelente":score>=65?"Progreso sólido":score>=50?"En proceso de mejora":"Prioriza hábitos";
+
+        // Clasificaciones
+        const bmiLabel  = bmi<18.5?["Bajo peso",C.cyan]:bmi<25?["Normal",C.lime]:bmi<30?["Sobrepeso",C.amber]:["Obesidad",C.rose];
+        const fatLabel  = G<6?["Muy bajo",C.cyan]:G<14?["Atlético",C.lime]:G<18?["Fitness",C.lime]:G<25?["Aceptable",C.amber]:["Alto",C.rose];
+        const viscLabel = V<=4?["Saludable",C.lime]:V<=9?["Moderado",C.amber]:["Alerta",C.rose];
+
+        // Tipo de cuerpo (2 señales: grasa % y relación músculo/peso)
+        const mRatio = M / W;
+        const bodyTypeInfo = (() => {
+          if (G > 28) return ["Obeso", C.rose];
+          if (G > 22 && mRatio < 0.65) return ["Sobrepeso", C.amber];
+          if (G < 13 && mRatio < 0.63) return ["Delgado", C.cyan];
+          if (G > 20 && mRatio < 0.63) return ["Delgado-Gordo", C.amber];
+          if (G < 15 && smi >= 11) return ["Atlético", C.lime];
+          if (mRatio >= 0.68 && G < 20) return ["Musculoso", C.lime];
+          return ["Estándar", C.muted];
+        })();
+
+        // Control de peso
+        const targetFatPct = 15;
+        const fatToLose = Math.max(0, fatKg - W * targetFatPct / 100);
+        const muscToGain = Math.max(0, 70 - M);
+        const optWMin = (18.5 * H * H).toFixed(1);
+        const optWMax = (24.9 * H * H).toFixed(1);
+
+        // Edad corporal estimada (corrección vs edad real)
+        const bodyAge = Math.max(18, Math.round(AGE + (bmi - 22) * 1.1 + (G - 15) * 0.7 + (V - 4) * 1.3 - (smi - 9) * 1.8));
+
+        const chip = (label, col) => (
+          <span style={{fontSize:10, fontWeight:700, color:col, background:`${col}1a`, border:`1px solid ${col}40`, borderRadius:20, padding:"2px 9px"}}>{label}</span>
+        );
+
+        const miniCard = (label, val, hint, col=C.ink) => (
+          <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px"}}>
+            <div style={{fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em", marginBottom:3}}>{label}</div>
+            <div style={{fontFamily:"var(--font-display)", fontSize:21, color:col, lineHeight:1}}>{val}</div>
+            {hint && <div style={{fontSize:9, color:C.muted, marginTop:2}}>{hint}</div>}
+          </div>
+        );
+
+        return (
+          <div style={{display:"flex", flexDirection:"column", gap:10, marginBottom:12}}>
+
+            {/* === BLOQUE 1: Puntuación === */}
+            <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
+              <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12}}>
+                <div style={{display:"flex", alignItems:"center", gap:7}}>
+                  <Activity size={14} color={C.lime}/>
+                  <span style={{fontSize:11, fontWeight:800, color:C.ink, textTransform:"uppercase", letterSpacing:".06em"}}>Informe de Composición Corporal</span>
+                </div>
+                <span style={{fontSize:10, color:C.muted}}>Bruno · 34a · 180cm</span>
+              </div>
+
+              <div style={{display:"flex", gap:14, alignItems:"flex-start"}}>
+                {/* Score big number */}
+                <div style={{textAlign:"center", flexShrink:0}}>
+                  <div style={{fontFamily:"var(--font-display)", fontSize:60, lineHeight:1, color:scoreCol}}>{score}</div>
+                  <div style={{fontSize:10, color:C.muted, fontWeight:700}}>/ 100 pts</div>
+                  <div style={{fontSize:10, color:scoreCol, fontWeight:700, marginTop:4}}>{scoreLabel}</div>
+                </div>
+                {/* Sub-scores */}
+                <div style={{flex:1, display:"flex", flexDirection:"column", gap:5, paddingTop:4}}>
+                  {[["IMC", sBmi, bmiLabel[1]],["Grasa", sFat, fatLabel[1]],["Visceral", sVisc, viscLabel[1]],["Músculo", sMusc, smi>=10?C.lime:smi>=8?C.amber:C.rose]].map(([lbl,s,col]) => (
+                    <div key={lbl} style={{display:"flex", alignItems:"center", gap:6}}>
+                      <span style={{width:46, fontSize:10, color:C.muted, textAlign:"right"}}>{lbl}</span>
+                      <div style={{flex:1, height:4, background:C.line, borderRadius:99, overflow:"hidden"}}>
+                        <div style={{height:"100%", width:`${(s/25)*100}%`, background:col, borderRadius:99}}/>
+                      </div>
+                      <span style={{width:22, fontSize:10, color:col, fontWeight:800, textAlign:"right"}}>{s}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* === BLOQUE 2: Composición principal === */}
+            <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10}}>Análisis de Composición (kg)</div>
+
+              <div style={{display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6, marginBottom:12}}>
+                {[["PESO",W.toFixed(1),"kg",C.ink],["MAGRA",leanKg.toFixed(1),"kg",C.cyan],["GRASA",fatKg.toFixed(1),"kg",G>25?C.rose:C.amber],["MÚSCULO",M.toFixed(1),"kg",C.lime]].map(([lbl,v,u,col]) => (
+                  <div key={lbl} style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"8px 6px", textAlign:"center"}}>
+                    <div style={{fontSize:8.5, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em", marginBottom:3}}>{lbl}</div>
+                    <div style={{fontFamily:"var(--font-display)", fontSize:20, color:col, lineHeight:1}}>{v}</div>
+                    <div style={{fontSize:9, color:C.muted, marginTop:1}}>{u}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Barra segmentada */}
+              <div style={{height:8, borderRadius:6, overflow:"hidden", display:"flex"}}>
+                <div style={{width:`${pMusc}%`, background:C.lime}} title="Músculo"/>
+                <div style={{width:`${pAgua}%`, background:C.cyan, opacity:.7}} title="Agua"/>
+                <div style={{width:`${pGras}%`, background:G>25?C.rose:C.amber}} title="Grasa"/>
+                <div style={{width:`${pHues}%`, background:C.line}} title="Hueso"/>
+              </div>
+              <div style={{display:"flex", gap:8, fontSize:9, color:C.muted, marginTop:5, flexWrap:"wrap"}}>
+                <span><span style={{color:C.lime}}>■</span> Músculo {pMusc}%</span>
+                <span><span style={{color:C.cyan}}>■</span> Agua {pAgua}%</span>
+                <span><span style={{color:G>25?C.rose:C.amber}}>■</span> Grasa {pGras}%</span>
+                <span><span style={{color:C.muted}}>■</span> Hueso ~{pHues}%</span>
+              </div>
+            </div>
+
+            {/* === BLOQUE 3: Tabla análisis general === */}
+            <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10}}>Análisis General</div>
+              <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, overflow:"hidden"}}>
+                <div style={{display:"grid", gridTemplateColumns:"1fr 55px 88px 55px 64px", padding:"6px 10px", borderBottom:`1px solid ${C.line}`, fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase"}}>
+                  <span>Métrica</span><span style={{textAlign:"center"}}>Bajo</span><span style={{textAlign:"center"}}>Óptimo</span><span style={{textAlign:"center"}}>Alto</span><span style={{textAlign:"center"}}>Tu valor</span>
+                </div>
+                {[
+                  {lbl:"Masa muscular",  v:`${M.toFixed(1)} kg`, lo:"<50 kg", op:"55–70 kg",  hi:">75 kg",  col:M>=55&&M<=70?C.lime:M>=50?C.amber:C.rose},
+                  {lbl:"Grasa corporal", v:`${G.toFixed(1)} %`,  lo:"<6 %",   op:"10–20 %",   hi:">25 %",  col:G>=10&&G<=20?C.lime:G<25?C.amber:C.rose},
+                  {lbl:"IMC",            v:bmi.toFixed(1),        lo:"<18.5",  op:"18.5–24.9", hi:">25",    col:bmiLabel[1]},
+                  {lbl:"Grasa visceral", v:`G${V}`,               lo:"—",      op:"< 5",        hi:">10",   col:viscLabel[1]},
+                ].map((row, i, arr) => (
+                  <div key={row.lbl} style={{display:"grid", gridTemplateColumns:"1fr 55px 88px 55px 64px", padding:"7px 10px", borderBottom:i<arr.length-1?`1px solid ${C.line}`:"none", fontSize:11}}>
+                    <span style={{fontWeight:700, color:C.ink}}>{row.lbl}</span>
+                    <span style={{textAlign:"center", color:C.muted}}>{row.lo}</span>
+                    <span style={{textAlign:"center", color:C.lime, fontWeight:700}}>{row.op}</span>
+                    <span style={{textAlign:"center", color:C.muted}}>{row.hi}</span>
+                    <span style={{textAlign:"center", color:row.col, fontWeight:800}}>{row.v}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* === BLOQUE 4: Indicadores derivados === */}
+            <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10}}>Otros Indicadores</div>
+              <div style={{display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6}}>
+                {miniCard("TMB", `${bmr}`, "kcal/día · basal", C.cyan)}
+                {miniCard("Masa magra", `${leanKg.toFixed(1)} kg`, "Peso sin grasa")}
+                {miniCard("G. subcutánea", `${subcutFat.toFixed(1)} kg`, "~82% grasa total", G>25?C.rose:C.amber)}
+                {miniCard("Agua estimada", `${waterEst.toFixed(1)} kg`, "73% masa magra", C.cyan)}
+                {miniCard("SMI", smi.toFixed(1), "Musc. esq. / talla²", smi>=10?C.lime:smi>=8?C.amber:C.rose)}
+                {miniCard("Edad corporal", `${bodyAge} a`, `Real: 34 a · Δ ${bodyAge-34>0?"+"+(bodyAge-34):bodyAge-34}`, bodyAge<=AGE?C.lime:bodyAge<=AGE+5?C.amber:C.rose)}
+              </div>
+            </div>
+
+            {/* === BLOQUE 5: Control de peso + Tipo de cuerpo === */}
+            <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10}}>Control de Peso</div>
+              <div style={{background:`rgba(205,255,74,0.05)`, border:`1px solid rgba(205,255,74,0.18)`, borderRadius:10, padding:"12px 14px", marginBottom:12}}>
+                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:10}}>
+                  {[
+                    ["Peso recomendado", `${GOAL_W}–82 kg`],
+                    ["Grasa a perder", `−${fatToLose.toFixed(1)} kg`],
+                    ["Músculo a ganar", `+${muscToGain.toFixed(1)} kg`],
+                    ["Rango IMC óptimo", `${optWMin}–${optWMax} kg`],
+                  ].map(([k,v]) => (
+                    <div key={k}>
+                      <div style={{fontSize:10, color:C.muted, fontWeight:600, marginBottom:2}}>{k}</div>
+                      <div style={{fontSize:15, fontWeight:800, color:C.lime}}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:8}}>Tipo de Cuerpo</div>
+              <div style={{display:"flex", gap:6, flexWrap:"wrap", alignItems:"center"}}>
+                {chip(bodyTypeInfo[0], bodyTypeInfo[1])}
+                {chip(bmiLabel[0], bmiLabel[1])}
+                {chip(`Grasa: ${fatLabel[0]}`, fatLabel[1])}
+                {chip(`Visceral: ${viscLabel[0]}`, viscLabel[1])}
+              </div>
+            </div>
+
+            {/* === BLOQUE 6: Barras objetivo + visceral === */}
+            <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:12}}>Barras de Objetivo</div>
+              {renderGoalBar("Peso Corporal", lastW, "kg", 60, 110, 75, 88, C.cyan)}
+              {renderGoalBar("Masa Muscular", M, "kg", 45, 85, 55, 70, C.lime)}
+              {renderGoalBar("Masa Grasa Corporal", fatKg, "kg", 5, 35, 8, 15, C.amber)}
+
+              <div style={{fontSize:11, color:C.muted, display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:14}}>
+                <span>Grasa Visceral: <b style={{color:V>=10?C.rose:V>=6?C.amber:C.lime}}>Grado {V}</b></span>
+                <span style={{color:viscLabel[1], fontWeight:700}}>{viscLabel[0]}</span>
+              </div>
+              <div className="visceral-indicator">
+                {Array.from({length:12}).map((_,i) => (
+                  <div key={i} className="visceral-dot" style={{backgroundColor: i<V?(V>=10?C.rose:V>=6?C.amber:C.lime):C.line}}/>
+                ))}
+              </div>
+            </div>
+
+          </div>
+        );
+      })()}
 
       {/* Gráfico Histórico de Masa Magra vs Masa Grasa */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
@@ -10315,6 +12510,90 @@ function Registro({
         </div>
       </div>
 
+      {/* Radar chart de medidas corporales */}
+      {(() => {
+        const entry = metricslog[selectedDateStr] || {};
+        const prevDates = Object.keys(metricslog).filter(d => d < selectedDateStr).sort().slice(-1);
+        const prevEntry = prevDates.length > 0 ? (metricslog[prevDates[0]] || {}) : null;
+
+        const fields = [
+          { label:"Brazo", cur: entry.brazoDer ? (((+entry.brazoDer||0)+(+entry.brazoIzq||0))/2) : null, max:50 },
+          { label:"Muslo", cur: entry.musloDer ? (((+entry.musloDer||0)+(+entry.musloIzq||0))/2) : null, max:80 },
+          { label:"Pantorrilla", cur: entry.pantorrillaDer ? (((+entry.pantorrillaDer||0)+(+entry.pantorrillaIzq||0))/2) : null, max:50 },
+          { label:"Cintura", cur: entry.cintura ? (+entry.cintura||0) : null, max:120, invert:true },
+          { label:"Pecho", cur: entry.pecho ? (+entry.pecho||0) : null, max:130 },
+          { label:"Peso", cur: entry.weight ? (+entry.weight||0) : null, max:130 },
+        ];
+        const hasData = fields.some(f => f.cur !== null && f.cur > 0);
+        if (!hasData) return null;
+
+        const prevFields = prevEntry ? [
+          { cur: prevEntry.brazoDer ? (((+prevEntry.brazoDer||0)+(+prevEntry.brazoIzq||0))/2) : null, max:50 },
+          { cur: prevEntry.musloDer ? (((+prevEntry.musloDer||0)+(+prevEntry.musloIzq||0))/2) : null, max:80 },
+          { cur: prevEntry.pantorrillaDer ? (((+prevEntry.pantorrillaDer||0)+(+prevEntry.pantorrillaIzq||0))/2) : null, max:50 },
+          { cur: prevEntry.cintura ? (+prevEntry.cintura||0) : null, max:120, invert:true },
+          { cur: prevEntry.pecho ? (+prevEntry.pecho||0) : null, max:130 },
+          { cur: prevEntry.weight ? (+prevEntry.weight||0) : null, max:130 },
+        ] : null;
+
+        const N = fields.length;
+        const R = 75, cx = 95, cy = 90;
+        const angles = fields.map((_, i) => (2 * Math.PI * i / N) - Math.PI / 2);
+
+        const toXY = (r, angle) => [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
+
+        const polygon = (vals, fillColor, opacity) => {
+          const pts = vals.map((v, i) => {
+            const norm = v !== null ? Math.min(1, Math.max(0, v / (fields[i].max || 1))) : 0;
+            const r2 = norm * R;
+            return toXY(r2, angles[i]).map(x => x.toFixed(1)).join(",");
+          });
+          return <polygon points={pts.join(" ")} fill={fillColor} fillOpacity={opacity} stroke={fillColor} strokeWidth="1.5" strokeLinejoin="round"/>;
+        };
+
+        const curVals = fields.map(f => f.cur);
+        const prevVals = prevFields ? prevFields.map(f => f.cur) : null;
+
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
+            <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", gap:6}}>
+              <Activity size={15} color={C.cyan}/> Radar Corporal
+              {prevDates.length > 0 && <span style={{fontSize:10, color:C.muted, fontWeight:500}}>vs {prevDates[0]}</span>}
+            </div>
+            <svg width="100%" viewBox={`0 0 190 180`} style={{display:"block", maxWidth:260, margin:"0 auto"}}>
+              {[0.25, 0.5, 0.75, 1].map(scale => (
+                <polygon key={scale}
+                  points={angles.map(a => toXY(R*scale, a).map(x => x.toFixed(1)).join(",")).join(" ")}
+                  fill="none" stroke={C.line} strokeWidth="0.8"/>
+              ))}
+              {angles.map((a, i) => {
+                const [x1, y1] = toXY(0, a);
+                const [x2, y2] = toXY(R, a);
+                const [lx, ly] = toXY(R + 12, a);
+                return (
+                  <g key={i}>
+                    <line x1={x1.toFixed(1)} y1={y1.toFixed(1)} x2={x2.toFixed(1)} y2={y2.toFixed(1)} stroke={C.line} strokeWidth="0.8"/>
+                    <text x={lx.toFixed(1)} y={ly.toFixed(1)} textAnchor="middle" dominantBaseline="middle" fill={C.muted} fontSize="8">{fields[i].label}</text>
+                  </g>
+                );
+              })}
+              {prevVals && polygon(prevVals, C.amber, 0.15)}
+              {polygon(curVals, C.cyan, 0.25)}
+              {curVals.map((v, i) => {
+                if (v === null) return null;
+                const norm = Math.min(1, Math.max(0, v / (fields[i].max || 1)));
+                const [px, py] = toXY(norm * R, angles[i]);
+                return <circle key={i} cx={px.toFixed(1)} cy={py.toFixed(1)} r="3" fill={C.cyan} stroke={C.panel} strokeWidth="1.2"/>;
+              })}
+            </svg>
+            <div style={{display:"flex", gap:12, justifyContent:"center", fontSize:10, color:C.muted, marginTop:4}}>
+              <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:8, height:8, borderRadius:"50%", background:C.cyan}}/> Hoy</span>
+              {prevVals && <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:8, height:8, borderRadius:"50%", background:C.amber}}/> Anterior</span>}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Estadísticas Globales y Resúmenes */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
         <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12}}>
@@ -10430,9 +12709,248 @@ function Registro({
         </>
       )}
 
+      {/* Comparador de fechas */}
+      {Object.keys(metricslog).length >= 2 && (() => {
+        const allDates = Object.keys(metricslog).sort().reverse();
+        const mA = cmpDateA ? (metricslog[cmpDateA] || {}) : {};
+        const mB = cmpDateB ? (metricslog[cmpDateB] || {}) : {};
+        const cmpFields = [
+          { label:"Peso (kg)", a: mA.weight, b: mB.weight },
+          { label:"Músculo (kg)", a: mA.musculo, b: mB.musculo },
+          { label:"Grasa (%)", a: mA.grasaPct, b: mB.grasaPct, lowerBetter:true },
+          { label:"Brazo D (cm)", a: mA.brazoDer, b: mB.brazoDer },
+          { label:"Muslo D (cm)", a: mA.musloDer, b: mB.musloDer },
+          { label:"Cintura (cm)", a: mA.cintura, b: mB.cintura, lowerBetter:true },
+          { label:"Pecho (cm)", a: mA.pecho, b: mB.pecho },
+        ].filter(f => f.a !== undefined || f.b !== undefined);
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
+            <button onClick={() => setCmpOpen(v => !v)} style={{background:"none", border:"none", cursor:"pointer", width:"100%", display:"flex", justifyContent:"space-between", alignItems:"center", padding:0}}>
+              <span style={{fontSize:12.5, fontWeight:800, display:"flex", alignItems:"center", gap:6}}>
+                <TrendingUp size={14} color={C.cyan}/> Comparar Fechas
+              </span>
+              <span style={{color:C.muted, fontSize:12}}>{cmpOpen ? "▲" : "▼"}</span>
+            </button>
+            {cmpOpen && (
+              <div style={{marginTop:10, animation:"pop 0.2s ease"}}>
+                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:10}}>
+                  <div>
+                    <label style={{fontSize:10, color:C.muted, fontWeight:700, display:"block", marginBottom:3}}>Fecha A (antes)</label>
+                    <select value={cmpDateA} onChange={e => setCmpDateA(e.target.value)} style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 8px", color:C.ink, fontSize:12}}>
+                      {allDates.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{fontSize:10, color:C.muted, fontWeight:700, display:"block", marginBottom:3}}>Fecha B (después)</label>
+                    <select value={cmpDateB} onChange={e => setCmpDateB(e.target.value)} style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 8px", color:C.ink, fontSize:12}}>
+                      {allDates.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
+                </div>
+                {cmpFields.length > 0 ? cmpFields.map(f => {
+                  const vA = parseFloat(f.a);
+                  const vB = parseFloat(f.b);
+                  const diff = (!isNaN(vA) && !isNaN(vB)) ? (vB - vA) : null;
+                  const improved = diff !== null && (f.lowerBetter ? diff < 0 : diff > 0);
+                  const deltaColor = diff === null ? C.muted : diff === 0 ? C.muted : improved ? C.lime : C.rose;
+                  return (
+                    <div key={f.label} style={{display:"grid", gridTemplateColumns:"1fr 60px 60px 64px", gap:4, alignItems:"center", fontSize:12, padding:"5px 0", borderBottom:`1px solid ${C.line}33`}}>
+                      <span style={{color:C.muted, fontSize:11}}>{f.label}</span>
+                      <span style={{textAlign:"right", color:C.ink}}>{!isNaN(vA) ? vA.toFixed(1) : "—"}</span>
+                      <span style={{textAlign:"right", color:C.ink, fontWeight:700}}>{!isNaN(vB) ? vB.toFixed(1) : "—"}</span>
+                      <span style={{textAlign:"right", fontWeight:800, color:deltaColor}}>
+                        {diff !== null ? `${diff > 0 ? "+" : ""}${diff.toFixed(1)}` : "—"}
+                      </span>
+                    </div>
+                  );
+                }) : <div style={{color:C.muted, fontSize:12, textAlign:"center", padding:"8px 0"}}>Sin datos en las fechas seleccionadas</div>}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Galería de fotos de progreso */}
+      {(() => {
+        const datesWithPhotos = Object.keys(metricslog).filter(d => metricslog[d]?.photo).sort().reverse();
+        const currentPhoto = metricslog[selectedDateStr]?.photo;
+        const handlePhotoUpload = (e) => {
+          const file = e.target.files && e.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            const img = new Image();
+            img.onload = () => {
+              const maxW = 600;
+              const scale = Math.min(1, maxW / img.width);
+              const canvas = document.createElement("canvas");
+              canvas.width = Math.round(img.width * scale);
+              canvas.height = Math.round(img.height * scale);
+              canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+              const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+              const updated = { ...(metricslog[selectedDateStr] || {}), photo: dataUrl };
+              setMetricslog({ ...metricslog, [selectedDateStr]: updated });
+              saveWeight(selectedDateStr, updated);
+            };
+            img.src = reader.result;
+          };
+          reader.readAsDataURL(file);
+          e.target.value = "";
+        };
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
+            <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+              <span style={{display:"flex", alignItems:"center", gap:6}}><Camera size={14} color={C.lime}/> Fotos de Progreso</span>
+              <button onClick={() => photoFileRef.current?.click()} style={{background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, padding:"4px 10px", fontSize:11, fontWeight:800, cursor:"pointer"}}>
+                + Foto hoy
+              </button>
+              <input ref={photoFileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handlePhotoUpload}/>
+            </div>
+            {currentPhoto && (
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:10, color:C.lime, fontWeight:700, marginBottom:4}}>HOY — {selectedDateStr}</div>
+                <img src={currentPhoto} alt="Progreso hoy" style={{width:"100%", maxHeight:220, objectFit:"cover", borderRadius:10, border:`1px solid ${C.line}`}}/>
+              </div>
+            )}
+            {datesWithPhotos.length > 0 && (
+              <div style={{display:"flex", gap:8, overflowX:"auto", paddingBottom:4, scrollbarWidth:"none"}}>
+                {datesWithPhotos.filter(d => d !== selectedDateStr).slice(0, 8).map(d => (
+                  <div key={d} style={{flexShrink:0, textAlign:"center"}}>
+                    <img src={metricslog[d].photo} alt={d} style={{width:72, height:72, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`, display:"block"}}/>
+                    <div style={{fontSize:9, color:C.muted, marginTop:2}}>{d.slice(5)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {datesWithPhotos.length === 0 && !currentPhoto && (
+              <div style={{textAlign:"center", color:C.muted, fontSize:12, padding:"12px 0"}}>
+                Sube tu primera foto de progreso hoy 📸
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Comparador de fotos corporales con IA */}
+      {(() => {
+        const datesWithPhotos = Object.keys(metricslog).filter(d => metricslog[d]?.photo).sort().reverse();
+        if (datesWithPhotos.length < 2) return null;
+
+        const photoA = cmpDateA && metricslog[cmpDateA]?.photo;
+        const photoB = cmpDateB && metricslog[cmpDateB]?.photo;
+
+        const analyzePhotos = async () => {
+          if (!photoA || !photoB || cmpPhotoBusy) return;
+          const cacheKey = [cmpDateA, cmpDateB].sort().join("|");
+          const cached = getAICache("photo_cmp", cacheKey);
+          if (cached) { setCmpPhotoAnalysis(cached); return; }
+          setCmpPhotoBusy(true);
+          setCmpPhotoAnalysis("");
+          try {
+            const strip = url => url.split(",")[1] || url;
+            const mime = url => url.startsWith("data:image/png") ? "image/png" : "image/jpeg";
+            const msg = {
+              role: "user",
+              content: [
+                { type: "image", source: { media_type: mime(photoA), data: strip(photoA) } },
+                { type: "image", source: { media_type: mime(photoB), data: strip(photoB) } },
+                { type: "text", text: `Compara estas dos fotos de progreso corporal. La primera (izquierda) es del ${cmpDateA} y la segunda (derecha) del ${cmpDateB}. Analiza visualmente: cambios en composición corporal (músculo/grasa visible), definición, volumen, postura y cualquier progreso notable. Sé específico y constructivo. Máximo 5 oraciones en español.` }
+              ]
+            };
+            const result = await callGemini([msg], "Eres un coach experto en composición corporal. Analiza fotos de progreso con criterio profesional, siendo honesto y motivador. Responde en español.");
+            const text = result?.trim() || "Sin análisis disponible.";
+            setAICache("photo_cmp", cacheKey, text);
+            setCmpPhotoAnalysis(text);
+          } catch(e) {
+            setCmpPhotoAnalysis("⚠️ " + aiErr(e));
+          }
+          setCmpPhotoBusy(false);
+        };
+
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
+            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: cmpOpen ? 12 : 0}}>
+              <span style={{display:"flex", alignItems:"center", gap:6, fontSize:12.5, fontWeight:800}}>
+                <Camera size={14} color={C.cyan}/> Comparar Fotos
+              </span>
+              <button onClick={() => { setCmpOpen(!cmpOpen); setCmpPhotoAnalysis(""); }} style={{
+                background: cmpOpen ? C.panel2 : `${C.cyan}22`,
+                border: `1px solid ${cmpOpen ? C.line : C.cyan}`,
+                borderRadius:8, padding:"4px 12px", fontSize:11, fontWeight:800,
+                cursor:"pointer", color: cmpOpen ? C.muted : C.cyan
+              }}>
+                {cmpOpen ? "Cerrar" : "Comparar →"}
+              </button>
+            </div>
+
+            {cmpOpen && (
+              <>
+                {/* Side-by-side selectors + photos */}
+                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:10}}>
+                  {/* A */}
+                  <div style={{display:"flex", flexDirection:"column", gap:5}}>
+                    <select value={cmpDateA} onChange={e => { setCmpDateA(e.target.value); setCmpPhotoAnalysis(""); }}
+                      style={{fontSize:11, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"5px 6px", color:C.ink, width:"100%"}}>
+                      <option value="">— Fecha A —</option>
+                      {datesWithPhotos.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                    {photoA ? (
+                      <div style={{position:"relative"}}>
+                        <img src={photoA} alt={cmpDateA} style={{width:"100%", aspectRatio:"3/4", objectFit:"cover", borderRadius:10, border:`2px solid ${C.cyan}`, display:"block"}}/>
+                        <div style={{position:"absolute", bottom:4, left:4, fontSize:9, fontWeight:800, color:"#fff", background:"rgba(0,0,0,0.65)", borderRadius:4, padding:"1px 5px"}}>{cmpDateA}</div>
+                      </div>
+                    ) : (
+                      <div style={{aspectRatio:"3/4", borderRadius:10, border:`1px dashed ${C.line}`, display:"flex", alignItems:"center", justifyContent:"center", color:C.muted, fontSize:10}}>Sin foto</div>
+                    )}
+                  </div>
+                  {/* B */}
+                  <div style={{display:"flex", flexDirection:"column", gap:5}}>
+                    <select value={cmpDateB} onChange={e => { setCmpDateB(e.target.value); setCmpPhotoAnalysis(""); }}
+                      style={{fontSize:11, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"5px 6px", color:C.ink, width:"100%"}}>
+                      <option value="">— Fecha B —</option>
+                      {datesWithPhotos.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                    {photoB ? (
+                      <div style={{position:"relative"}}>
+                        <img src={photoB} alt={cmpDateB} style={{width:"100%", aspectRatio:"3/4", objectFit:"cover", borderRadius:10, border:`2px solid ${C.lime}`, display:"block"}}/>
+                        <div style={{position:"absolute", bottom:4, left:4, fontSize:9, fontWeight:800, color:"#fff", background:"rgba(0,0,0,0.65)", borderRadius:4, padding:"1px 5px"}}>{cmpDateB}</div>
+                      </div>
+                    ) : (
+                      <div style={{aspectRatio:"3/4", borderRadius:10, border:`1px dashed ${C.line}`, display:"flex", alignItems:"center", justifyContent:"center", color:C.muted, fontSize:10}}>Sin foto</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* AI analyze button */}
+                {photoA && photoB && (
+                  <button onClick={analyzePhotos} disabled={cmpPhotoBusy} style={{
+                    width:"100%", height:42, borderRadius:11, border:"none",
+                    background: cmpPhotoBusy ? C.panel2 : `linear-gradient(135deg,${C.cyan},${C.lime})`,
+                    color: cmpPhotoBusy ? C.muted : "#0c0e0b",
+                    fontSize:13, fontWeight:800, cursor: cmpPhotoBusy ? "default" : "pointer",
+                    display:"flex", alignItems:"center", justifyContent:"center", gap:7, marginBottom:10
+                  }}>
+                    {cmpPhotoBusy
+                      ? <><Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/> Analizando…</>
+                      : <><Sparkles size={15}/> Analizar con IA</>}
+                  </button>
+                )}
+
+                {/* Result */}
+                {cmpPhotoAnalysis && (
+                  <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:11, padding:"11px 13px", color:C.ink}}>
+                    <MarkdownText text={cmpPhotoAnalysis} style={{fontSize:12.5}}/>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })()}
+
       {notes.length === 0 && <div style={{color:C.muted, fontSize:13, textAlign:"center", padding:"16px 0"}}>Tu bitácora está vacía.</div>}
-      
-      {notes.map(n => { 
+
+      {notes.map(n => {
         const col = (TYPES[n.type] || ["", C.muted])[1]; 
         const d = new Date(n.date);
         return (
