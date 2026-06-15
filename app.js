@@ -827,6 +827,39 @@ function Chart({entries, color=C.lime, height=128}){
   );
 }
 
+/* ===== FITDAYS SCHEMA ===== */
+const FITDAYS_SCHEMA = {
+  type:"OBJECT", properties:{
+    peso:{ type:"NUMBER" },
+    imc:{ type:"NUMBER" },
+    grasaPct:{ type:"NUMBER" },
+    masaGrasa:{ type:"NUMBER" },
+    grasaSubc:{ type:"NUMBER" },
+    masaMuscular:{ type:"NUMBER" },
+    musculoEsq:{ type:"NUMBER" },
+    masaEsqueletica:{ type:"NUMBER" },
+    aguaKg:{ type:"NUMBER" },
+    pctAgua:{ type:"NUMBER" },
+    proteinaKg:{ type:"NUMBER" },
+    pctProteina:{ type:"NUMBER" },
+    visceral:{ type:"NUMBER" },
+    bmr:{ type:"NUMBER" },
+    edadCorporal:{ type:"NUMBER" },
+    whr:{ type:"NUMBER" },
+    puntuacion:{ type:"NUMBER" },
+    grasaTronco:{ type:"NUMBER" },
+    grasaBrazoDer:{ type:"NUMBER" },
+    grasaBrazoIzq:{ type:"NUMBER" },
+    grasaPiernaDer:{ type:"NUMBER" },
+    grasaPiernaIzq:{ type:"NUMBER" },
+    musculoTronco:{ type:"NUMBER" },
+    musculoBrazoDer:{ type:"NUMBER" },
+    musculoBrazoIzq:{ type:"NUMBER" },
+    musculoPiernaDer:{ type:"NUMBER" },
+    musculoPiernaIzq:{ type:"NUMBER" },
+  }, required:["peso","grasaPct"]
+};
+
 /* ===== COMPONENTE PRINCIPAL APP ===== */
 
 /* ===== AI INTELLIGENCE ENGINE — 20 FEATURES ===== */
@@ -11299,6 +11332,339 @@ function Entreno({
   );
 }
 
+/* ===== FITDAYS TRENDS MINI-CHART ===== */
+function FitdaysTrends({ metricslog }) {
+  const entries = React.useMemo(() => {
+    return Object.entries(metricslog || {})
+      .filter(([, v]) => v && (v.peso !== undefined || v.weight !== undefined))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-6)
+      .map(([date, v]) => ({ date, peso: v.peso ?? v.weight, grasaPct: v.grasaPct, puntuacion: v.puntuacion, bmr: v.bmr }));
+  }, [metricslog]);
+
+  if (entries.length < 2) return null;
+
+  const W = 300, H = 70, pad = 18;
+  const mkLine = (vals) => {
+    const mn = Math.min(...vals), mx = Math.max(...vals), rg = (mx - mn) || 1;
+    const X = i => pad + (i / (vals.length - 1)) * (W - 2 * pad);
+    const Y = v => H - pad - ((v - mn) / rg) * (H - 2 * pad - 4);
+    return { pts: vals.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" "), X, Y, mn, mx, vals };
+  };
+
+  const pesoVals = entries.map(e => e.peso).filter(v => v != null);
+  const grasaVals = entries.map(e => e.grasaPct).filter(v => v != null);
+  const puntuacionVals = entries.map(e => e.puntuacion).filter(v => v != null);
+  const bmrVals = entries.map(e => e.bmr).filter(v => v != null);
+
+  const hasPeso = pesoVals.length >= 2;
+  const hasGrasa = grasaVals.length >= 2;
+  const hasPuntuacion = puntuacionVals.length >= 2;
+  const hasBmr = bmrVals.length >= 2;
+
+  if (!hasPeso && !hasGrasa && !hasBmr) return null;
+
+  const miniChart = (vals, color, label, unit) => {
+    if (vals.length < 2) return null;
+    const { pts, X, Y } = mkLine(vals);
+    const last = vals[vals.length - 1];
+    const first = vals[0];
+    const up = last >= first;
+    const area = `${X(0).toFixed(1)},${H - pad} ${pts} ${X(vals.length - 1).toFixed(1)},${H - pad}`;
+    return (
+      <div style={{flex:1, minWidth:0}}>
+        <div style={{fontSize:10, color:C.muted, marginBottom:2, display:"flex", justifyContent:"space-between"}}>
+          <span style={{fontWeight:700, color}}>{label}</span>
+          <span style={{color:C.ink, fontWeight:800}}>{last.toFixed(1)}{unit} {up ? "↑" : "↓"}</span>
+        </div>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%", height:H, display:"block"}}>
+          <polygon points={area} fill={color} opacity="0.10"/>
+          <polyline points={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+          {vals.map((v, i) => <circle key={i} cx={X(i)} cy={Y(v)} r="2.5" fill={color}/>)}
+        </svg>
+        <div style={{display:"flex", justifyContent:"space-between", fontSize:9, color:C.muted, marginTop:-2}}>
+          <span>{entries[0].date.slice(5)}</span>
+          <span>{entries[entries.length - 1].date.slice(5)}</span>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
+      <div style={{fontSize:12, fontWeight:800, color:C.ink, marginBottom:10}}>📈 Tendencias Fitdays</div>
+      <div style={{display:"flex", gap:12, flexWrap:"wrap"}}>
+        {hasPeso && miniChart(entries.filter(e => e.peso != null).map(e => e.peso), C.cyan, "Peso", " kg")}
+        <div style={{flex:1, minWidth:0, display:"flex", flexDirection:"column", gap:8}}>
+          {hasGrasa && miniChart(entries.filter(e => e.grasaPct != null).map(e => e.grasaPct), C.amber, "% Grasa", "%")}
+          {hasPuntuacion && miniChart(entries.filter(e => e.puntuacion != null).map(e => e.puntuacion), C.lime, "Score", "")}
+        </div>
+        {hasBmr && miniChart(entries.filter(e => e.bmr != null).map(e => e.bmr), C.rose, "BMR", " kcal")}
+      </div>
+    </div>
+  );
+}
+
+/* ===== FITDAYS IMPORT COMPONENT ===== */
+function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
+  const fileRef = React.useRef(null);
+  const [preview, setPreview] = React.useState(null);
+  const [imgB64, setImgB64] = React.useState(null);
+  const [imgMime, setImgMime] = React.useState("image/jpeg");
+  const [busy, setBusy] = React.useState(false);
+  const [extracted, setExtracted] = React.useState(null);
+  const [form, setForm] = React.useState({});
+  const [date, setDate] = React.useState(() => new Date().toISOString().slice(0, 10));
+  const [saved, setSaved] = React.useState(false);
+  const [err, setErr] = React.useState("");
+  const [segGrasaOpen, setSegGrasaOpen] = React.useState(false);
+  const [segMusculoOpen, setSegMusculoOpen] = React.useState(false);
+
+  const compressImage = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxW = 600;
+        const scale = Math.min(1, maxW / img.width);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.8));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  const onFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    e.target.value = "";
+    setSaved(false);
+    setExtracted(null);
+    setForm({});
+    setErr("");
+    try {
+      const dataUrl = await compressImage(file);
+      setPreview(dataUrl);
+      const b64 = dataUrl.split(",")[1];
+      setImgB64(b64);
+      const mime = ["image/jpeg","image/png","image/webp"].includes(file.type) ? file.type : "image/jpeg";
+      setImgMime(mime);
+    } catch(ex) {
+      setErr("No se pudo leer la imagen.");
+    }
+  };
+
+  const doExtract = async () => {
+    if (!imgB64 || busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const sys = "Eres un extractor de datos de composición corporal. Analiza esta captura de pantalla de la app Fitdays y extrae TODOS los valores numéricos visibles. Si un valor no aparece claramente, omítelo (no inventes). Devuelve JSON.";
+      const out = await callGemini([{
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: imgMime, data: imgB64 } },
+          { type: "text", text: "Extrae todos los datos de composición corporal visibles en esta captura de Fitdays." }
+        ]
+      }], sys, FITDAYS_SCHEMA);
+      const parsed = cleanAndParseJSON(out);
+      if (!parsed || parsed.peso == null) {
+        setErr("No se detectaron datos. Intenta con otra captura.");
+      } else {
+        setExtracted(parsed);
+        const f = {};
+        Object.keys(FITDAYS_SCHEMA.properties).forEach(k => {
+          if (parsed[k] != null) f[k] = String(parsed[k]);
+        });
+        setForm(f);
+      }
+    } catch(ex) {
+      setErr("Error IA: " + (ex.message || ex));
+    }
+    setBusy(false);
+  };
+
+  const fv = (k) => form[k] !== undefined ? form[k] : "";
+  const sv = (k) => (v) => setForm(prev => ({ ...prev, [k]: v }));
+
+  const fieldInput = (k, label, unit) => (
+    <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:5}}>
+      <span style={{fontSize:11.5, color:C.muted, flex:"0 0 140px"}}>{label}:</span>
+      <input
+        value={fv(k)}
+        onChange={e => sv(k)(e.target.value)}
+        type="number"
+        inputMode="decimal"
+        style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"5px 8px", color:C.ink, fontSize:12, outline:"none", minWidth:0}}
+      />
+      {unit && <span style={{fontSize:11, color:C.muted, whiteSpace:"nowrap"}}>{unit}</span>}
+    </div>
+  );
+
+  const doSave = () => {
+    if (!date) return;
+    const entry = {};
+    Object.keys(FITDAYS_SCHEMA.properties).forEach(k => {
+      if (form[k] !== undefined && form[k] !== "") {
+        const n = parseFloat(form[k]);
+        if (!isNaN(n)) entry[k] = n;
+      }
+    });
+    if (entry.peso == null && entry.weight == null) {
+      setErr("Se requiere el peso para guardar.");
+      return;
+    }
+    // Map peso -> weight for metricslog compatibility
+    if (entry.peso != null && entry.weight == null) entry.weight = entry.peso;
+    const current = metricslog[date] || {};
+    const updated = { ...current, ...entry };
+    const newLog = { ...metricslog, [date]: updated };
+    setMetricslog(newLog);
+    saveKey("metricslog", newLog);
+    setSaved(true);
+    setErr("");
+  };
+
+  const sectionTitle = (title, color) => (
+    <div style={{fontSize:11, fontWeight:800, color, textTransform:"uppercase", letterSpacing:".08em", marginBottom:6, marginTop:8, borderBottom:`1px solid ${C.line}`, paddingBottom:3}}>
+      {title}
+    </div>
+  );
+
+  return (
+    <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
+      <div style={{fontSize:12.5, fontWeight:800, marginBottom:10}}>📊 Importar Fitdays</div>
+
+      <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={onFile}/>
+      <button
+        onClick={() => { fileRef.current?.click(); }}
+        style={{width:"100%", height:38, borderRadius:10, border:`1px solid ${C.cyan}`, background:`${C.cyan}18`, color:C.cyan, fontSize:12.5, fontWeight:800, cursor:"pointer", marginBottom:8}}
+      >
+        📷 Cargar captura de pantalla
+      </button>
+
+      {preview && (
+        <div style={{marginBottom:10, display:"flex", alignItems:"flex-start", gap:10}}>
+          <img src={preview} alt="preview" style={{width:90, height:90, objectFit:"cover", borderRadius:10, border:`1px solid ${C.line}`, flexShrink:0}}/>
+          <div style={{flex:1}}>
+            <button
+              onClick={doExtract}
+              disabled={busy}
+              style={{width:"100%", height:38, borderRadius:10, border:"none",
+                background: busy ? C.panel2 : `linear-gradient(135deg,${C.cyan},${C.lime})`,
+                color: busy ? C.muted : "#0c0e0b",
+                fontSize:12.5, fontWeight:800, cursor: busy ? "default" : "pointer",
+                display:"flex", alignItems:"center", justifyContent:"center", gap:6
+              }}
+            >
+              {busy
+                ? <><span style={{display:"inline-block", animation:"spin 1s linear infinite", marginRight:4}}>⟳</span> Extrayendo…</>
+                : "✦ Extraer datos con IA"}
+            </button>
+            {err && <div style={{color:C.rose, fontSize:11, marginTop:5}}>{err}</div>}
+          </div>
+        </div>
+      )}
+
+      {extracted && (
+        <div>
+          <div style={{fontSize:11, color:C.lime, fontWeight:700, marginBottom:8}}>✓ Datos extraídos — revisa y edita si necesitas:</div>
+
+          {/* Date picker */}
+          <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:10}}>
+            <span style={{fontSize:11.5, color:C.muted, flex:"0 0 140px"}}>Fecha:</span>
+            <input
+              type="date"
+              value={date}
+              onChange={e => setDate(e.target.value)}
+              style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"5px 8px", color:C.ink, fontSize:12, outline:"none"}}
+            />
+          </div>
+
+          {sectionTitle("Básico", C.cyan)}
+          {fieldInput("peso", "Peso", "kg")}
+          {fieldInput("imc", "IMC", "")}
+          {fieldInput("puntuacion", "Puntuación", "/100")}
+
+          {sectionTitle("Grasa", C.amber)}
+          {fieldInput("grasaPct", "% Grasa corporal", "%")}
+          {fieldInput("masaGrasa", "Masa grasa", "kg")}
+          {fieldInput("grasaSubc", "Grasa subcutánea", "%")}
+          {fieldInput("visceral", "Grasa visceral", "")}
+
+          {sectionTitle("Músculo", C.lime)}
+          {fieldInput("masaMuscular", "Masa muscular", "kg")}
+          {fieldInput("musculoEsq", "Músculo esquelético", "%")}
+          {fieldInput("masaEsqueletica", "Masa esquelética", "kg")}
+
+          {sectionTitle("Otros", C.muted)}
+          {fieldInput("aguaKg", "Agua corporal", "kg")}
+          {fieldInput("pctAgua", "% Agua", "%")}
+          {fieldInput("proteinaKg", "Proteína", "kg")}
+          {fieldInput("pctProteina", "% Proteína", "%")}
+          {fieldInput("bmr", "BMR", "kcal")}
+          {fieldInput("edadCorporal", "Edad corporal", "")}
+          {fieldInput("whr", "WHR", "")}
+
+          {/* Segmental grasa collapsible */}
+          <div
+            style={{fontSize:11, fontWeight:800, color:C.amber, textTransform:"uppercase", letterSpacing:".08em", marginBottom: segGrasaOpen ? 6 : 0, marginTop:8, borderBottom:`1px solid ${C.line}`, paddingBottom:3, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center"}}
+            onClick={() => setSegGrasaOpen(o => !o)}
+          >
+            <span>Segmental Grasa</span>
+            <span style={{fontSize:14}}>{segGrasaOpen ? "▲" : "▼"}</span>
+          </div>
+          {segGrasaOpen && (
+            <div>
+              {fieldInput("grasaTronco", "Tronco", "kg")}
+              {fieldInput("grasaBrazoDer", "Brazo Der.", "kg")}
+              {fieldInput("grasaBrazoIzq", "Brazo Izq.", "kg")}
+              {fieldInput("grasaPiernaDer", "Pierna Der.", "kg")}
+              {fieldInput("grasaPiernaIzq", "Pierna Izq.", "kg")}
+            </div>
+          )}
+
+          {/* Segmental músculo collapsible */}
+          <div
+            style={{fontSize:11, fontWeight:800, color:C.lime, textTransform:"uppercase", letterSpacing:".08em", marginBottom: segMusculoOpen ? 6 : 0, marginTop:8, borderBottom:`1px solid ${C.line}`, paddingBottom:3, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center"}}
+            onClick={() => setSegMusculoOpen(o => !o)}
+          >
+            <span>Segmental Músculo</span>
+            <span style={{fontSize:14}}>{segMusculoOpen ? "▲" : "▼"}</span>
+          </div>
+          {segMusculoOpen && (
+            <div>
+              {fieldInput("musculoTronco", "Tronco", "kg")}
+              {fieldInput("musculoBrazoDer", "Brazo Der.", "kg")}
+              {fieldInput("musculoBrazoIzq", "Brazo Izq.", "kg")}
+              {fieldInput("musculoPiernaDer", "Pierna Der.", "kg")}
+              {fieldInput("musculoPiernaIzq", "Pierna Izq.", "kg")}
+            </div>
+          )}
+
+          <button
+            onClick={doSave}
+            style={{width:"100%", height:42, borderRadius:11, border:"none", marginTop:12,
+              background:`linear-gradient(135deg,${C.lime},${C.cyan})`,
+              color:"#0c0e0b", fontSize:13, fontWeight:800, cursor:"pointer"
+            }}
+          >
+            💾 Guardar medición
+          </button>
+          {saved && <div style={{color:C.lime, fontSize:12, fontWeight:700, textAlign:"center", marginTop:6}}>✓ Medición guardada correctamente</div>}
+          {err && <div style={{color:C.rose, fontSize:11, marginTop:5}}>{err}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ===== TAB REGISTRO / PESO / COMPOSICIÓN CORPORAL ===== */
 function Registro({
   notes, setNotes, target, bodyComp, setBodyComp, geminiKey,
@@ -13106,6 +13472,14 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           </div>
         );
       })()}
+
+      {/* Fitdays Trends + Import */}
+      <FitdaysTrends metricslog={metricslog}/>
+      <FitdaysImport
+        metricslog={metricslog}
+        setMetricslog={setMetricslog}
+        geminiKey={geminiKey}
+      />
 
       {/* Galería de fotos de progreso */}
       {(() => {
