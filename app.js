@@ -9052,7 +9052,7 @@ function Entreno({
   const dayExs = (exercises || {})[sel] || [];
   const dayMuscles = [...new Set(dayExs.flatMap(e => e.musculos || []))];
   const last = (n) => { const a = (exlog || {})[n]; return a && a.length ? a[0] : null; };
-  const chartData = (n) => ((exlog || {})[n] || []).slice().reverse();
+  const chartData = (n) => ((exlog || {})[n] || []).slice().sort((a,b) => new Date(a.date) - new Date(b.date));
 
   useEffect(() => {
     (async () => {
