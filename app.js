@@ -5437,72 +5437,116 @@ function EditEntry({
 }
 
 function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr) {
+  const today = selectedDateStr || new Date().toISOString().slice(0, 10);
+
+  // ── ¿Ya entrenaste hoy? → modo Recuperación ──
+  const todaySets = Object.values(exlog || {}).flatMap(sets =>
+    (sets || []).filter(s => (s?.date || '').slice(0, 10) === today && s.type !== 'warmup')
+  );
+  const trainedToday = todaySets.length > 0;
+
+  if (trainedToday) {
+    const todayFood = (foodlog || {})[today] || [];
+    const proteinToday = Math.round(todayFood.reduce((a, e) => a + (+e.proteina || 0), 0));
+    const hydPct = Math.min(1, (water || 0) / 14);
+    const totalSets = todaySets.length;
+    const totalVol = Math.round(todaySets.reduce((a, s) => a + ((parseFloat(s.w)||0) * (parseInt(s.reps)||0)), 0));
+
+    let score = 7;
+    const factors = [];
+
+    if (proteinToday >= 50) { score += 1; factors.push(`${proteinToday}g proteína ✓`); }
+    else if (proteinToday >= 20) { factors.push(`${proteinToday}g prot. (suma más)`); }
+    else { score -= 1; factors.push("Prioriza proteína ahora"); }
+
+    if (hydPct >= 0.75) { score += 1; factors.push("Hidratación buena"); }
+    else if (hydPct >= 0.4) { factors.push("Sigue hidratándote"); }
+    else { score -= 1; factors.push("Agua urgente"); }
+
+    if (totalSets >= 15) { factors.push(`Sesión intensa · ${totalSets} series`); score -= 0.5; }
+    else if (totalSets >= 6) { factors.push(`${totalSets} series · ${totalVol > 0 ? totalVol + " kg vol." : ""}`); }
+    else { factors.push(`${totalSets} series registradas`); }
+
+    score = Math.round(Math.max(1, Math.min(10, score)));
+    let label, color;
+    if (score >= 8) { label = "Recuperación en curso"; color = C.lime; }
+    else if (score >= 6) { label = "Completa tu recuperación"; color = C.cyan; }
+    else { label = "Prioriza proteína y agua"; color = C.amber; }
+
+    return { score, label, color, factors, mode: "recovery" };
+  }
+
+  // ── Preparación pre-entreno ──
   let score = 5;
   const factors = [];
 
-  // Factor 1: Rest days since last workout
-  const today = selectedDateStr || new Date().toISOString().slice(0, 10);
+  // 1. Días de descanso desde último entreno
   let lastWorkoutDate = null;
   Object.values(exlog || {}).forEach(sets => {
     (sets || []).forEach(s => {
-      if (s?.date) {
-        const d = s.date.slice(0, 10);
-        if (d < today && (!lastWorkoutDate || d > lastWorkoutDate)) {
-          lastWorkoutDate = d;
-        }
-      }
+      const d = (s?.date || '').slice(0, 10);
+      if (d && d < today && (!lastWorkoutDate || d > lastWorkoutDate)) lastWorkoutDate = d;
     });
   });
-  let restDays = 0;
-  if (lastWorkoutDate) {
-    const diff = (new Date(today) - new Date(lastWorkoutDate)) / 86400000;
-    restDays = Math.floor(diff);
-  } else {
-    restDays = 7;
-  }
-  if (restDays === 0) { score -= 1; factors.push("Entrenaste ayer"); }
-  else if (restDays === 1) { score += 0.5; factors.push("1 día de descanso"); }
-  else if (restDays >= 2 && restDays <= 3) { score += 1.5; factors.push(`${restDays} días de descanso`); }
+  const restDays = lastWorkoutDate
+    ? Math.floor((new Date(today) - new Date(lastWorkoutDate)) / 86400000)
+    : 7;
+  if (restDays === 1) { score += 0.5; factors.push("1 día de descanso"); }
+  else if (restDays === 2 || restDays === 3) { score += 1.5; factors.push(`${restDays} días de descanso`); }
   else if (restDays > 3) { score += 0.5; factors.push("Descanso prolongado"); }
 
-  // Factor 2: Hydration
-  const waterGoal = 14;
-  const hydPct = Math.min(1, (water || 0) / waterGoal);
-  if (hydPct >= 0.85) { score += 1.5; factors.push("Bien hidratado"); }
-  else if (hydPct >= 0.6) { score += 0.5; factors.push("Hidratación aceptable"); }
-  else if (hydPct < 0.4) { score -= 1.5; factors.push("Baja hidratación"); }
+  // 2. Hidratación actual
+  const hydPct = Math.min(1, (water || 0) / 14);
+  if (hydPct >= 0.75) { score += 1.5; factors.push("Bien hidratado"); }
+  else if (hydPct >= 0.4) { score += 0.5; factors.push("Hidratación parcial"); }
+  else { score -= 1; factors.push("Hidratación baja"); }
 
-  // Factor 3: Recent fatigue notes (last 7 days)
-  const fatigueKeywords = ["fatiga", "cansado", "cansada", "dolor", "agotado", "agotada"];
-  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
-  const recentFatigueCount = (notes || []).filter(n => {
-    if (!n?.date) return false;
-    const nDate = (n.date || "").slice(0, 10);
-    if (nDate < weekAgo) return false;
-    const text = (n.text || "").toLowerCase();
-    return fatigueKeywords.some(k => text.includes(k));
-  }).length;
-  if (recentFatigueCount >= 3) { score -= 2; factors.push("Alta fatiga reciente"); }
-  else if (recentFatigueCount >= 1) { score -= 1; factors.push("Fatiga leve anotada"); }
-
-  // Factor 4: Yesterday's caloric intake
+  // 3. Proteína y calorías de ayer
   const yesterday = new Date(new Date(today).getTime() - 86400000).toISOString().slice(0, 10);
-  const yesterdayLog = (foodlog || {})[yesterday] || [];
-  const yesterdayKcal = yesterdayLog.reduce((a, e) => a + (+e.kcal || 0), 0);
-  if (yesterdayKcal > 0) {
-    if (yesterdayKcal >= 2200) { score += 1; factors.push("Buena carga calórica ayer"); }
-    else if (yesterdayKcal < 1500) { score -= 0.5; factors.push("Poca energía ayer"); }
-  }
+  const yEntries = (foodlog || {})[yesterday] || [];
+  const yProt = Math.round(yEntries.reduce((a, e) => a + (+e.proteina || 0), 0));
+  const yKcal = Math.round(yEntries.reduce((a, e) => a + (+e.kcal || 0), 0));
+  if (yProt >= 150) { score += 1.5; factors.push(`${yProt}g proteína ayer`); }
+  else if (yProt >= 100) { score += 0.5; factors.push(`${yProt}g prot. ayer`); }
+  else if (yProt > 0 && yProt < 80) { score -= 1; factors.push("Proteína baja ayer"); }
+  else if (yKcal > 0 && yKcal < 1500) { score -= 0.5; factors.push("Calorías bajas ayer"); }
+
+  // 4. Calidad de sueño en notas recientes
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const recentNotes = (notes || []).filter(n => n?.date && n.date.slice(0, 10) >= weekAgo);
+  const goodSleepKw = ["dormí bien","dormi bien","buen sueño","descansé","descanse","dormi 8","dormí 8"];
+  const badSleepKw = ["mal sueño","insomnio","no dormí","no dormi","poco sueño","desvelado","desvelada","dormí poco","dormi poco"];
+  const goodSleep = recentNotes.some(n => goodSleepKw.some(k => (n.text||"").toLowerCase().includes(k)));
+  const badSleep = recentNotes.some(n => badSleepKw.some(k => (n.text||"").toLowerCase().includes(k)));
+  if (goodSleep) { score += 1; factors.push("Buen sueño reciente"); }
+  else if (badSleep) { score -= 1.5; factors.push("Sueño deficiente"); }
+
+  // 5. Fatiga acumulada en notas
+  const fatigueKw = ["fatiga","cansado","cansada","agotado","agotada","sin energía","sin energia"];
+  const fatigueCount = recentNotes.filter(n => fatigueKw.some(k => (n.text||"").toLowerCase().includes(k))).length;
+  if (fatigueCount >= 2) { score -= 2; factors.push("Fatiga acumulada"); }
+  else if (fatigueCount === 1) { score -= 1; factors.push("Algo de fatiga"); }
+
+  // 6. Volumen semanal (riesgo de sobreentrenamiento)
+  const weekStart = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
+  let weekSets = 0;
+  Object.values(exlog || {}).forEach(sets => {
+    (sets || []).forEach(s => {
+      const d = (s?.date || '').slice(0, 10);
+      if (d >= weekStart && d < today && s.type !== 'warmup') weekSets++;
+    });
+  });
+  if (weekSets > 45) { score -= 1.5; factors.push(`Semana muy cargada (${weekSets} series)`); }
+  else if (weekSets > 30) { score -= 0.5; factors.push(`Semana cargada (${weekSets} series)`); }
 
   score = Math.round(Math.max(1, Math.min(10, score)));
-
   let label, color;
   if (score >= 8) { label = "Listo para rendir al máximo"; color = C.lime; }
   else if (score >= 6) { label = "Buena preparación"; color = C.cyan; }
   else if (score >= 4) { label = "Preparación moderada"; color = C.amber; }
-  else { label = "Considera descansar"; color = C.rose; }
+  else { label = "Considera descansar hoy"; color = C.rose; }
 
-  return { score, label, color, factors };
+  return { score, label, color, factors, mode: "readiness" };
 }
 
 const PlantaHidratacion = React.memo(function PlantaHidratacion({ water, waterGoal, isRestDay }) {
@@ -6294,12 +6338,17 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
 
       <div style={{display:"flex", alignItems:"center", gap:10, background:C.panel, border:`1.5px solid ${readiness.color}33`, borderRadius:14, padding:"10px 14px", marginBottom:12, animation:"pop 0.3s ease"}}>
         <div style={{width:44, height:44, borderRadius:"50%", background:`${readiness.color}22`, border:`2px solid ${readiness.color}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0}}>
-          <span style={{fontSize:16, fontWeight:900, color:readiness.color}}>{readiness.score}</span>
+          {readiness.mode === "recovery"
+            ? <span style={{fontSize:22, lineHeight:1}}>✓</span>
+            : <span style={{fontSize:16, fontWeight:900, color:readiness.color}}>{readiness.score}</span>
+          }
         </div>
-        <div style={{flex:1}}>
-          <div style={{fontSize:10, fontWeight:800, color:readiness.color, textTransform:"uppercase", letterSpacing:".07em"}}>Preparación hoy</div>
+        <div style={{flex:1, minWidth:0}}>
+          <div style={{fontSize:10, fontWeight:800, color:readiness.color, textTransform:"uppercase", letterSpacing:".07em"}}>
+            {readiness.mode === "recovery" ? "Recuperación hoy" : "Preparación hoy"}
+          </div>
           <div style={{fontSize:13, fontWeight:700, color:C.ink}}>{readiness.label}</div>
-          {readiness.factors.length > 0 && <div style={{fontSize:10.5, color:C.muted, marginTop:1}}>{readiness.factors.join(" · ")}</div>}
+          {readiness.factors.length > 0 && <div style={{fontSize:10.5, color:C.muted, marginTop:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{readiness.factors.join(" · ")}</div>}
         </div>
       </div>
 
