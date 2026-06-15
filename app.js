@@ -58,6 +58,103 @@ const MUSCLES = {
   "Curl con Auto-Resistencia":["Bíceps"],
 };
 
+// Biblioteca de ejercicios — búsqueda local sin API
+const EXERCISE_DB = [
+  // PECTORAL
+  {name:"Press banca",tecnico:"Press de pectoral con barra plano",equipo:"peso libre",musculos:["Pectoral","Tríceps","Deltoide ant."]},
+  {name:"Press inclinado mancuerna",tecnico:"Press inclinado con mancuernas",equipo:"peso libre",musculos:["Pectoral","Deltoide ant.","Tríceps"]},
+  {name:"Press inclinado barra",tecnico:"Press inclinado con barra",equipo:"peso libre",musculos:["Pectoral","Deltoide ant.","Tríceps"]},
+  {name:"Press declinado",tecnico:"Press de pectoral declinado",equipo:"peso libre",musculos:["Pectoral","Tríceps"]},
+  {name:"Press banca mancuerna",tecnico:"Press de pectoral con mancuernas plano",equipo:"peso libre",musculos:["Pectoral","Tríceps","Deltoide ant."]},
+  {name:"Aperturas",tecnico:"Apertura de pectoral con mancuernas",equipo:"peso libre",musculos:["Pectoral"]},
+  {name:"Aperturas inclinadas",tecnico:"Apertura inclinada con mancuernas",equipo:"peso libre",musculos:["Pectoral","Deltoide ant."]},
+  {name:"Press pectoral máquina",tecnico:"Press de pectoral en máquina convergente",equipo:"máquina",musculos:["Pectoral","Tríceps"]},
+  {name:"Cruces en polea",tecnico:"Cruce de pectoral en polea",equipo:"polea",musculos:["Pectoral"]},
+  {name:"Cruces polea baja",tecnico:"Cruce de pectoral en polea baja",equipo:"polea",musculos:["Pectoral","Deltoide ant."]},
+  {name:"Pec deck",tecnico:"Apertura de pectoral en máquina pec deck",equipo:"máquina",musculos:["Pectoral"]},
+  {name:"Aperturas polea alta",tecnico:"Cruce de pectoral en polea alta",equipo:"polea",musculos:["Pectoral"]},
+  {name:"Flexiones de brazos",tecnico:"Flexión de pecho en suelo",equipo:"cuerpo libre",musculos:["Pectoral","Tríceps","Deltoide ant."]},
+  // ESPALDA
+  {name:"Dominadas / Jalón",tecnico:"Jalón frontal en polea alta o dominadas",equipo:"polea",musculos:["Espalda","Bíceps"]},
+  {name:"Dominadas",tecnico:"Dominadas con agarre prono",equipo:"cuerpo libre",musculos:["Espalda","Bíceps"]},
+  {name:"Jalón polea",tecnico:"Jalón frontal en polea alta",equipo:"polea",musculos:["Espalda","Bíceps"]},
+  {name:"Jalón al pecho",tecnico:"Jalón al pecho en polea alta",equipo:"polea",musculos:["Espalda","Bíceps"]},
+  {name:"Jalón tras nuca",tecnico:"Jalón tras nuca en polea alta",equipo:"polea",musculos:["Espalda","Bíceps"]},
+  {name:"Remo barra",tecnico:"Remo con barra inclinado",equipo:"peso libre",musculos:["Espalda","Bíceps"]},
+  {name:"Remo mancuerna",tecnico:"Remo con mancuerna a una mano",equipo:"peso libre",musculos:["Espalda","Bíceps"]},
+  {name:"Remo máquina",tecnico:"Remo sentado en máquina",equipo:"máquina",musculos:["Espalda"]},
+  {name:"Remo en polea baja",tecnico:"Remo sentado en polea baja",equipo:"polea",musculos:["Espalda","Bíceps"]},
+  {name:"Pullover polea",tecnico:"Pullover en polea alta",equipo:"polea",musculos:["Espalda"]},
+  {name:"Pullover mancuerna",tecnico:"Pullover con mancuerna",equipo:"peso libre",musculos:["Espalda","Pectoral"]},
+  {name:"Face pull",tecnico:"Face pull en polea alta con cuerda",equipo:"polea",musculos:["Deltoides","Espalda"]},
+  {name:"Remo Pendlay",tecnico:"Remo Pendlay con barra",equipo:"peso libre",musculos:["Espalda","Bíceps"]},
+  {name:"Remo en T",tecnico:"Remo en máquina T-bar",equipo:"máquina",musculos:["Espalda","Bíceps"]},
+  {name:"Hiperextensiones",tecnico:"Extensión lumbar en banco",equipo:"máquina",musculos:["Espalda","Glúteos","Isquios"]},
+  {name:"Peso muerto",tecnico:"Peso muerto convencional",equipo:"peso libre",musculos:["Isquios","Glúteos","Espalda"]},
+  {name:"Peso muerto rumano",tecnico:"Peso muerto rumano con barra",equipo:"peso libre",musculos:["Isquios","Glúteos","Espalda"]},
+  {name:"Peso muerto sumo",tecnico:"Peso muerto sumo con barra",equipo:"peso libre",musculos:["Isquios","Glúteos","Cuádriceps"]},
+  // HOMBROS / DELTOIDES
+  {name:"Press Arnold",tecnico:"Press Arnold con mancuernas",equipo:"peso libre",musculos:["Deltoides","Tríceps"]},
+  {name:"Press militar",tecnico:"Press militar con barra de pie",equipo:"peso libre",musculos:["Deltoides","Tríceps"]},
+  {name:"Press hombro mancuerna",tecnico:"Press de hombro con mancuernas",equipo:"peso libre",musculos:["Deltoides","Tríceps"]},
+  {name:"Press hombro máquina",tecnico:"Press de hombro en máquina",equipo:"máquina",musculos:["Deltoides","Tríceps"]},
+  {name:"Vuelos laterales",tecnico:"Elevación lateral con mancuernas",equipo:"peso libre",musculos:["Deltoides"]},
+  {name:"Vuelos laterales polea",tecnico:"Elevación lateral en polea baja",equipo:"polea",musculos:["Deltoides"]},
+  {name:"Vuelos posteriores polea",tecnico:"Abducción posterior en polea",equipo:"polea",musculos:["Deltoides"]},
+  {name:"Vuelos posteriores",tecnico:"Elevación posterior con mancuernas",equipo:"peso libre",musculos:["Deltoides","Espalda"]},
+  {name:"Pájaro",tecnico:"Vuelo posterior en banco inclinado",equipo:"peso libre",musculos:["Deltoides","Espalda"]},
+  {name:"Elevación frontal",tecnico:"Elevación frontal con mancuernas",equipo:"peso libre",musculos:["Deltoides"]},
+  // BÍCEPS
+  {name:"Curl inclinado",tecnico:"Curl de bíceps inclinado con mancuernas",equipo:"peso libre",musculos:["Bíceps"]},
+  {name:"Curl martillo",tecnico:"Curl de bíceps en agarre martillo",equipo:"peso libre",musculos:["Bíceps","Antebrazo"]},
+  {name:"Curl prono barra",tecnico:"Curl reverso con barra",equipo:"peso libre",musculos:["Bíceps","Antebrazo"]},
+  {name:"Curl barra",tecnico:"Curl de bíceps con barra",equipo:"peso libre",musculos:["Bíceps"]},
+  {name:"Curl mancuerna",tecnico:"Curl de bíceps con mancuernas alterno",equipo:"peso libre",musculos:["Bíceps"]},
+  {name:"Curl predicador",tecnico:"Curl predicador en banco Scott",equipo:"peso libre",musculos:["Bíceps"]},
+  {name:"Curl predicador máquina",tecnico:"Curl predicador en máquina",equipo:"máquina",musculos:["Bíceps"]},
+  {name:"Curl polea baja",tecnico:"Curl de bíceps en polea baja",equipo:"polea",musculos:["Bíceps"]},
+  {name:"Curl concentrado",tecnico:"Curl concentrado con mancuerna",equipo:"peso libre",musculos:["Bíceps"]},
+  {name:"Curl con Auto-Resistencia",tecnico:"Curl de bíceps con autorresistencia",equipo:"cuerpo libre",musculos:["Bíceps"]},
+  // TRÍCEPS
+  {name:"Press cerrado",tecnico:"Press cerrado en barra para tríceps",equipo:"peso libre",musculos:["Tríceps","Pectoral"]},
+  {name:"Extensión polea",tecnico:"Extensión de tríceps en polea alta",equipo:"polea",musculos:["Tríceps"]},
+  {name:"Extensión sobre cabeza",tecnico:"Extensión de tríceps sobre la cabeza",equipo:"peso libre",musculos:["Tríceps"]},
+  {name:"Extensión sobre cabeza polea",tecnico:"Extensión de tríceps sobre cabeza en polea",equipo:"polea",musculos:["Tríceps"]},
+  {name:"Patada tríceps",tecnico:"Extensión de tríceps en kick back",equipo:"peso libre",musculos:["Tríceps"]},
+  {name:"Fondos tríceps",tecnico:"Fondos en paralelas para tríceps",equipo:"cuerpo libre",musculos:["Tríceps","Pectoral","Deltoides"]},
+  {name:"Jalón tríceps cuerda",tecnico:"Jalón de tríceps en polea con cuerda",equipo:"polea",musculos:["Tríceps"]},
+  // PIERNAS — CUÁDRICEPS
+  {name:"Sentadilla",tecnico:"Sentadilla libre con barra",equipo:"peso libre",musculos:["Cuádriceps","Glúteos","Isquios"]},
+  {name:"Sentadilla búlgara",tecnico:"Sentadilla split búlgara",equipo:"peso libre",musculos:["Cuádriceps","Glúteos","Isquios"]},
+  {name:"Sentadilla ciclista Smith",tecnico:"Sentadilla ciclista en máquina Smith",equipo:"máquina",musculos:["Cuádriceps"]},
+  {name:"Prensa 45°",tecnico:"Prensa de pierna a 45 grados",equipo:"máquina",musculos:["Cuádriceps","Glúteos"]},
+  {name:"Prensa pierna horizontal",tecnico:"Prensa de pierna horizontal",equipo:"máquina",musculos:["Cuádriceps","Glúteos"]},
+  {name:"Extensión cuádriceps",tecnico:"Extensión de rodilla en máquina",equipo:"máquina",musculos:["Cuádriceps"]},
+  {name:"Hack squat",tecnico:"Hack sentadilla en máquina",equipo:"máquina",musculos:["Cuádriceps","Glúteos"]},
+  {name:"Estocada",tecnico:"Estocada frontal con mancuernas",equipo:"peso libre",musculos:["Cuádriceps","Glúteos","Isquios"]},
+  {name:"Estocada atrás Smith",tecnico:"Estocada posterior en máquina Smith",equipo:"máquina",musculos:["Glúteos","Cuádriceps","Isquios"]},
+  {name:"Sentadillas con pulso",tecnico:"Sentadilla con pulso sin equipo",equipo:"cuerpo libre",musculos:["Cuádriceps","Glúteos","Isquios"]},
+  // PIERNAS — ISQUIOS / GLÚTEOS
+  {name:"Leg curl sentado",tecnico:"Flexión de rodilla en máquina sentada",equipo:"máquina",musculos:["Isquios"]},
+  {name:"Leg curl tumbado",tecnico:"Flexión de rodilla en máquina tumbada",equipo:"máquina",musculos:["Isquios"]},
+  {name:"Puente glúteos",tecnico:"Puente de glúteos con barra",equipo:"peso libre",musculos:["Glúteos"]},
+  {name:"Hip thrust",tecnico:"Hip thrust con barra en banco",equipo:"peso libre",musculos:["Glúteos","Isquios"]},
+  {name:"Hip thrust máquina",tecnico:"Hip thrust en máquina",equipo:"máquina",musculos:["Glúteos","Isquios"]},
+  {name:"Patada glúteo polea",tecnico:"Extensión de cadera en polea baja",equipo:"polea",musculos:["Glúteos"]},
+  {name:"Abducción cadera máquina",tecnico:"Abducción de cadera en máquina",equipo:"máquina",musculos:["Glúteos"]},
+  {name:"Sentadilla sumo",tecnico:"Sentadilla sumo con mancuerna",equipo:"peso libre",musculos:["Glúteos","Cuádriceps","Isquios"]},
+  // GEMELOS / PANTORRILLAS
+  {name:"Elevación de talones",tecnico:"Elevación de talones de pie",equipo:"máquina",musculos:["Gemelos"]},
+  {name:"Elevación de talones sentado",tecnico:"Elevación de talones sentado",equipo:"máquina",musculos:["Gemelos"]},
+  // CORE / ABDOMEN
+  {name:"Plancha",tecnico:"Plancha isométrica abdominal",equipo:"cuerpo libre",musculos:["Core"]},
+  {name:"Crunch",tecnico:"Crunch abdominal en suelo",equipo:"cuerpo libre",musculos:["Core"]},
+  {name:"Crunch polea",tecnico:"Crunch abdominal en polea alta",equipo:"polea",musculos:["Core"]},
+  {name:"Elevación de piernas",tecnico:"Elevación de piernas colgado",equipo:"cuerpo libre",musculos:["Core"]},
+  {name:"Remo Delfín",tecnico:"Remo invertido con apoyo en el suelo",equipo:"cuerpo libre",musculos:["Espalda","Deltoides"]},
+  {name:"Hiperextensiones inversas",tecnico:"Extensión de cadera en banco",equipo:"máquina",musculos:["Glúteos","Isquios"]},
+];
+
 const DEFAULT_MEALS = [
   { slot:"Desayuno", kcal:"~580", opts:["4 huevos + 2 claras, 80 g avena con plátano, café","Yogur griego 250 g + 60 g granola + frutos rojos + nueces","Tortilla de 3 huevos + pan integral con aguacate"] },
   { slot:"Almuerzo", kcal:"~620", opts:["180 g pollo, 180 g arroz, verduras, aceite oliva","200 g salmón al horno, 250 g boniato, espárragos","Bowl: 150 g carne magra, quinoa, frijoles, pico de gallo"] },
@@ -9109,7 +9206,9 @@ function Entreno({
   const allExistingExercises = Object.values(exercises || {}).flat().map(e => e.name);
   const allExerciseObjects = (() => {
     const seen = new Set();
-    return Object.values(exercises || {}).flat().filter(e => {
+    const userExs = Object.values(exercises || {}).flat();
+    // Merge user exercises (first, so they take priority) with global library
+    return [...userExs, ...EXERCISE_DB].filter(e => {
       if (seen.has(e.name)) return false;
       seen.add(e.name); return true;
     }).map(e => ({ ...e, equipo: e.equipo || SEED_EQUIPO[e.name] || "peso libre", tecnico: e.tecnico || SEED_TECNICO[e.name] || "" }));
