@@ -3360,10 +3360,44 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       const remF = Math.max(0, target.f - totals.f);
       const mealContext = nowHour < 9 ? "Bruno aún no ha desayunado — orienta hacia desayuno + pre-entreno si aplica." : nowHour < 13 ? "Hora de almuerzo próxima — considera kcal restantes para las comidas del resto del día." : nowHour < 16 ? "Tarde post-almuerzo — puede quedar merienda y cena." : nowHour < 20 ? "Tarde/noche — probablemente quedan cena y snack." : "Noche — enfócate en cerrar macros del día y recuperación nocturna.";
 
+      // Get Fitdays body composition data
+      const getFitdaysCompositionText = () => {
+        const keys = Object.keys(metricslog || {}).sort().reverse();
+        if (keys.length === 0) return "Sin registros Fitdays.";
+        const latest = metricslog[keys[0]];
+        if (!latest) return "Sin registros Fitdays.";
+
+        let comp = "";
+        if (latest.puntuacion) comp += `Score Fitdays: ${latest.puntuacion}/100. `;
+        if (latest.edadCorporal) comp += `Edad corporal: ${latest.edadCorporal} años. `;
+        if (latest.musculoEsq) comp += `Músculo esquelético: ${latest.musculoEsq}%. `;
+        if (latest.masaMuscular) comp += `Masa muscular: ${latest.masaMuscular}kg. `;
+        if (latest.grasaSubc) comp += `Grasa subcutánea: ${latest.grasaSubc}%. `;
+        if (latest.whr) comp += `WHR (cintura/cadera): ${latest.whr}. `;
+
+        // Segmental analysis
+        if (latest.musculoBrazoDer || latest.musculoBrazoIzq) {
+          const dif = Math.abs((latest.musculoBrazoDer || 0) - (latest.musculoBrazoIzq || 0));
+          if (dif > 0.3) comp += `⚠️ Asimetría muscular en brazos: D ${latest.musculoBrazoDer}kg vs I ${latest.musculoBrazoIzq}kg. `;
+        }
+        if (latest.musculoPiernaDer || latest.musculoPiernaIzq) {
+          const dif = Math.abs((latest.musculoPiernaDer || 0) - (latest.musculoPiernaIzq || 0));
+          if (dif > 0.5) comp += `⚠️ Asimetría muscular en piernas: D ${latest.musculoPiernaDer}kg vs I ${latest.musculoPiernaIzq}kg. `;
+        }
+        if (latest.grasaTronco && latest.grasaBrazoDer && latest.grasaPiernaDer) {
+          const torsoRatio = latest.grasaTronco / (latest.grasaBrazoDer + latest.grasaPiernaDer);
+          if (torsoRatio > 3) comp += `Concentración de grasa en tronco (mayor que miembros). Prioriza: dominadas, remos, press. `;
+        }
+
+        return comp || "Sin datos segmentales en Fitdays.";
+      };
+      const fitdaysComp = getFitdaysCompositionText();
+
       const sys = `Eres el coach nutricional y de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)}
 MOMENTO ACTUAL: ${timeBlock}. ADAPTA tu respuesta a este contexto horario — no sugieras desayuno si es de noche, ni cena si es de mañana. ${mealContext}
 Plan nutricional activo: ${target.kcal} kcal (${target.label}), P:${target.p}g / C:${target.c}g / G:${target.f}g.
 Métricas antropométricas y corporales: ${metricsSummary}
+Datos de Composición Corporal (Fitdays): ${fitdaysComp}
 Historial nutricional acumulado reciente: ${recentNutrition}
 Día de Split de entrenamiento activo hoy: Día ${activeSplit.key} (${activeSplit.name}), combustible de carbohidratos asignado: ${activeSplit.fuel}.
 Estado de entrenamiento hoy: ${trainedToday ? "✓ YA ENTRENÓ HOY — no preguntes si va a entrenar, asume recuperación activa." : "✗ AÚN NO HA ENTRENADO HOY — puedes orientar pre-entreno, timing y energía si aplica."}
@@ -11337,8 +11371,7 @@ function FitdaysTrends({ metricslog }) {
   const entries = React.useMemo(() => {
     return Object.entries(metricslog || {})
       .filter(([, v]) => v && (v.peso !== undefined || v.weight !== undefined))
-      .sort(([a], [b]) => a.localeCompare(b))
-      .slice(-6)
+      .sort(([a], [b]) => a < b ? -1 : (a > b ? 1 : 0))
       .map(([date, v]) => ({ date, peso: v.peso ?? v.weight, grasaPct: v.grasaPct, puntuacion: v.puntuacion, bmr: v.bmr }));
   }, [metricslog]);
 
@@ -11408,9 +11441,8 @@ function FitdaysTrends({ metricslog }) {
 /* ===== FITDAYS IMPORT COMPONENT ===== */
 function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
   const fileRef = React.useRef(null);
-  const [preview, setPreview] = React.useState(null);
-  const [imgB64, setImgB64] = React.useState(null);
-  const [imgMime, setImgMime] = React.useState("image/jpeg");
+  const [previews, setPreviews] = React.useState([]);
+  const [imagesData, setImagesData] = React.useState([]);
   const [busy, setBusy] = React.useState(false);
   const [extracted, setExtracted] = React.useState(null);
   const [form, setForm] = React.useState({});
@@ -11440,42 +11472,59 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
     reader.readAsDataURL(file);
   });
 
-  const onFile = async (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
+  const onFiles = async (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
     e.target.value = "";
     setSaved(false);
     setExtracted(null);
     setForm({});
     setErr("");
     try {
-      const dataUrl = await compressImage(file);
-      setPreview(dataUrl);
-      const b64 = dataUrl.split(",")[1];
-      setImgB64(b64);
-      const mime = ["image/jpeg","image/png","image/webp"].includes(file.type) ? file.type : "image/jpeg";
-      setImgMime(mime);
+      const newPreviews = [];
+      const newImagesData = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const dataUrl = await compressImage(file);
+        newPreviews.push(dataUrl);
+        const b64 = dataUrl.split(",")[1];
+        const mime = ["image/jpeg","image/png","image/webp"].includes(file.type) ? file.type : "image/jpeg";
+        newImagesData.push({ b64, mime });
+      }
+      setPreviews(newPreviews);
+      setImagesData(newImagesData);
+      if (newImagesData.length === 0) {
+        setErr("No se cargó ninguna imagen.");
+      }
     } catch(ex) {
-      setErr("No se pudo leer la imagen.");
+      setErr("No se pudieron leer las imágenes.");
     }
   };
 
   const doExtract = async () => {
-    if (!imgB64 || busy) return;
+    if (imagesData.length === 0 || busy) return;
     setBusy(true);
     setErr("");
     try {
-      const sys = "Eres un extractor de datos de composición corporal. Analiza esta captura de pantalla de la app Fitdays y extrae TODOS los valores numéricos visibles. Si un valor no aparece claramente, omítelo (no inventes). Devuelve JSON.";
+      const sys = "Eres un extractor de datos de composición corporal. Analiza estas capturas de pantalla de la app Fitdays y extrae TODOS los valores numéricos visibles. Si un valor aparece en múltiples imágenes, usa el más reciente o calcula un promedio para músculos (ambos lados). Si un valor no aparece claramente, omítelo (no inventes). Devuelve JSON.";
+
+      // Build message with all images
+      const content = [
+        ...imagesData.map(img => ({
+          type: "image",
+          source: { type: "base64", media_type: img.mime, data: img.b64 }
+        })),
+        { type: "text", text: `Extrae todos los datos de composición corporal visibles en estas ${imagesData.length} captura(s) de Fitdays. Si hay datos duplicados/conflictivos en múltiples imágenes, fusiona inteligentemente: prefiere valores no-null, promedia valores de músculos si aparecen en distintas imágenes.` }
+      ];
+
       const out = await callGemini([{
         role: "user",
-        content: [
-          { type: "image", source: { type: "base64", media_type: imgMime, data: imgB64 } },
-          { type: "text", text: "Extrae todos los datos de composición corporal visibles en esta captura de Fitdays." }
-        ]
+        content
       }], sys, FITDAYS_SCHEMA);
+
       const parsed = cleanAndParseJSON(out);
       if (!parsed || parsed.peso == null) {
-        setErr("No se detectaron datos. Intenta con otra captura.");
+        setErr("No se detectaron datos. Intenta con otras capturas.");
       } else {
         setExtracted(parsed);
         const f = {};
@@ -11541,22 +11590,31 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
     <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
       <div style={{fontSize:12.5, fontWeight:800, marginBottom:10}}>📊 Importar Fitdays</div>
 
-      <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={onFile}/>
+      <input ref={fileRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={onFiles}/>
       <button
         onClick={() => { fileRef.current?.click(); }}
         style={{width:"100%", height:38, borderRadius:10, border:`1px solid ${C.cyan}`, background:`${C.cyan}18`, color:C.cyan, fontSize:12.5, fontWeight:800, cursor:"pointer", marginBottom:8}}
       >
-        📷 Cargar captura de pantalla
+        📷 Cargar capturas (múltiples)
       </button>
 
-      {preview && (
-        <div style={{marginBottom:10, display:"flex", alignItems:"flex-start", gap:10}}>
-          <img src={preview} alt="preview" style={{width:90, height:90, objectFit:"cover", borderRadius:10, border:`1px solid ${C.line}`, flexShrink:0}}/>
-          <div style={{flex:1}}>
+      {previews.length > 0 && (
+        <div style={{marginBottom:10}}>
+          {/* Preview row of thumbnails */}
+          <div style={{display:"flex", gap:8, marginBottom:10, overflowX:"auto", paddingBottom:4}}>
+            {previews.map((prev, idx) => (
+              <div key={idx} style={{position:"relative", flexShrink:0}}>
+                <img src={prev} alt={`preview-${idx}`} style={{width:75, height:75, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`}}/>
+                <div style={{position:"absolute", top:2, right:2, background:C.panel, border:`1px solid ${C.line}`, borderRadius:4, fontSize:10, fontWeight:700, color:C.muted, padding:"2px 6px"}}>{idx + 1}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{display:"flex", gap:10}}>
             <button
               onClick={doExtract}
               disabled={busy}
-              style={{width:"100%", height:38, borderRadius:10, border:"none",
+              style={{flex:1, height:38, borderRadius:10, border:"none",
                 background: busy ? C.panel2 : `linear-gradient(135deg,${C.cyan},${C.lime})`,
                 color: busy ? C.muted : "#0c0e0b",
                 fontSize:12.5, fontWeight:800, cursor: busy ? "default" : "pointer",
@@ -11565,10 +11623,16 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
             >
               {busy
                 ? <><span style={{display:"inline-block", animation:"spin 1s linear infinite", marginRight:4}}>⟳</span> Extrayendo…</>
-                : "✦ Extraer datos con IA"}
+                : `✦ Extraer datos con IA (${previews.length} imagen${previews.length !== 1 ? 's' : ''})`}
             </button>
-            {err && <div style={{color:C.rose, fontSize:11, marginTop:5}}>{err}</div>}
+            <button
+              onClick={() => { setPreviews([]); setImagesData([]); setForm({}); setExtracted(null); }}
+              style={{flex:"0 0 auto", height:38, borderRadius:10, border:`1px solid ${C.line}`, background:C.panel2, color:C.muted, fontSize:12, fontWeight:700, cursor:"pointer", padding:"0 12px"}}
+            >
+              ✕ Limpiar
+            </button>
           </div>
+          {err && <div style={{color:C.rose, fontSize:11, marginTop:5}}>{err}</div>}
         </div>
       )}
 
@@ -13097,120 +13161,6 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
         <div style={{fontSize:12.5, fontWeight:800, marginBottom:2}}>Evolución: Masa Magra vs Masa Grasa</div>
         {renderBodyCompChart(bodyCompHistory)}
-      </div>
-
-      {/* Indicador Visual de Asimetrías de Perímetros */}
-      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
-        <div style={{fontSize:12.5, fontWeight:800, marginBottom:4, display:"flex", alignItems:"center", gap:6}}>
-          <ClipboardList size={15} color={C.lime}/> Mapa Visual de Asimetrías
-        </div>
-        <div style={{fontSize:11.5, color:C.muted, marginBottom:14}}>
-          Diferencias bilaterales mayores a 0.5 cm se marcan en color naranja/rojo.
-        </div>
-        
-        <div style={{display:"flex", gap:14, alignItems:"center", flexWrap:"wrap", justifyContent:"center"}}>
-          {/* SVG Body Outline */}
-          <div style={{background:C.panel2, borderRadius:12, padding:8, border:`1px solid ${C.line}`}}>
-            <svg width="200" height="260" viewBox="0 0 200 260" style={{display:"block", margin:"0 auto"}}>
-              {/* Head */}
-              <circle cx="100" cy="30" r="12" fill="none" stroke={C.muted} strokeWidth="2"/>
-              <text x="100" y="33" fill={C.muted} fontSize="8" textAnchor="middle" fontWeight="bold">Bruno</text>
-              
-              {/* Neck */}
-              <line x1="100" y1="42" x2="100" y2="48" stroke={C.muted} strokeWidth="2"/>
-              
-              {/* Torso */}
-              <path d="M 80,48 L 120,48 L 112,120 L 88,120 Z" fill="none" stroke={C.muted} strokeWidth="2"/>
-              <text x="100" y="85" fill={C.muted} fontSize="8.5" textAnchor="middle">Cintura: {activeMetrics.cintura || "?"}cm</text>
-              <text x="100" y="68" fill={C.muted} fontSize="8.5" textAnchor="middle">Pecho: {activeMetrics.pecho || "?"}cm</text>
-              
-              {/* Pelvis */}
-              <path d="M 88,120 L 112,120 L 115,135 L 85,135 Z" fill="none" stroke={C.muted} strokeWidth="1.8"/>
-              
-              {/* Arms */}
-              <path d="M 80,48 L 55,100" fill="none" stroke={rightArmColor} strokeWidth={rightArmWidth} strokeLinecap="round"/>
-              <text x="45" y="75" fill={rightArmColor} fontSize="9" textAnchor="end" fontWeight="bold">D: {bD || "?"}</text>
-              
-              <path d="M 120,48 L 145,100" fill="none" stroke={leftArmColor} strokeWidth={leftArmWidth} strokeLinecap="round"/>
-              <text x="155" y="75" fill={leftArmColor} fontSize="9" textAnchor="start" fontWeight="bold">I: {bI || "?"}</text>
-              
-              {/* Thighs */}
-              <path d="M 90,135 L 82,190" fill="none" stroke={rightThighColor} strokeWidth={rightThighWidth} strokeLinecap="round"/>
-              <text x="45" y="165" fill={rightThighColor} fontSize="9" textAnchor="end" fontWeight="bold">D: {mD || "?"}</text>
-              
-              <path d="M 110,135 L 118,190" fill="none" stroke={leftThighColor} strokeWidth={leftThighWidth} strokeLinecap="round"/>
-              <text x="155" y="165" fill={leftThighColor} fontSize="9" textAnchor="start" fontWeight="bold">I: {mI || "?"}</text>
-              
-              {/* Calves */}
-              <path d="M 82,190 L 82,240" fill="none" stroke={rightCalfColor} strokeWidth={rightCalfWidth} strokeLinecap="round"/>
-              <text x="45" y="215" fill={rightCalfColor} fontSize="9" textAnchor="end" fontWeight="bold">D: {pD || "?"}</text>
-              
-              <path d="M 118,190 L 118,240" fill="none" stroke={leftCalfColor} strokeWidth={leftCalfWidth} strokeLinecap="round"/>
-              <text x="155" y="215" fill={leftCalfColor} fontSize="9" textAnchor="start" fontWeight="bold">I: {pI || "?"}</text>
-
-              {/* Asymmetry Warnings overlays */}
-              {showBAsym && (
-                <g>
-                  <rect x="75" y="105" width="50" height="12" rx="3" fill="rgba(255,107,138,0.9)"/>
-                  <text x="100" y="114" fill="#000" fontSize="7.5" textAnchor="middle" fontWeight="bold">Δ Brazos: {bDiff.toFixed(1)}</text>
-                </g>
-              )}
-              {showMAsym && (
-                <g>
-                  <rect x="75" y="145" width="50" height="12" rx="3" fill="rgba(255,107,138,0.9)"/>
-                  <text x="100" y="154" fill="#000" fontSize="7.5" textAnchor="middle" fontWeight="bold">Δ Muslos: {mDiff.toFixed(1)}</text>
-                </g>
-              )}
-              {showPAsym && (
-                <g>
-                  <rect x="75" y="200" width="50" height="12" rx="3" fill="rgba(255,107,138,0.9)"/>
-                  <text x="100" y="209" fill="#000" fontSize="7.5" textAnchor="middle" fontWeight="bold">Δ Pantorrillas: {pDiff.toFixed(1)}</text>
-                </g>
-              )}
-            </svg>
-          </div>
-          
-          {/* Warnings List & Suggestions */}
-          <div style={{flex:1, minWidth:220, display:"flex", flexDirection:"column", gap:8}}>
-            {(!showBAsym && !showMAsym && !showPAsym) ? (
-              <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:12, padding:12, fontSize:12.5, color:C.muted}}>
-                ✔ Simetría muscular correcta (diferencias bilaterales ≤ 0.5 cm). Sigue así.
-              </div>
-            ) : (
-              <>
-                <div style={{background:"rgba(255,107,138,.08)", border:`1px solid ${C.rose}`, borderRadius:12, padding:12}}>
-                  <div style={{fontSize:12, fontWeight:800, color:C.rose, marginBottom:6, display:"flex", alignItems:"center", gap:4}}>
-                    <ShieldAlert size={14}/> Asimetrías Significativas Detectadas
-                  </div>
-                  <ul style={{margin:0, paddingLeft:16, fontSize:12, color:C.ink, lineHeight:1.4}}>
-                    {showBAsym && (
-                      <li style={{marginBottom:4}}>
-                        Brazos: diferencia de <b style={{color:C.rose}}>{bDiff.toFixed(1)} cm</b> (Lado {bD > bI ? "Derecho" : "Izquierdo"} dominante).
-                      </li>
-                    )}
-                    {showMAsym && (
-                      <li style={{marginBottom:4}}>
-                        Muslos: diferencia de <b style={{color:C.rose}}>{mDiff.toFixed(1)} cm</b> (Lado {mD > mI ? "Derecho" : "Izquierdo"} dominante).
-                      </li>
-                    )}
-                    {showPAsym && (
-                      <li style={{marginBottom:4}}>
-                        Pantorrillas: diferencia de <b style={{color:C.rose}}>{pDiff.toFixed(1)} cm</b> (Lado {pD > pI ? "Derecho" : "Izquierdo"} dominante).
-                      </li>
-                    )}
-                  </ul>
-                </div>
-                
-                <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:12, padding:12}}>
-                  <div style={{fontSize:11.5, fontWeight:800, color:C.lime, marginBottom:4}}>Recomendación de Entrenamiento Unilateral:</div>
-                  <div style={{fontSize:12, color:C.muted, lineHeight:1.4}}>
-                    Introduce ejercicios unilaterales (mancuernas/poleas) en tus rutinas. Inicia siempre el set con el miembro no dominante (más débil) y limita el miembro dominante al mismo número de repeticiones y peso.
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
       </div>
 
       {/* Radar chart de medidas corporales */}
