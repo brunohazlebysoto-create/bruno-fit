@@ -3318,12 +3318,23 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       ])];
       const exerciseNamesStr = allExerciseNames.join(", ");
 
+      const nowHour = new Date().getHours();
+      const timeBlock = nowHour < 6 ? "madrugada (antes de las 6h)" : nowHour < 12 ? `mañana (${nowHour}:00h)` : nowHour < 15 ? `mediodía (${nowHour}:00h)` : nowHour < 19 ? `tarde (${nowHour}:00h)` : `noche (${nowHour}:00h)`;
+      const trainedToday = todayWorkout && !todayWorkout.includes("Sin entreno") && todayWorkout.trim().length > 10;
+      const remKcal = Math.max(0, target.kcal - totals.kcal);
+      const remP = Math.max(0, target.p - totals.p);
+      const remC = Math.max(0, target.c - totals.c);
+      const remF = Math.max(0, target.f - totals.f);
+      const mealContext = nowHour < 9 ? "Bruno aún no ha desayunado — orienta hacia desayuno + pre-entreno si aplica." : nowHour < 13 ? "Hora de almuerzo próxima — considera kcal restantes para las comidas del resto del día." : nowHour < 16 ? "Tarde post-almuerzo — puede quedar merienda y cena." : nowHour < 20 ? "Tarde/noche — probablemente quedan cena y snack." : "Noche — enfócate en cerrar macros del día y recuperación nocturna.";
+
       const sys = `Eres el coach nutricional y de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)}
+MOMENTO ACTUAL: ${timeBlock}. ADAPTA tu respuesta a este contexto horario — no sugieras desayuno si es de noche, ni cena si es de mañana. ${mealContext}
 Plan nutricional activo: ${target.kcal} kcal (${target.label}), P:${target.p}g / C:${target.c}g / G:${target.f}g.
 Métricas antropométricas y corporales: ${metricsSummary}
 Historial nutricional acumulado reciente: ${recentNutrition}
 Día de Split de entrenamiento activo hoy: Día ${activeSplit.key} (${activeSplit.name}), combustible de carbohidratos asignado: ${activeSplit.fuel}.
-Hoy lleva consumido: ${Math.round(totals.kcal)} kcal, P:${Math.round(totals.p)}g C:${Math.round(totals.c)}g G:${Math.round(totals.f)}g (Restante hoy: ${Math.round(Math.max(0, target.kcal - totals.kcal))} kcal, P:${Math.round(Math.max(0, target.p - totals.p))}g C:${Math.round(Math.max(0, target.c - totals.c))}g G:${Math.round(Math.max(0, target.f - totals.f))}g).
+Estado de entrenamiento hoy: ${trainedToday ? "✓ YA ENTRENÓ HOY — no preguntes si va a entrenar, asume recuperación activa." : "✗ AÚN NO HA ENTRENADO HOY — puedes orientar pre-entreno, timing y energía si aplica."}
+Hoy lleva consumido: ${Math.round(totals.kcal)} kcal, P:${Math.round(totals.p)}g C:${Math.round(totals.c)}g G:${Math.round(totals.f)}g. Restante: ${Math.round(remKcal)} kcal, P:${Math.round(remP)}g C:${Math.round(remC)}g G:${Math.round(remF)}g.
 
 Entrenamiento realizado por Bruno hoy:
 ${todayWorkout}
@@ -3333,7 +3344,7 @@ ${workoutHistory}
 --- FIN HISTORIAL ---
 
 Español. ${coachPersonality==="motivacional" ? "Tono motivacional, empático y energético. Celebra logros, usa frases inspiradoras, motiva a Bruno a superar sus límites." : coachPersonality==="nutricionista" ? "Enfócate principalmente en nutrición, timing de comidas, macros y estrategias alimentarias. Profundiza en el aspecto nutricional sobre el entrenamiento." : coachPersonality==="psicólogo" ? "Tono empático, comprensivo y de apoyo. Atiende el aspecto mental y emocional del fitness. Ayuda a manejar el estrés, la motivación y los hábitos." : "Directo, técnico y basado en datos. Prioriza análisis de progresión, volumen, PRs y optimización del rendimiento."}
-FORMATO DE RESPUESTA (chatResponse): Texto limpio y legible para chat móvil. PERMITIDO: párrafos cortos, listas con "• item" (un ítem por línea), **negrita** para datos clave, emojis puntuales para separar secciones. PROHIBIDO: ### headers, listas con * en medio de una frase, párrafos de más de 4 líneas. Máximo 4 ítems por lista; si hay más datos, agrúpalos. Separá las secciones con una línea en blanco.
+FORMATO DE RESPUESTA (chatResponse): Texto limpio y legible para chat móvil. PERMITIDO: párrafos cortos, listas con "• item" (un ítem por línea), **negrita** para datos clave, emojis puntuales para separar secciones. PROHIBIDO ABSOLUTO: cualquier encabezado markdown (# ## ### #### ##### — NUNCA uses el símbolo #), listas con * en medio de una frase, párrafos de más de 4 líneas. Máximo 4 ítems por lista; si hay más datos, agrúpalos. Separá las secciones con una línea en blanco.
 Usa el historial para dar recomendaciones personalizadas y basadas en datos reales (PRs, progresión, volumen). Si detectás estancamiento o regresión en algún ejercicio, mencionalo proactivamente.
 REGLA DE CALCULADORA INVERSA: Si Bruno te pregunta qué cenar o comer para cerrar el día o cómo completar sus macros restantes (ej. 'me quedan 600 calorías y 50g de proteína...'), calcula con precisión matemática una combinación rápida de alimentos (ej. claras, huevo entero, gramos exactos de pechuga de pollo, scoop de whey) para cuadrar sus números de forma exacta.
 REGLA CRÍTICA DE PORCIONES E INGREDIENTES: Cuando recomiendes porciones, alimentos o comidas en el chat, debes ajustar estrictamente las porciones (detallando gramos exactos) al plan nutricional seleccionado por Bruno (${target.label}) y a las necesidades energéticas del split del día (${activeSplit.fuel}). No recomiendes las mismas porciones por defecto. Si está en "Volumen" o día de "Carbo alto", propón porciones abundantes de carbohidratos. Si está en "Definición" o día de "Carbo medio", sé sumamente estricto y reduce las porciones de carbohidratos, sugiriendo fuentes de proteína magra más saciantes.
@@ -4449,10 +4460,10 @@ function MarkdownText({ text, style = {} }) {
 
     if (!tr) { i++; continue; }
 
-    // ### / ## / # headers
-    const hm = tr.match(/^(#{1,3})\s+(.*)/);
+    // # through ###### headers (strip all leading hashes)
+    const hm = tr.match(/^(#{1,6})\s+(.*)/);
     if (hm) {
-      const lvl = hm[1].length;
+      const lvl = Math.min(hm[1].length, 3);
       out.push(
         <div key={i} style={{ fontSize: lvl === 1 ? 15 : lvl === 2 ? 13.5 : 13, fontWeight: 800, color: C.lime, marginTop: 10, marginBottom: 3, lineHeight: 1.3 }}>
           {renderInline(hm[2])}
