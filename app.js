@@ -927,21 +927,21 @@ const TRAINER_AGENT_SCHEMA = {
   }, required:["trainingPhase","deloadRecommendation","exerciseVariations","muscleAlerts","performanceSummary"]
 };
 
-const TIPS_SCHEMA = { type:"OBJECT", properties:{ cards:{ type:"ARRAY", items:{ type:"OBJECT", properties:{ icon:{type:"STRING"}, tipType:{type:"STRING"}, title:{type:"STRING"}, body:{type:"STRING"}, detail:{type:"STRING"} }, required:["icon","tipType","title","body","detail"] } } }, required:["cards"] };
+const TIPS_SCHEMA = { type:"OBJECT", properties:{ cards:{ type:"ARRAY", items:{ type:"OBJECT", properties:{ icon:{type:"STRING"}, tipType:{type:"STRING"}, title:{type:"STRING"}, body:{type:"STRING"}, detail:{type:"STRING"}, extra:{type:"ARRAY", items:{type:"STRING"}} }, required:["icon","tipType","title","body","detail","extra"] } } }, required:["cards"] };
 
 const FALLBACK_TIPS = [
-  { icon:"💧", tipType:"reminder", title:"Hidratación", body:"Apunta a 35ml por kg de peso al día. Un 2% de deshidratación reduce el rendimiento hasta un 20%.", detail:"Beber agua fría durante el entreno puede mejorar la tolerancia al calor." },
-  { icon:"🛌", tipType:"reminder", title:"Sueño = crecimiento", body:"El músculo crece durante el descanso, no en el gym. Prioriza 7-9 horas para maximizar la síntesis proteica.", detail:"Menos de 6 horas reduce los niveles de testosterona y aumenta el cortisol." },
-  { icon:"🥩", tipType:"tip", title:"Proteína post-entreno", body:"Consume 30-40g de proteína dentro de las 2 horas post-entreno. La ventana anabólica es real aunque más amplia de lo que se creía.", detail:"El batido + una fruta es una combinación eficiente y rápida." },
-  { icon:"📈", tipType:"tip", title:"Sobrecarga progresiva", body:"Sin progresión no hay adaptación. Aumenta 1.25–2.5kg cuando puedas completar todas las series en el rango alto de reps.", detail:"Pequeños aumentos constantes superan a grandes saltos esporádicos." },
-  { icon:"🔄", tipType:"tip", title:"Varía el agarre", body:"En jalones: agarre supino activa más bíceps, neutro reduce tensión en muñecas, prono enfoca más espalda alta.", detail:"Rotar el agarre cada 3-4 semanas previene el sobreuso articular." },
-  { icon:"⚡", tipType:"motivation", title:"Consistencia > Intensidad", body:"3 sesiones semanales durante 6 meses superan a 6 sesiones durante 2 semanas. La constancia es la ventaja más infravalorada.", detail:"Los resultados se acumulan de forma no lineal — sigue aunque no lo notes." },
-  { icon:"🧘", tipType:"reminder", title:"Movilidad antes de entrenar", body:"5 minutos de movilidad dinámica mejoran el rango de movimiento y reducen lesiones. Evita el estiramiento estático antes de levantar.", detail:"Hip circles, rotaciones de hombro y sentadilla profunda son suficientes." },
-  { icon:"📊", tipType:"tip", title:"Entrena con RIR", body:"Dejar 1-3 repeticiones en reserva (RIR 1-3) maximiza la hipertrofia con menor fatiga acumulada que ir siempre al fallo.", detail:"Al fallo en cada serie puede duplicar el tiempo de recuperación necesario." },
-  { icon:"🎯", tipType:"tip", title:"Conexión mente-músculo", body:"Pensar activamente en el músculo que trabajas puede aumentar su activación hasta un 30%. Baja el peso si es necesario para sentirlo.", detail:"La contracción intencional en la posición de máximo estiramiento es clave." },
-  { icon:"🍌", tipType:"reminder", title:"Carbos pre-entreno", body:"Una fuente de carbohidratos 30-60 min antes del entreno mejora el rendimiento en sesiones de más de 45 minutos.", detail:"Plátano, avena o arroz son opciones simples y efectivas." },
-  { icon:"💪", tipType:"motivation", title:"El principio de especificidad", body:"El cuerpo se adapta exactamente a lo que practicas. Si quieres fuerza, entrena fuerza. Si quieres resistencia, entrena resistencia.", detail:"La especificidad es la ley más subestimada del entrenamiento." },
-  { icon:"🔥", tipType:"tip", title:"Calentar el patrón, no el músculo", body:"El calentamiento ideal replica el movimiento de los ejercicios principales con menor peso — no es solo correr o bicicleta.", detail:"Hacer 2 series livianas del primer ejercicio es un calentamiento eficiente." },
+  { icon:"💧", tipType:"reminder", title:"Hidratación", body:"Apunta a 35ml por kg de peso al día. Un 2% de deshidratación reduce el rendimiento hasta un 20%.", extra:["Si tu orina es amarillo oscuro antes de entrenar, ya estás en déficit hídrico.", "→ Toma 500ml al despertar, 300ml antes de entrenar y 200ml cada 20 min durante el entreno.", "→ En días de mucho sudor añade una pizca de sal al agua — funciona igual que el isotónico."] },
+  { icon:"🛌", tipType:"reminder", title:"Sueño = crecimiento", body:"El músculo crece durante el descanso, no en el gym. 7-9 horas maximizan la síntesis proteica.", extra:["Menos de 6h reduce la testosterona, eleva el cortisol y frena la recuperación muscular.", "→ Corta pantallas 30 min antes de dormir — la luz azul retrasa la melatonina hasta 90 min.", "→ Habitación a 18-20°C mejora el sueño profundo, la fase donde se libera hormona de crecimiento."] },
+  { icon:"🥩", tipType:"tip", title:"Proteína post-entreno", body:"Consume 30-40g de proteína en las 2 horas post-entreno para maximizar la síntesis proteica.", extra:["La ventana anabólica es más amplia de lo que se creía (2-4h), pero más cerca = mejor.", "→ Combina proteína rápida (suero, huevos) con carbohidrato simple (fruta, arroz blanco).", "→ Si entrenas en ayunas, toma al menos 5g de EAA durante el entreno para minimizar el catabolismo."] },
+  { icon:"📈", tipType:"tip", title:"Sobrecarga progresiva", body:"Sin progresión no hay adaptación. Aumenta 1.25–2.5kg cuando completes todas las series en el rango alto.", extra:["El cuerpo solo crece si el estímulo aumenta — la progresión de carga es la herramienta clave.", "→ Sin discos de 1.25kg, usa progresión de reps: busca 1 rep más por serie antes de subir peso.", "→ Lleva un registro escrito — sin datos no sabes si estás progresando de verdad."] },
+  { icon:"🔄", tipType:"tip", title:"Varía el agarre en jalón", body:"Agarre supino activa más bíceps, neutro reduce tensión en muñecas, prono enfoca la espalda alta.", extra:["Rotar el agarre cada 3-4 semanas previene el sobreuso articular y añade variedad al estímulo.", "→ Agarre neutro (palmas enfrentadas) permite más carga y es el más cómodo para la mayoría.", "→ Combina jalón supino con remo para maximizar bíceps sin necesitar sesión separada."] },
+  { icon:"⚡", tipType:"motivation", title:"Consistencia > Intensidad", body:"3 sesiones semanales durante 6 meses superan a 6 sesiones durante 2 semanas. La constancia gana.", extra:["Los resultados se acumulan de forma no lineal — los primeros meses parecen lentos, luego se disparan.", "→ Si tienes un mal día, entrena igual pero reduce el volumen a la mitad — mantener el hábito importa más.", "→ La sesión 'mediocre' cuenta exactamente igual que la perfecta en el cómputo anual."] },
+  { icon:"🧘", tipType:"reminder", title:"Movilidad dinámica pre-entreno", body:"5 min de movilidad dinámica mejoran el rango de movimiento y reducen lesiones. Evita estiramientos estáticos.", extra:["El estiramiento estático antes de levantar puede reducir la fuerza hasta un 8% — guárdalo para después.", "→ Rutina express: 10 hip circles + 10 rotaciones de hombro + 10 sentadillas profundas sin peso.", "→ Prioriza movilidad de cadera y hombros — son las articulaciones con mayor impacto en el rendimiento."] },
+  { icon:"📊", tipType:"tip", title:"Entrena con RIR", body:"Dejar 1-3 repeticiones en reserva (RIR 1-3) maximiza la hipertrofia con menor fatiga acumulada.", extra:["Ir siempre al fallo puede duplicar el tiempo de recuperación sin añadir más hipertrofia.", "→ Usa RIR 2-3 en las series de acumulación, RIR 0-1 solo en la última serie de cada ejercicio.", "→ Para calcular tu RIR: al terminar la serie pregúntate cuántas reps más podrías hacer con buena técnica."] },
+  { icon:"🎯", tipType:"tip", title:"Conexión mente-músculo", body:"Pensar activamente en el músculo que trabajas puede aumentar su activación hasta un 30%.", extra:["La activación intencional importa especialmente en músculos difíciles de sentir como glúteos y espalda alta.", "→ Reduce el peso un 20% y añade 2 seg de pausa en la posición de máximo estiramiento.", "→ Para pecho: imagina juntar los codos en la contracción, no solo empujar el peso."] },
+  { icon:"🍌", tipType:"reminder", title:"Carbos pre-entreno", body:"Carbohidratos 30-60 min antes del entreno mejoran el rendimiento en sesiones de más de 45 min.", extra:["Sin carbos disponibles, el cuerpo puede catabolizar músculo para obtener energía en sesiones largas.", "→ Opciones rápidas: plátano, 30g avena con leche, o 2 tostadas con mermelada.", "→ Si entrenas en ayunas, considera al menos 5g de BCAA o EAA para minimizar el catabolismo."] },
+  { icon:"💪", tipType:"motivation", title:"Especificidad del entrenamiento", body:"El cuerpo se adapta exactamente a lo que practicas. Si quieres fuerza, entrena fuerza.", extra:["Hacer cardio excesivo mientras buscas hipertrofia compite directamente con las adaptaciones musculares.", "→ Define tu objetivo principal y diseña el 80% del entreno en torno a él.", "→ Especificidad no significa monotonía — varía ejercicios accesorios, no los patrones de movimiento principales."] },
+  { icon:"🔥", tipType:"tip", title:"Calentamiento específico", body:"El calentamiento ideal replica los movimientos del entreno con menor peso — no solo correr o bicicleta.", extra:["2 series de activación con 40-60% del peso de trabajo preparan mejor las articulaciones que 10 min de cardio.", "→ Para press de pecho: 15 reps con barra vacía + 8 reps con el 60% antes del peso de trabajo.", "→ Para sentadilla: sentadilla goblet con 10kg + hip hinge con bandas activan toda la cadena posterior."] },
 ];
 
 // ── Funciones estadísticas ──
@@ -1508,8 +1508,9 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           try {
             const { data: { session } } = await client.auth.getSession();
             if (session?.user) {
+              await saveKey("last_logged_in_user_id", session.user.id);
               setSupabaseUser(session.user);
-              setSbError(""); // limpiar cualquier error viejo al restaurar sesión
+              setSbError("");
               setTimeout(() => loadFullStateFromSupabase(session.user.id), 1500);
             }
           } catch(e) {
@@ -2249,8 +2250,13 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       });
       if (error) throw error;
       if (data?.user) {
+        // Si cambia el usuario, limpiar estado local antes de cargar el nuevo perfil
+        const prevUserId = await loadKey("last_logged_in_user_id", null);
+        if (prevUserId && prevUserId !== data.user.id) {
+          await clearLocalUserState();
+        }
+        await saveKey("last_logged_in_user_id", data.user.id);
         setSupabaseUser(data.user);
-        // Primero intentar restaurar desde la nube (si hay datos más recientes)
         const restored = await loadFullStateFromSupabase(data.user.id);
         setSbError(restored ? "Datos restaurados desde la nube." : "Sesión iniciada. Sincronizando...");
         if (!restored) {
@@ -2279,11 +2285,14 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       });
       if (error) throw error;
       if (data?.user) {
+        // Si cambia el usuario, limpiar estado local antes de crear el perfil nuevo
+        const prevUserId = await loadKey("last_logged_in_user_id", null);
+        if (prevUserId && prevUserId !== data.user.id) {
+          await clearLocalUserState();
+        }
+        await saveKey("last_logged_in_user_id", data.user.id);
         setSupabaseUser(data.user);
-        // Registrar el perfil y sincronizar datos locales a la nube automáticamente
-        setTimeout(() => {
-          syncLocalToSupabase();
-        }, 1000);
+        setTimeout(() => syncLocalToSupabase(), 1000);
         setSbError("Cuenta creada e inicio de sesión exitoso.");
       }
     } catch(err) {
@@ -2309,6 +2318,32 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     } finally {
       setSbSyncing(false);
     }
+  };
+
+  // Borra todo el estado local para evitar filtración de datos entre usuarios en el mismo dispositivo
+  const clearLocalUserState = async () => {
+    setNotes([]); await saveKey("notes", []);
+    setExlog({}); await saveKey("exlog", {});
+    setExercises({}); await saveKey("exercises", {});
+    setFoodlog({}); await saveKey("foodlog", {});
+    setWaterlog({}); await saveKey("waterlog", {});
+    setSuppslog({}); await saveKey("suppslog", {});
+    setMetricslog({}); await saveKey("metricslog", {});
+    setSuppsInventory({}); await saveKey("supps_inventory", {});
+    setWorkoutDurations({}); await saveKey("workout_durations", {});
+    setMeals([]); await saveKey("meals", []);
+    setSplits(DEFAULT_SPLITS); await saveKey("training_splits", DEFAULT_SPLITS);
+    setBodyComp(null); await saveKey("body_comp", null);
+    setShoppingList(null); await saveKey("shopping_list", null);
+    setCustomPresets({}); await saveKey("custom_presets", {});
+    setCustomSuggestions([]); await saveKey("custom_suggestions", []);
+    setChat([]); await saveKey("chat", []);
+    setExperiments([]); await saveKey("experiments", []);
+    setSmartGoals([]); await saveKey("smart_goals", []);
+    setChallenges([]); await saveKey("challenges", []);
+    setWeeklyInsight(""); await saveKey("weekly_insight", "");
+    setUpcomingEvent(""); await saveKey("upcoming_event", "");
+    await saveKey("last_local_update", 0);
   };
 
   const syncLocalToSupabase = async (silent = false) => {
@@ -9258,8 +9293,12 @@ const TIP_STYLE = {
 };
 
 function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions, aiTips }) {
-  const [dismissed, setDismissed] = React.useState(new Set());
-  const [tipIdx, setTipIdx] = React.useState(0);
+  const [dismissed, setDismissed] = React.useState(() => {
+    try { return new Set(JSON.parse(sessionStorage.getItem("carousel_dismissed") || "[]")); } catch { return new Set(); }
+  });
+  const [tipIdx, setTipIdx] = React.useState(() => {
+    try { return parseInt(sessionStorage.getItem("carousel_tip_idx") || "0", 10); } catch { return 0; }
+  });
   const [expanded, setExpanded] = React.useState(false);
   const touchRef = React.useRef({ startX: 0, moved: false });
   const [swipeX, setSwipeX] = React.useState(0);
@@ -9307,14 +9346,25 @@ function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions
   }, [muscleImbalances, plateauAlerts, overloadSuggestions, dismissed]);
 
   const currentTip = tips[tipIdx % tips.length];
-  const tipCard = { id: "tip", tipType: currentTip.tipType || "tip", icon: currentTip.icon, title: currentTip.title, body: currentTip.body, extra: currentTip.detail ? [currentTip.detail] : [] };
+  const tipCard = { id: "tip", tipType: currentTip.tipType || "tip", icon: currentTip.icon, title: currentTip.title, body: currentTip.body, extra: (currentTip.extra && currentTip.extra.length > 0) ? currentTip.extra : (currentTip.detail ? [currentTip.detail] : []) };
   const allCards = [...dataCards, tipCard];
   const card = allCards[0];
 
   const dismissCurrent = () => {
     setExpanded(false);
-    if (card.id === "tip") setTipIdx(prev => (prev + 1) % tips.length);
-    else setDismissed(prev => new Set([...prev, card.id]));
+    if (card.id === "tip") {
+      setTipIdx(prev => {
+        const next = (prev + 1) % tips.length;
+        try { sessionStorage.setItem("carousel_tip_idx", String(next)); } catch {}
+        return next;
+      });
+    } else {
+      setDismissed(prev => {
+        const next = new Set([...prev, card.id]);
+        try { sessionStorage.setItem("carousel_dismissed", JSON.stringify([...next])); } catch {}
+        return next;
+      });
+    }
     setSwipeX(0); setSwiping(false);
   };
 
@@ -9454,8 +9504,8 @@ function Entreno({
       if (isPush) push += n7; if (isPull) pull += n7; if (isLegs) legs += n7;
     });
     const ctx = `Entrenador: Push ${push} series · Pull ${pull} series · Piernas ${legs} series (últimos 7 días). Plateaus: ${(plateauAlerts||[]).length}. Sugerencias sobrecarga: ${Object.keys(overloadSuggestions||{}).length}. Notas recientes: ${getRecentSensationsText().slice(0, 200)}.`;
-    callGemini([{ role:"user", content: `Genera 6 tarjetas variadas de coaching fitness personalizado para Bruno basándote en este contexto: ${ctx}\n\nGenera EXACTAMENTE 6 tarjetas, variando entre: consejo técnico de entrenamiento, recordatorio de nutrición, consejo de recuperación, dato científico curioso, motivación, o advertencia específica. Mezcla tipos, no repitas el mismo tipo seguido. Cada tarjeta máx 2 líneas.` }],
-      "Eres coach fitness experto. Responde SOLO en JSON válido con el array 'cards'. Cada card: {icon, tipType (tip|reminder|motivation|warning), title, body, detail}. En español. Máx 25 palabras por body, 15 por detail.",
+    callGemini([{ role:"user", content: `Genera 6 tarjetas variadas de coaching fitness personalizado para Bruno basándote en este contexto: ${ctx}\n\nGenera EXACTAMENTE 6 tarjetas con tipTypes variados (tip, reminder, motivation, warning) — no repitas el mismo tipo consecutivo. El campo 'extra' debe tener EXACTAMENTE 3 strings: [0] contexto/por qué importa, [1] acción concreta hoy (empieza con →), [2] otra acción o dato práctico (empieza con →).` }],
+      "Eres coach fitness experto. Responde SOLO en JSON válido con el array 'cards'. Cada card: {icon, tipType, title (máx 4 palabras), body (máx 25 palabras), detail (igual a extra[0], máx 20 palabras), extra: [string×3]}. En español.",
       TIPS_SCHEMA
     ).then(raw => {
       try {
