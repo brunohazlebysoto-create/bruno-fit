@@ -9258,11 +9258,10 @@ const TIP_STYLE = {
 };
 
 function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions, aiTips }) {
-  // Hard-dismiss: data cards (imbalance/plateau/overload) go away permanently
   const [dismissed, setDismissed] = React.useState(new Set());
-  // Soft-dismiss: tips cycle (shown once per rotation, then repeat)
   const [tipIdx, setTipIdx] = React.useState(0);
-  const touchRef = React.useRef({ startX: 0 });
+  const [expanded, setExpanded] = React.useState(false);
+  const touchRef = React.useRef({ startX: 0, moved: false });
   const [swipeX, setSwipeX] = React.useState(0);
   const [swiping, setSwiping] = React.useState(false);
 
@@ -9273,61 +9272,74 @@ function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions
     (muscleImbalances || []).forEach((text, i) => {
       const isPP = text.includes("Empuje");
       list.push({
-        id: "imb" + i, tipType: "imbalance",
-        icon: "⚖️",
+        id: "imb" + i, tipType: "imbalance", icon: "⚖️",
         title: isPP ? "Desbalance Empuje/Jalón" : "Desbalance Cuáds/Isquios",
         body: text.replace("series", "ser") + (isPP ? " — Empuje = Pecho+Hombros+Tríceps · Jalón = Espalda+Bíceps" : ""),
-        detail: "Ideal ≤ 1.3:1. Añade más jalones esta semana para equilibrar."
+        extra: isPP
+          ? ["Ideal 1:1 a 1.3:1. El desequilibrio sostenido puede causar dolor de hombro y mala postura.", "Esta semana: reemplaza 1 serie de press por remo, y añade face pulls al final.", "El ejercicio más eficiente para equilibrar: remo con mancuerna unilateral (no necesita mucho tiempo)."]
+          : ["Desequilibrio cuáds/isquios eleva el riesgo de lesión de rodilla y LCA.", "Añade peso muerto rumano o curl de pierna al final de tu próxima sesión de piernas.", "Objetivo: al menos 1 serie de isquios por cada 1.5 de cuádriceps."]
       });
     });
     (plateauAlerts || []).slice(0, 3).forEach((p, i) => list.push({
       id: "plt" + i, tipType: "plateau", icon: "⚡",
       title: "Estancamiento: " + p.exercise,
-      body: `Sin progreso en ${p.weeks} semanas con ${p.weight}kg. El cuerpo se adaptó al estímulo actual.`,
-      detail: "Prueba: aumentar volumen, reducir RIR, cambiar el ejercicio o deload."
+      body: `Sin progreso en ${p.weeks} semanas con ${p.weight}kg.`,
+      extra: [
+        "El cuerpo se adapta al estímulo repetido — necesita un cambio para crecer de nuevo.",
+        "Opción A · Doble progresión: baja a 3 sets × 6 reps, sube 2.5kg y trabaja hasta llegar a 3×10 antes de volver a subir.",
+        "Opción B · Técnica: reduce el peso 10% durante 2 semanas enfocándote en tempo 3-1-2 (bajada-pausa-subida).",
+        "Opción C · Variación: cambia a un ejercicio parecido (ej. si estás estancado en press banca → press inclinado) por 4 semanas y luego vuelve.",
+        "Opción D · Deload: una semana con 50% del volumen habitual y sin fallo muscular restaura el SNC."
+      ]
     }));
     Object.entries(overloadSuggestions || {}).slice(0, 3).forEach(([ex, s], i) => list.push({
       id: "ovl" + i, tipType: "overload", icon: "↑",
-      title: "Sube el peso: " + ex,
-      body: `${s.currentMax}kg → ${s.suggested}kg. ${s.reason || "Llevas varias sesiones completando bien las reps."}`,
-      detail: "Un aumento pequeño sostenido es mejor que esperar al momento perfecto."
+      title: "Subir peso: " + ex,
+      body: `${s.currentMax}kg → ${s.suggested}kg. ${s.reason || "Completando todas las series en rango alto."}`,
+      extra: [
+        "Cuándo subir: cuando completas TODAS las series en el límite superior del rango de reps (sin fallar en las últimas).",
+        `Cómo: sube ${Math.round((s.suggested - s.currentMax) * 10) / 10}kg. Si no tienes ese disco, sube al siguiente disponible y baja 1-2 reps hasta adaptarte.`,
+        "Si fallas demasiado pronto: el aumento fue prematuro, baja al peso anterior 1 semana más.",
+        "Regla de oro: mejor subir pequeño y completar que subir grande y fallar series."
+      ]
     }));
     return list.filter(c => !dismissed.has(c.id));
   }, [muscleImbalances, plateauAlerts, overloadSuggestions, dismissed]);
 
-  // Show data cards first, then the current tip card
   const currentTip = tips[tipIdx % tips.length];
-  const tipCard = { id: "tip", tipType: currentTip.tipType || "tip", icon: currentTip.icon, title: currentTip.title, body: currentTip.body, detail: currentTip.detail };
+  const tipCard = { id: "tip", tipType: currentTip.tipType || "tip", icon: currentTip.icon, title: currentTip.title, body: currentTip.body, extra: currentTip.detail ? [currentTip.detail] : [] };
   const allCards = [...dataCards, tipCard];
-  const card = allCards[0]; // always show first in queue
-
-  const totalCount = dataCards.length + tips.length;
+  const card = allCards[0];
 
   const dismissCurrent = () => {
-    if (card.id === "tip") {
-      // Soft dismiss: advance to next tip
-      setTipIdx(prev => (prev + 1) % tips.length);
-    } else {
-      setDismissed(prev => new Set([...prev, card.id]));
-    }
+    setExpanded(false);
+    if (card.id === "tip") setTipIdx(prev => (prev + 1) % tips.length);
+    else setDismissed(prev => new Set([...prev, card.id]));
     setSwipeX(0); setSwiping(false);
   };
 
   const onTouchStart = (e) => {
-    touchRef.current.startX = e.touches[0].clientX;
+    touchRef.current = { startX: e.touches[0].clientX, moved: false };
     setSwiping(true); setSwipeX(0);
   };
   const onTouchMove = (e) => {
     if (!swiping) return;
-    setSwipeX(Math.min(0, e.touches[0].clientX - touchRef.current.startX));
+    const dx = e.touches[0].clientX - touchRef.current.startX;
+    if (Math.abs(dx) > 8) touchRef.current.moved = true;
+    setSwipeX(Math.min(0, dx));
   };
   const onTouchEnd = () => {
-    if (swipeX < -70) dismissCurrent();
-    else { setSwipeX(0); setSwiping(false); }
+    if (!touchRef.current.moved) {
+      setExpanded(prev => !prev);
+      setSwipeX(0); setSwiping(false);
+    } else if (swipeX < -70) {
+      dismissCurrent();
+    } else {
+      setSwipeX(0); setSwiping(false);
+    }
   };
 
   const st = TIP_STYLE[card.tipType] || TIP_STYLE.tip;
-  const remaining = dataCards.length + (tips.length - (card.id === "tip" ? 0 : 0)); // visual count
 
   return (
     <div style={{marginBottom:12}}>
@@ -9337,23 +9349,47 @@ function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions
         onTouchEnd={onTouchEnd}
         style={{
           background: st.bg, border: `1.5px solid ${st.border}`,
-          borderRadius: 14, padding: "12px 14px",
+          borderRadius: 14, padding: "12px 14px", cursor: "pointer",
           transform: `translateX(${swipeX}px)`,
           opacity: 1 - Math.abs(swipeX) / 200,
           transition: swiping ? "none" : "transform 0.25s ease, opacity 0.25s",
           userSelect: "none"
         }}
       >
+        {/* Header row */}
         <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:8}}>
           <div style={{display:"flex", alignItems:"center", gap:6, flex:1}}>
             <span style={{fontSize:16}}>{card.icon}</span>
             <span style={{fontSize:12.5, fontWeight:800, color:st.color}}>{card.title}</span>
           </div>
-          <button onClick={dismissCurrent} style={{background:"none", border:"none", color:st.color, fontSize:18, cursor:"pointer", lineHeight:1, padding:"0 2px", opacity:.65, flexShrink:0}}>×</button>
+          <div style={{display:"flex", alignItems:"center", gap:6, flexShrink:0}}>
+            <span style={{fontSize:10, color:st.color, opacity:.7}}>{expanded ? "▲" : "▼"}</span>
+            <button onTouchEnd={e => { e.stopPropagation(); dismissCurrent(); }} onClick={e => { e.stopPropagation(); dismissCurrent(); }} style={{background:"none", border:"none", color:st.color, fontSize:18, cursor:"pointer", lineHeight:1, padding:"0 2px", opacity:.6}}>×</button>
+          </div>
         </div>
+
+        {/* Body */}
         <div style={{fontSize:11.5, color:C.ink, marginTop:6, lineHeight:1.5}}>{card.body}</div>
-        {card.detail && <div style={{fontSize:10.5, color:C.muted, marginTop:5, lineHeight:1.4}}>{card.detail}</div>}
+
+        {/* Expanded detail */}
+        {expanded && card.extra && card.extra.length > 0 && (
+          <div style={{marginTop:10, display:"flex", flexDirection:"column", gap:6, borderTop:`1px solid ${st.border}`, paddingTop:10}}>
+            {card.extra.map((line, i) => (
+              <div key={i} style={{display:"flex", gap:7, alignItems:"flex-start"}}>
+                <span style={{color:st.color, fontWeight:800, fontSize:11, flexShrink:0, marginTop:1}}>{i === 0 ? "ℹ" : "→"}</span>
+                <span style={{fontSize:11, color: i === 0 ? C.muted : C.ink, lineHeight:1.5}}>{line}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Tap hint when collapsed */}
+        {!expanded && (
+          <div style={{fontSize:9.5, color:st.color, opacity:.55, marginTop:5, textAlign:"right"}}>toca para ver más</div>
+        )}
       </div>
+
+      {/* Dots + swipe hint */}
       <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:5}}>
         <div style={{display:"flex", gap:4, alignItems:"center"}}>
           {allCards.slice(0, Math.min(8, allCards.length)).map((c, i) => (
