@@ -1225,6 +1225,8 @@ export default function App(){
   const [pdfBusy, setPdfBusy] = useState(false);
   const [coachPersonality, setCoachPersonality] = useState("técnico");
   const [showFocusMode, setShowFocusMode] = useState(false);
+  const [backupToast, setBackupToast] = useState(false);
+  const nightlyBackupRef = useRef(null); // holds latest state for midnight callback
 
   // Elevated Calendar States & Helpers
   const [calMonth, setCalMonth] = useState(() => new Date());
@@ -2524,6 +2526,50 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  // Mantener ref actualizada con el estado más reciente para el backup nocturno
+  nightlyBackupRef.current = { notes, exlog, exercises, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, meals, splits, bodyComp, shoppingList, presetKey, activeSplitKey, customPresets, customSuggestions, chat, experiments, smartGoals, challenges, weeklyInsight, upcomingEvent, supabase, supabaseUser };
+
+  // Backup automático cada noche a las 00:00
+  useEffect(() => {
+    const doBackup = async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      if (localStorage.getItem("last_backup_date") === today) return;
+      localStorage.setItem("last_backup_date", today);
+      const st = nightlyBackupRef.current;
+      const snap = { exportedAt: new Date().toISOString(), notes: st.notes, exlog: st.exlog, exercises: st.exercises, foodlog: st.foodlog, waterlog: st.waterlog, suppslog: st.suppslog, metricslog: st.metricslog, suppsInventory: st.suppsInventory, workoutDurations: st.workoutDurations, meals: st.meals, splits: st.splits, bodyComp: st.bodyComp, shoppingList: st.shoppingList, presetKey: st.presetKey, activeSplitKey: st.activeSplitKey, customPresets: st.customPresets, customSuggestions: st.customSuggestions, smartGoals: st.smartGoals, challenges: st.challenges };
+      // 1. Descargar JSON
+      try {
+        const blob = new Blob([JSON.stringify(snap, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `brunofit-backup-${today}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (_) {}
+      // 2. Guardar en Supabase si está autenticado
+      if (st.supabase && st.supabaseUser) {
+        try {
+          await st.supabase.from("profiles").upsert({ id: st.supabaseUser.id, email: st.supabaseUser.email, full_state: JSON.stringify(snap), last_backup: today, updated_at: new Date().toISOString() });
+        } catch (_) {}
+      }
+      // 3. Toast de confirmación
+      setBackupToast(true);
+      setTimeout(() => setBackupToast(false), 5000);
+    };
+
+    const schedule = () => {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(24, 0, 0, 0);
+      return setTimeout(() => { doBackup(); schedule(); }, next - now);
+    };
+    const tid = schedule();
+    return () => clearTimeout(tid);
+  }, []);
 
   // Importar datos desde JSON
   const importDataJSON = (file) => {
@@ -4220,7 +4266,15 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
           onClose={() => setShowFocusMode(false)}
           splits={splits}
           exlog={exlog}
+          exercises={exercises}
         />
+      )}
+
+      {backupToast && (
+        <div style={{position:"fixed", bottom:90, left:"50%", transform:"translateX(-50%)", background:"rgba(21,23,15,0.96)", border:`1px solid ${C.lime}44`, borderRadius:12, padding:"10px 16px", zIndex:9999, display:"flex", alignItems:"center", gap:8, boxShadow:"0 4px 20px rgba(0,0,0,0.4)"}}>
+          <span style={{fontSize:14}}>🔒</span>
+          <span style={{fontSize:12.5, color:C.lime, fontWeight:700}}>Copia automática guardada</span>
+        </div>
       )}
 
       {prAlerts.length > 0 && <Confetti key={prAlerts.join("|").slice(0, 24)} />}
@@ -8764,7 +8818,13 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
 }
 
 /* ===== MODO FOCO ===== */
-function FocusMode({ onClose, splits, exlog }) {
+function FocusMode({ onClose, splits, exlog, exercises }) {
+  // Helper: get muscle list for any exercise (MUSCLES constant + custom exercises fallback)
+  const getMuscles = (name) => {
+    if (MUSCLES[name]) return MUSCLES[name];
+    const allExs = Object.values(exercises || {}).flat();
+    return allExs.find(e => e.name === name)?.musculos || [];
+  };
   const circuitSplit = splits.find(s => s.key === "E") || DEFAULT_SPLITS.find(s => s.key === "E");
   const circuitExs = circuitSplit?.ex || [];
   const exDuration = 60;
@@ -8884,7 +8944,7 @@ function FocusMode({ onClose, splits, exlog }) {
   const fmtTime = (s) => `${Math.floor(s/60).toString().padStart(2,"0")}:${(s%60).toString().padStart(2,"0")}`;
 
   const MUSCLE_COLORS = { "Cuádriceps":C.lime, "Glúteos":C.lime, "Isquios":C.lime, "Pectoral":C.cyan, "Tríceps":C.cyan, "Espalda":C.amber, "Deltoides":C.amber, "Bíceps":C.rose };
-  const exColor = (name) => MUSCLE_COLORS[(MUSCLES[name] || [])[0]] || C.muted;
+  const exColor = (name) => MUSCLE_COLORS[getMuscles(name)[0]] || C.muted;
 
   // --- CARRUSEL POR SPLIT ---
   const [focusSplit, setFocusSplit] = useState(splits[0]?.key || "A");
@@ -9053,7 +9113,7 @@ function FocusMode({ onClose, splits, exlog }) {
                     const last = getLastEntry(exName);
                     const seriesTotal = (exlog[exName] || []).filter(s => s.type !== "warmup").length;
                     const col = exColor(exName);
-                    const muscles = (MUSCLES[exName] || []).slice(0,2);
+                    const muscles = getMuscles(exName).slice(0,2);
                     const hasHistory = last.w > 0;
                     const btnStyle = (active) => ({
                       width:32, height:32, borderRadius:7, cursor:"pointer", fontSize:18, fontWeight:700,
@@ -9621,6 +9681,7 @@ function Entreno({
           }
         }
         setExercises({...exercises, [sel]: [...dayExs, {name: addText.trim(), tecnico, equipo, musculos}]});
+        setSplits((splits || DEFAULT_SPLITS).map(s => s.key === sel ? {...s, ex: [...new Set([...(s.ex||[]), addText.trim()])]} : s));
       } else {
         let nombre = addText.trim(), tecnico = "", equipo = "peso libre", musculos = [];
         const cachedD = getAICache("exdesc", addText.trim());
@@ -9661,6 +9722,7 @@ function Entreno({
           }
         }
         setExercises({...exercises, [sel]: [...dayExs, {name: nombre, tecnico, equipo, musculos}]});
+        setSplits((splits || DEFAULT_SPLITS).map(s => s.key === sel ? {...s, ex: [...new Set([...(s.ex||[]), nombre])]} : s));
       }
       setAddText("");
       setAdding(false);
@@ -10849,7 +10911,10 @@ function Entreno({
                                 const existing = allExerciseObjects.find(o => o.name === ex.name);
                                 if (existing) {
                                   const alreadyInDay = dayExs.some(d => d.name === existing.name);
-                                  if (!alreadyInDay) setExercises({...exercises, [sel]: [...dayExs, {name:existing.name, tecnico:existing.tecnico||"", equipo:existing.equipo||"peso libre", musculos:existing.musculos||[]}]});
+                                  if (!alreadyInDay) {
+                                    setExercises({...exercises, [sel]: [...dayExs, {name:existing.name, tecnico:existing.tecnico||"", equipo:existing.equipo||"peso libre", musculos:existing.musculos||[]}]});
+                                    setSplits((splits || DEFAULT_SPLITS).map(s => s.key === sel ? {...s, ex: [...new Set([...(s.ex||[]), existing.name])]} : s));
+                                  }
                                   setAddText(""); setAdding(false);
                                 } else {
                                   setAddText(ex.name);
