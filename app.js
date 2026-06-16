@@ -2530,8 +2530,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
   // Mantener ref actualizada con el estado más reciente para el backup nocturno
   nightlyBackupRef.current = { notes, exlog, exercises, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, meals, splits, bodyComp, shoppingList, presetKey, activeSplitKey, customPresets, customSuggestions, chat, experiments, smartGoals, challenges, weeklyInsight, upcomingEvent, supabase, supabaseUser };
 
-  // Backup automático cada noche a las 00:00
+  // Backup automático: al abrir la app (si se perdió el de medianoche) y cada 00:00
   useEffect(() => {
+    if (!loaded) return; // esperar a que los datos estén cargados
+
     const doBackup = async () => {
       const today = new Date().toISOString().slice(0, 10);
       if (localStorage.getItem("last_backup_date") === today) return;
@@ -2561,6 +2563,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       setTimeout(() => setBackupToast(false), 5000);
     };
 
+    // Al abrir la app: correr si el backup de hoy no se hizo
+    doBackup();
+
+    // A las 00:00: programar backup para medianoche y repetir cada día
     const schedule = () => {
       const now = new Date();
       const next = new Date(now);
@@ -2569,7 +2575,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     };
     const tid = schedule();
     return () => clearTimeout(tid);
-  }, []);
+  }, [loaded]);
 
   // Importar datos desde JSON
   const importDataJSON = (file) => {
