@@ -980,7 +980,7 @@ function detectPlateaus(exlog) {
   const plateaus = [];
   Object.entries(exlog||{}).forEach(([exName, sets])=>{
     if (!sets || sets.length < 9) return;
-    const sorted = [...sets].filter(s=>s?.date&&s?.w).sort((a,b)=>new Date(a.date)-new Date(b.date));
+    const sorted = [...sets].filter(s=>s?.date&&s?.w).sort((a,b)=>a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
     // Agrupamos por semana
     const byWeek = {};
     sorted.forEach(s=>{
@@ -1005,7 +1005,7 @@ function calcProgressiveOverload(exlog) {
   const suggestions = {};
   Object.entries(exlog||{}).forEach(([exName, sets])=>{
     if (!sets || sets.length === 0) return;
-    const sorted = [...sets].filter(s=>s?.date&&s?.w).sort((a,b)=>new Date(b.date)-new Date(a.date));
+    const sorted = [...sets].filter(s=>s?.date&&s?.w).sort((a,b)=>b.date < a.date ? -1 : (b.date > a.date ? 1 : 0));
     const recent = sorted.slice(0,5);
     const maxW = Math.max(...recent.map(s=>parseFloat(s.w)||0));
     const maxReps = Math.max(...recent.filter(s=>parseFloat(s.w)===maxW).map(s=>parseInt(s.reps)||0));
@@ -1251,7 +1251,7 @@ export default function App(){
   const getMetricsForDate = (dateStr) => {
     const entries = Object.entries(metricslog || {})
       .filter(([d]) => d <= dateStr)
-      .sort((a, b) => b[0].localeCompare(a[0]));
+      .sort((a, b) => b[0] < a[0] ? -1 : (b[0] > a[0] ? 1 : 0));
     
     if (entries.length > 0) {
       const latest = entries[0][1] || {};
@@ -1273,7 +1273,7 @@ export default function App(){
     
     const wNotes = (notes || [])
       .filter(n => n && n.type === "peso" && n.date && n.date.slice(0, 10) <= dateStr && n.weight)
-      .sort((a, b) => b.date.localeCompare(a.date));
+      .sort((a, b) => b.date < a.date ? -1 : (b.date > a.date ? 1 : 0));
     const wVal = parseFloat(wNotes.length > 0 ? wNotes[0].weight : ((notes || []).find(n => n && n.type === "peso" && n.weight)?.weight || START_W)) || START_W;
     
     return {
@@ -2822,7 +2822,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     const tdee = calcTDEE(fLog, mLog);
     setTdeeEstimate(tdee);
     if (tdee && tgt) {
-      const latestM = Object.entries(mLog||{}).filter(([_,v])=>v?.weight).sort((a,b)=>b[0].localeCompare(a[0]))[0]?.[1];
+      const latestM = Object.entries(mLog||{}).filter(([_,v])=>v?.weight).sort((a,b)=>b[0] < a[0] ? -1 : (b[0] > a[0] ? 1 : 0))[0]?.[1];
       if (latestM) setProjections(calcBodyProjection(parseFloat(latestM.weight), parseFloat(latestM.grasaPct)||25, tdee, tgt.kcal, 12));
     }
     if (trend && Math.abs(trend.kgPerWeek) < 0.1 && trend.dataPoints >= 7) {
@@ -3229,7 +3229,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     // Progresión por ejercicio (primer set más antiguo vs más reciente últimas 4 sem)
     const progressLines = Object.entries(recentByEx)
       .map(([ex, sets]) => {
-        const sorted = [...sets].sort((a, b) => new Date(a.date) - new Date(b.date));
+        const sorted = [...sets].sort((a, b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
         if (sorted.length < 2) return null;
         const first = sorted[0], last = sorted[sorted.length - 1];
         if (first.w === last.w) return null;
@@ -3253,7 +3253,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     const weightEntries = Object.entries(metricslog || {})
       .map(([d, m]) => ({ date: d, w: m?.weight }))
       .filter(e => e.w)
-      .sort((a, b) => a.date.localeCompare(b.date));
+      .sort((a, b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
     let weightTrend = 'Sin registros de peso suficientes.';
     if (weightEntries.length >= 2) {
       const oldest = weightEntries[Math.max(0, weightEntries.length - 8)];
@@ -7597,7 +7597,7 @@ function Coach({
   const contextSummary = React.useMemo(() => {
     const nutritionDays = Object.keys(foodlog || {}).filter(d => (foodlog[d]||[]).length > 0).length;
     const workoutSessions = Object.keys(exlog || {}).filter(d => (exlog[d]||[]).length > 0).length;
-    const latestMetrics = Object.entries(metricslog || {}).sort((a,b) => b[0].localeCompare(a[0]))[0];
+    const latestMetrics = Object.entries(metricslog || {}).sort((a,b) => b[0] < a[0] ? -1 : (b[0] > a[0] ? 1 : 0))[0];
     const latestWeight = latestMetrics ? latestMetrics[1]?.weight : null;
     return { nutritionDays, workoutSessions, latestWeight };
   }, [foodlog, exlog, metricslog]);
@@ -8893,7 +8893,7 @@ function FocusMode({ onClose, splits, exlog }) {
   const getLastEntry = (exName) => {
     const work = (exlog[exName] || []).filter(s => s.type !== "warmup");
     if (work.length === 0) return { w: 0, reps: "8" };
-    const last = [...work].sort((a,b) => new Date(b.date) - new Date(a.date))[0];
+    const last = [...work].sort((a,b) => b.date < a.date ? -1 : (b.date > a.date ? 1 : 0))[0];
     return { w: parseFloat(last.w) || 0, reps: String(parseInt(last.reps) || 8) };
   };
   const getVals = (exName) => overrides[exName] || getLastEntry(exName);
@@ -9276,7 +9276,7 @@ function Entreno({
   const dayExs = (exercises || {})[sel] || [];
   const dayMuscles = [...new Set(dayExs.flatMap(e => e.musculos || []))];
   const last = (n) => { const a = (exlog || {})[n]; return a && a.length ? a[0] : null; };
-  const chartData = (n) => ((exlog || {})[n] || []).slice().sort((a,b) => new Date(a.date) - new Date(b.date));
+  const chartData = (n) => ((exlog || {})[n] || []).slice().sort((a,b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
 
   useEffect(() => {
     (async () => {
@@ -11936,7 +11936,7 @@ function Registro({
       .filter(([dateStr]) => dateStr <= selectedDateStr)
       .map(([dateStr, m]) => ({ date: dateStr, w: m ? m.weight : undefined }))
       .filter(x => x.w !== undefined)
-      .sort((a, b) => b.date.localeCompare(a.date));
+      .sort((a, b) => b.date < a.date ? -1 : (b.date > a.date ? 1 : 0));
     
     if (sortedWeights.length === 0) return null;
     newestW = sortedWeights[0].w;
@@ -12399,7 +12399,7 @@ function Registro({
     // Historial de composición corporal (últimas mediciones)
     const compHistory = Object.entries(metricslog || {})
       .filter(([, m]) => m && (m.musculo || m.grasaPct))
-      .sort((a, b) => a[0].localeCompare(b[0]))
+      .sort((a, b) => a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0))
       .slice(-6)
       .map(([d, m]) => `${d}: ${m.musculo ? m.musculo + 'kg músculo' : ''} ${m.grasaPct ? m.grasaPct + '% grasa' : ''}`.trim())
       .join(" → ");
@@ -12407,7 +12407,7 @@ function Registro({
     // Historial de perímetros (últimas 3 mediciones)
     const perimHistory = Object.entries(metricslog || {})
       .filter(([, m]) => m && (m.brazoDer || m.cintura || m.pecho))
-      .sort((a, b) => a[0].localeCompare(b[0]))
+      .sort((a, b) => a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0))
       .slice(-3)
       .map(([d, m]) => `${d}: brazo ${m.brazoDer || '?'}cm, cintura ${m.cintura || '?'}cm, pecho ${m.pecho || '?'}cm`)
       .join(" | ");
