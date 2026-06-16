@@ -927,6 +927,23 @@ const TRAINER_AGENT_SCHEMA = {
   }, required:["trainingPhase","deloadRecommendation","exerciseVariations","muscleAlerts","performanceSummary"]
 };
 
+const TIPS_SCHEMA = { type:"OBJECT", properties:{ cards:{ type:"ARRAY", items:{ type:"OBJECT", properties:{ icon:{type:"STRING"}, tipType:{type:"STRING"}, title:{type:"STRING"}, body:{type:"STRING"}, detail:{type:"STRING"} }, required:["icon","tipType","title","body","detail"] } } }, required:["cards"] };
+
+const FALLBACK_TIPS = [
+  { icon:"💧", tipType:"reminder", title:"Hidratación", body:"Apunta a 35ml por kg de peso al día. Un 2% de deshidratación reduce el rendimiento hasta un 20%.", detail:"Beber agua fría durante el entreno puede mejorar la tolerancia al calor." },
+  { icon:"🛌", tipType:"reminder", title:"Sueño = crecimiento", body:"El músculo crece durante el descanso, no en el gym. Prioriza 7-9 horas para maximizar la síntesis proteica.", detail:"Menos de 6 horas reduce los niveles de testosterona y aumenta el cortisol." },
+  { icon:"🥩", tipType:"tip", title:"Proteína post-entreno", body:"Consume 30-40g de proteína dentro de las 2 horas post-entreno. La ventana anabólica es real aunque más amplia de lo que se creía.", detail:"El batido + una fruta es una combinación eficiente y rápida." },
+  { icon:"📈", tipType:"tip", title:"Sobrecarga progresiva", body:"Sin progresión no hay adaptación. Aumenta 1.25–2.5kg cuando puedas completar todas las series en el rango alto de reps.", detail:"Pequeños aumentos constantes superan a grandes saltos esporádicos." },
+  { icon:"🔄", tipType:"tip", title:"Varía el agarre", body:"En jalones: agarre supino activa más bíceps, neutro reduce tensión en muñecas, prono enfoca más espalda alta.", detail:"Rotar el agarre cada 3-4 semanas previene el sobreuso articular." },
+  { icon:"⚡", tipType:"motivation", title:"Consistencia > Intensidad", body:"3 sesiones semanales durante 6 meses superan a 6 sesiones durante 2 semanas. La constancia es la ventaja más infravalorada.", detail:"Los resultados se acumulan de forma no lineal — sigue aunque no lo notes." },
+  { icon:"🧘", tipType:"reminder", title:"Movilidad antes de entrenar", body:"5 minutos de movilidad dinámica mejoran el rango de movimiento y reducen lesiones. Evita el estiramiento estático antes de levantar.", detail:"Hip circles, rotaciones de hombro y sentadilla profunda son suficientes." },
+  { icon:"📊", tipType:"tip", title:"Entrena con RIR", body:"Dejar 1-3 repeticiones en reserva (RIR 1-3) maximiza la hipertrofia con menor fatiga acumulada que ir siempre al fallo.", detail:"Al fallo en cada serie puede duplicar el tiempo de recuperación necesario." },
+  { icon:"🎯", tipType:"tip", title:"Conexión mente-músculo", body:"Pensar activamente en el músculo que trabajas puede aumentar su activación hasta un 30%. Baja el peso si es necesario para sentirlo.", detail:"La contracción intencional en la posición de máximo estiramiento es clave." },
+  { icon:"🍌", tipType:"reminder", title:"Carbos pre-entreno", body:"Una fuente de carbohidratos 30-60 min antes del entreno mejora el rendimiento en sesiones de más de 45 minutos.", detail:"Plátano, avena o arroz son opciones simples y efectivas." },
+  { icon:"💪", tipType:"motivation", title:"El principio de especificidad", body:"El cuerpo se adapta exactamente a lo que practicas. Si quieres fuerza, entrena fuerza. Si quieres resistencia, entrena resistencia.", detail:"La especificidad es la ley más subestimada del entrenamiento." },
+  { icon:"🔥", tipType:"tip", title:"Calentar el patrón, no el músculo", body:"El calentamiento ideal replica el movimiento de los ejercicios principales con menor peso — no es solo correr o bicicleta.", detail:"Hacer 2 series livianas del primer ejercicio es un calentamiento eficiente." },
+];
+
 // ── Funciones estadísticas ──
 function linearRegression(ys) {
   if (!ys || ys.length < 2) return { slope: 0, intercept: ys?.[0] || 0 };
@@ -9230,68 +9247,87 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
 }
 
 /* ===== CARRUSEL DE ALERTAS Y SUGERENCIAS ===== */
-function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions }) {
+const TIP_STYLE = {
+  tip:        { color: C.lime,  bg: "rgba(205,255,74,0.08)",  border: "rgba(205,255,74,0.45)" },
+  reminder:   { color: C.cyan,  bg: "rgba(74,214,255,0.08)",  border: "rgba(74,214,255,0.45)" },
+  motivation: { color: C.amber, bg: "rgba(251,191,36,0.08)",  border: "rgba(251,191,36,0.45)" },
+  warning:    { color: C.rose,  bg: "rgba(255,107,138,0.08)", border: "rgba(255,107,138,0.45)" },
+  imbalance:  { color: C.rose,  bg: "rgba(255,107,138,0.08)", border: C.rose },
+  plateau:    { color: C.amber, bg: "rgba(251,191,36,0.08)",  border: C.amber },
+  overload:   { color: C.cyan,  bg: "rgba(74,214,255,0.08)",  border: C.cyan },
+};
+
+function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions, aiTips }) {
+  // Hard-dismiss: data cards (imbalance/plateau/overload) go away permanently
   const [dismissed, setDismissed] = React.useState(new Set());
-  const touchRef = React.useRef({ startX: 0, id: null });
+  // Soft-dismiss: tips cycle (shown once per rotation, then repeat)
+  const [tipIdx, setTipIdx] = React.useState(0);
+  const touchRef = React.useRef({ startX: 0 });
   const [swipeX, setSwipeX] = React.useState(0);
   const [swiping, setSwiping] = React.useState(false);
 
-  const cards = React.useMemo(() => {
+  const tips = aiTips && aiTips.length > 0 ? aiTips : FALLBACK_TIPS;
+
+  const dataCards = React.useMemo(() => {
     const list = [];
     (muscleImbalances || []).forEach((text, i) => {
-      const isPushPull = text.includes("Empuje");
+      const isPP = text.includes("Empuje");
       list.push({
-        id: "imb" + i,
-        type: "imbalance",
+        id: "imb" + i, tipType: "imbalance",
         icon: "⚖️",
-        title: isPushPull ? "Desbalance Empuje/Jalón" : "Desbalance Cuádriceps/Isquios",
-        body: isPushPull
-          ? text.replace(" — ratio", "").replace("series", "ser") + " — Empuje = Pecho + Hombros + Tríceps. Jalón = Espalda + Bíceps. Ventana: últimos 7 días."
-          : text.replace(" — ratio", "").replace("series", "ser") + " — Ventana: últimos 7 días.",
-        detail: "Ideal ≤ 1.3:1. Añade más series de jalón esta semana.",
-        color: C.rose,
-        bg: "rgba(255,107,138,0.08)",
-        border: C.rose
+        title: isPP ? "Desbalance Empuje/Jalón" : "Desbalance Cuáds/Isquios",
+        body: text.replace("series", "ser") + (isPP ? " — Empuje = Pecho+Hombros+Tríceps · Jalón = Espalda+Bíceps" : ""),
+        detail: "Ideal ≤ 1.3:1. Añade más jalones esta semana para equilibrar."
       });
     });
     (plateauAlerts || []).slice(0, 3).forEach((p, i) => list.push({
-      id: "plt" + i, type: "plateau", icon: "⚡",
+      id: "plt" + i, tipType: "plateau", icon: "⚡",
       title: "Estancamiento: " + p.exercise,
-      body: `Sin progreso en ${p.weeks} semanas (${p.weight}kg). Es hora de cambiar el estímulo.`,
-      detail: "Prueba aumentar el volumen, reducir RIR o cambiar la variación del ejercicio.",
-      color: C.amber, bg: "rgba(251,191,36,0.08)", border: C.amber
+      body: `Sin progreso en ${p.weeks} semanas con ${p.weight}kg. El cuerpo se adaptó al estímulo actual.`,
+      detail: "Prueba: aumentar volumen, reducir RIR, cambiar el ejercicio o deload."
     }));
     Object.entries(overloadSuggestions || {}).slice(0, 3).forEach(([ex, s], i) => list.push({
-      id: "ovl" + i, type: "overload", icon: "↑",
-      title: "Subir peso: " + ex,
-      body: `${s.currentMax}kg → ${s.suggested}kg sugerido.`,
-      detail: s.reason || "Llevas varias sesiones con buenas repeticiones a este peso.",
-      color: C.cyan, bg: "rgba(74,214,255,0.08)", border: C.cyan
+      id: "ovl" + i, tipType: "overload", icon: "↑",
+      title: "Sube el peso: " + ex,
+      body: `${s.currentMax}kg → ${s.suggested}kg. ${s.reason || "Llevas varias sesiones completando bien las reps."}`,
+      detail: "Un aumento pequeño sostenido es mejor que esperar al momento perfecto."
     }));
     return list.filter(c => !dismissed.has(c.id));
   }, [muscleImbalances, plateauAlerts, overloadSuggestions, dismissed]);
 
-  const dismiss = (id) => {
-    setDismissed(prev => new Set([...prev, id]));
+  // Show data cards first, then the current tip card
+  const currentTip = tips[tipIdx % tips.length];
+  const tipCard = { id: "tip", tipType: currentTip.tipType || "tip", icon: currentTip.icon, title: currentTip.title, body: currentTip.body, detail: currentTip.detail };
+  const allCards = [...dataCards, tipCard];
+  const card = allCards[0]; // always show first in queue
+
+  const totalCount = dataCards.length + tips.length;
+
+  const dismissCurrent = () => {
+    if (card.id === "tip") {
+      // Soft dismiss: advance to next tip
+      setTipIdx(prev => (prev + 1) % tips.length);
+    } else {
+      setDismissed(prev => new Set([...prev, card.id]));
+    }
     setSwipeX(0); setSwiping(false);
   };
 
-  if (cards.length === 0) return null;
-  const card = cards[0];
-
   const onTouchStart = (e) => {
-    touchRef.current = { startX: e.touches[0].clientX, id: card.id };
+    touchRef.current.startX = e.touches[0].clientX;
     setSwiping(true); setSwipeX(0);
   };
   const onTouchMove = (e) => {
     if (!swiping) return;
-    const dx = e.touches[0].clientX - touchRef.current.startX;
-    setSwipeX(Math.min(0, dx));
+    setSwipeX(Math.min(0, e.touches[0].clientX - touchRef.current.startX));
   };
   const onTouchEnd = () => {
-    if (swipeX < -70) dismiss(card.id);
+    if (swipeX < -70) dismissCurrent();
     else { setSwipeX(0); setSwiping(false); }
   };
+
+  const st = TIP_STYLE[card.tipType] || TIP_STYLE.tip;
+  const remaining = dataCards.length + (tips.length - (card.id === "tip" ? 0 : 0)); // visual count
 
   return (
     <div style={{marginBottom:12}}>
@@ -9300,32 +9336,31 @@ function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
         style={{
-          background: card.bg,
-          border: `1.5px solid ${card.border}`,
+          background: st.bg, border: `1.5px solid ${st.border}`,
           borderRadius: 14, padding: "12px 14px",
           transform: `translateX(${swipeX}px)`,
           opacity: 1 - Math.abs(swipeX) / 200,
-          transition: swiping ? "none" : "transform 0.25s ease, opacity 0.25s ease",
+          transition: swiping ? "none" : "transform 0.25s ease, opacity 0.25s",
           userSelect: "none"
         }}
       >
         <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:8}}>
           <div style={{display:"flex", alignItems:"center", gap:6, flex:1}}>
-            <span style={{fontSize:15}}>{card.icon}</span>
-            <span style={{fontSize:12.5, fontWeight:800, color:card.color}}>{card.title}</span>
+            <span style={{fontSize:16}}>{card.icon}</span>
+            <span style={{fontSize:12.5, fontWeight:800, color:st.color}}>{card.title}</span>
           </div>
-          <button onClick={() => dismiss(card.id)} style={{background:"none", border:"none", color:card.color, fontSize:16, cursor:"pointer", lineHeight:1, padding:"0 2px", opacity:.7, flexShrink:0}}>×</button>
+          <button onClick={dismissCurrent} style={{background:"none", border:"none", color:st.color, fontSize:18, cursor:"pointer", lineHeight:1, padding:"0 2px", opacity:.65, flexShrink:0}}>×</button>
         </div>
         <div style={{fontSize:11.5, color:C.ink, marginTop:6, lineHeight:1.5}}>{card.body}</div>
-        <div style={{fontSize:10.5, color:C.muted, marginTop:4, lineHeight:1.4, fontStyle:"italic"}}>{card.detail}</div>
+        {card.detail && <div style={{fontSize:10.5, color:C.muted, marginTop:5, lineHeight:1.4}}>{card.detail}</div>}
       </div>
-      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:5, paddingHorizontal:2}}>
-        <div style={{display:"flex", gap:4}}>
-          {cards.map((c, i) => (
-            <div key={c.id} style={{width:i===0?14:5, height:5, borderRadius:99, background:i===0?card.border:`${card.border}40`, transition:"width .2s"}}/>
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:5}}>
+        <div style={{display:"flex", gap:4, alignItems:"center"}}>
+          {allCards.slice(0, Math.min(8, allCards.length)).map((c, i) => (
+            <div key={c.id + i} style={{width:i===0?14:5, height:5, borderRadius:99, background:i===0?st.border:`${st.border}50`, transition:"width .2s"}}/>
           ))}
         </div>
-        <span style={{fontSize:9.5, color:C.muted}}>← desliza para ignorar</span>
+        <span style={{fontSize:9.5, color:C.muted}}>← desliza para pasar</span>
       </div>
     </div>
   );
@@ -9363,6 +9398,37 @@ function Entreno({
     if (chatText) combined += `Comentarios/sensaciones de chat recientes: ${chatText}.`;
     return combined || "Sin sensaciones o fatiga reportadas recientemente.";
   };
+
+  // --- AI Tips for InsightsCarousel ---
+  const [aiTips, setAiTips] = useState([]);
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const cacheKey = "insights_tips_" + today;
+    const cached = getAICache("tips", cacheKey);
+    if (cached) { setAiTips(cached); return; }
+    if (!geminiKey) return;
+    const cutoff = Date.now() - 7 * 86400000;
+    let push = 0, pull = 0, legs = 0;
+    Object.entries(exlog || {}).forEach(([n, sets]) => {
+      const ms = MUSCLES[n] || [];
+      const isPush = ms.some(m => /pectoral|tríceps|tricep|deltoid/i.test(m));
+      const isPull = ms.some(m => /espalda|bíceps|bicep|dorsal/i.test(m));
+      const isLegs = ms.some(m => /cuádriceps|isquio|glúteo/i.test(m));
+      const n7 = (sets || []).filter(s => s?.date && s.type !== "warmup" && new Date(s.date).getTime() > cutoff).length;
+      if (isPush) push += n7; if (isPull) pull += n7; if (isLegs) legs += n7;
+    });
+    const ctx = `Entrenador: Push ${push} series · Pull ${pull} series · Piernas ${legs} series (últimos 7 días). Plateaus: ${(plateauAlerts||[]).length}. Sugerencias sobrecarga: ${Object.keys(overloadSuggestions||{}).length}. Notas recientes: ${getRecentSensationsText().slice(0, 200)}.`;
+    callGemini([{ role:"user", content: `Genera 6 tarjetas variadas de coaching fitness personalizado para Bruno basándote en este contexto: ${ctx}\n\nGenera EXACTAMENTE 6 tarjetas, variando entre: consejo técnico de entrenamiento, recordatorio de nutrición, consejo de recuperación, dato científico curioso, motivación, o advertencia específica. Mezcla tipos, no repitas el mismo tipo seguido. Cada tarjeta máx 2 líneas.` }],
+      "Eres coach fitness experto. Responde SOLO en JSON válido con el array 'cards'. Cada card: {icon, tipType (tip|reminder|motivation|warning), title, body, detail}. En español. Máx 25 palabras por body, 15 por detail.",
+      TIPS_SCHEMA
+    ).then(raw => {
+      try {
+        const parsed = cleanAndParseJSON(raw);
+        const tips = (parsed?.cards || []).filter(t => t.title && t.body);
+        if (tips.length >= 3) { setAiTips(tips); setAICache("tips", cacheKey, tips); }
+      } catch (_) {}
+    }).catch(() => {});
+  }, []);
 
   // --- Splits Manual Editor States ---
   const [showSplitsEditor, setShowSplitsEditor] = useState(false);
@@ -9930,6 +9996,7 @@ function Entreno({
         muscleImbalances={muscleImbalances}
         plateauAlerts={plateauAlerts}
         overloadSuggestions={overloadSuggestions}
+        aiTips={aiTips}
       />
 
       {/* Mapa de Calor de Volumen Semanal */}
