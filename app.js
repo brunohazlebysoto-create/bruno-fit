@@ -6426,7 +6426,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
             {readiness.mode === "recovery" ? "Recuperación hoy" : "Preparación hoy"}
           </div>
           <div style={{fontSize:13, fontWeight:700, color:C.ink}}>{readiness.label}</div>
-          {readiness.factors.length > 0 && <div style={{fontSize:10.5, color:C.muted, marginTop:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{readiness.factors.join(" · ")}</div>}
+          {readiness.factors.length > 0 && <div style={{fontSize:10.5, color:C.muted, marginTop:2, lineHeight:1.45}}>{readiness.factors.join(" · ")}</div>}
         </div>
       </div>
 
