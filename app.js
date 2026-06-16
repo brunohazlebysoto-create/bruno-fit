@@ -1017,21 +1017,24 @@ function calcProgressiveOverload(exlog) {
 }
 
 function detectMuscleImbalances(exlog) {
-  const muscleCount = {};
+  let push = 0, pull = 0, quad = 0, hams = 0;
+  const cutoff = Date.now() - 7 * 86400000;
   Object.entries(exlog||{}).forEach(([exName, sets])=>{
     if (!sets || sets.length === 0) return;
-    const recent = sets.filter(s=>s?.date && new Date(s.date) > new Date(Date.now()-28*86400000));
-    if (recent.length === 0) return;
     const muscles = MUSCLES[exName] || [];
-    muscles.forEach(m=>{ muscleCount[m] = (muscleCount[m]||0) + recent.length; });
+    const isPush = muscles.some(m => /pectoral|tríceps|tricep|deltoid/i.test(m));
+    const isPull = muscles.some(m => /espalda|bíceps|bicep|trapecio|rombo|dorsal/i.test(m));
+    const isQuad = muscles.some(m => /cuádriceps|cuadricep/i.test(m));
+    const isHam = muscles.some(m => /isquio/i.test(m));
+    const n = (sets||[]).filter(s=>s?.date&&s.type!=="warmup"&&new Date(s.date).getTime()>cutoff).length;
+    if (isPush) push += n;
+    if (isPull) pull += n;
+    if (isQuad) quad += n;
+    if (isHam) hams += n;
   });
   const imbalances = [];
-  const push = (muscleCount["Pectoral"]||0) + (muscleCount["Tríceps"]||0);
-  const pull = (muscleCount["Espalda"]||0) + (muscleCount["Bíceps"]||0);
-  const quad = (muscleCount["Cuádriceps"]||0);
-  const hams = (muscleCount["Isquios"]||0);
-  if (push > 0 && pull > 0 && push/pull > 1.5) imbalances.push(`Empuje (${push} series) vs Jalón (${pull} series) — desbalance ${Math.round(push/pull*10)/10}:1`);
-  if (quad > 0 && hams > 0 && quad/hams > 1.5) imbalances.push(`Cuádriceps (${quad}) vs Isquios (${hams}) — desbalance ${Math.round(quad/hams*10)/10}:1`);
+  if (push>0&&pull>0&&push/pull>1.5) imbalances.push(`Empuje (${push} series) vs Jalón (${pull} series) — ratio ${Math.round(push/pull*10)/10}:1`);
+  if (quad>0&&hams>0&&quad/hams>1.5) imbalances.push(`Cuádriceps (${quad} series) vs Isquios (${hams} series) — ratio ${Math.round(quad/hams*10)/10}:1`);
   return imbalances;
 }
 
@@ -9226,6 +9229,108 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
   );
 }
 
+/* ===== CARRUSEL DE ALERTAS Y SUGERENCIAS ===== */
+function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions }) {
+  const [dismissed, setDismissed] = React.useState(new Set());
+  const touchRef = React.useRef({ startX: 0, id: null });
+  const [swipeX, setSwipeX] = React.useState(0);
+  const [swiping, setSwiping] = React.useState(false);
+
+  const cards = React.useMemo(() => {
+    const list = [];
+    (muscleImbalances || []).forEach((text, i) => {
+      const isPushPull = text.includes("Empuje");
+      list.push({
+        id: "imb" + i,
+        type: "imbalance",
+        icon: "⚖️",
+        title: isPushPull ? "Desbalance Empuje/Jalón" : "Desbalance Cuádriceps/Isquios",
+        body: isPushPull
+          ? text.replace(" — ratio", "").replace("series", "ser") + " — Empuje = Pecho + Hombros + Tríceps. Jalón = Espalda + Bíceps. Ventana: últimos 7 días."
+          : text.replace(" — ratio", "").replace("series", "ser") + " — Ventana: últimos 7 días.",
+        detail: "Ideal ≤ 1.3:1. Añade más series de jalón esta semana.",
+        color: C.rose,
+        bg: "rgba(255,107,138,0.08)",
+        border: C.rose
+      });
+    });
+    (plateauAlerts || []).slice(0, 3).forEach((p, i) => list.push({
+      id: "plt" + i, type: "plateau", icon: "⚡",
+      title: "Estancamiento: " + p.exercise,
+      body: `Sin progreso en ${p.weeks} semanas (${p.weight}kg). Es hora de cambiar el estímulo.`,
+      detail: "Prueba aumentar el volumen, reducir RIR o cambiar la variación del ejercicio.",
+      color: C.amber, bg: "rgba(251,191,36,0.08)", border: C.amber
+    }));
+    Object.entries(overloadSuggestions || {}).slice(0, 3).forEach(([ex, s], i) => list.push({
+      id: "ovl" + i, type: "overload", icon: "↑",
+      title: "Subir peso: " + ex,
+      body: `${s.currentMax}kg → ${s.suggested}kg sugerido.`,
+      detail: s.reason || "Llevas varias sesiones con buenas repeticiones a este peso.",
+      color: C.cyan, bg: "rgba(74,214,255,0.08)", border: C.cyan
+    }));
+    return list.filter(c => !dismissed.has(c.id));
+  }, [muscleImbalances, plateauAlerts, overloadSuggestions, dismissed]);
+
+  const dismiss = (id) => {
+    setDismissed(prev => new Set([...prev, id]));
+    setSwipeX(0); setSwiping(false);
+  };
+
+  if (cards.length === 0) return null;
+  const card = cards[0];
+
+  const onTouchStart = (e) => {
+    touchRef.current = { startX: e.touches[0].clientX, id: card.id };
+    setSwiping(true); setSwipeX(0);
+  };
+  const onTouchMove = (e) => {
+    if (!swiping) return;
+    const dx = e.touches[0].clientX - touchRef.current.startX;
+    setSwipeX(Math.min(0, dx));
+  };
+  const onTouchEnd = () => {
+    if (swipeX < -70) dismiss(card.id);
+    else { setSwipeX(0); setSwiping(false); }
+  };
+
+  return (
+    <div style={{marginBottom:12}}>
+      <div
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        style={{
+          background: card.bg,
+          border: `1.5px solid ${card.border}`,
+          borderRadius: 14, padding: "12px 14px",
+          transform: `translateX(${swipeX}px)`,
+          opacity: 1 - Math.abs(swipeX) / 200,
+          transition: swiping ? "none" : "transform 0.25s ease, opacity 0.25s ease",
+          userSelect: "none"
+        }}
+      >
+        <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:8}}>
+          <div style={{display:"flex", alignItems:"center", gap:6, flex:1}}>
+            <span style={{fontSize:15}}>{card.icon}</span>
+            <span style={{fontSize:12.5, fontWeight:800, color:card.color}}>{card.title}</span>
+          </div>
+          <button onClick={() => dismiss(card.id)} style={{background:"none", border:"none", color:card.color, fontSize:16, cursor:"pointer", lineHeight:1, padding:"0 2px", opacity:.7, flexShrink:0}}>×</button>
+        </div>
+        <div style={{fontSize:11.5, color:C.ink, marginTop:6, lineHeight:1.5}}>{card.body}</div>
+        <div style={{fontSize:10.5, color:C.muted, marginTop:4, lineHeight:1.4, fontStyle:"italic"}}>{card.detail}</div>
+      </div>
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:5, paddingHorizontal:2}}>
+        <div style={{display:"flex", gap:4}}>
+          {cards.map((c, i) => (
+            <div key={c.id} style={{width:i===0?14:5, height:5, borderRadius:99, background:i===0?card.border:`${card.border}40`, transition:"width .2s"}}/>
+          ))}
+        </div>
+        <span style={{fontSize:9.5, color:C.muted}}>← desliza para ignorar</span>
+      </div>
+    </div>
+  );
+}
+
 /* ===== TAB ENTRENAMIENTO ===== */
 function Entreno({
   exlog, setExlog, exercises, setExercises, geminiKey, handleAnalyzeWorkout, importWorkoutData,
@@ -9821,30 +9926,11 @@ function Entreno({
         </div>
       )}
 
-      {muscleImbalances && muscleImbalances.length > 0 && (
-        <div style={{
-          background: "rgba(255,107,138,.08)",
-          border: `1.5px solid ${C.rose}`,
-          borderRadius: 14,
-          padding: "12px 16px",
-          marginBottom: 12,
-          display: "flex",
-          flexDirection: "column",
-          gap: 6
-        }}>
-          <div style={{fontSize:13, fontWeight:800, color:C.rose, display:"flex", alignItems:"center", gap:6}}>
-            <span>⚠️ Desequilibrio Muscular Detectado</span>
-          </div>
-          <div style={{fontSize:12, color:C.ink, lineHeight:1.45}}>
-            Tu volumen de entrenamiento reciente muestra asimetrías importantes:
-          </div>
-          <ul style={{margin:0, paddingLeft:16, fontSize:12, color:C.muted}}>
-            {muscleImbalances.map((imb, idx) => (
-              <li key={idx} style={{marginBottom:2}}>{imb}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <InsightsCarousel
+        muscleImbalances={muscleImbalances}
+        plateauAlerts={plateauAlerts}
+        overloadSuggestions={overloadSuggestions}
+      />
 
       {/* Mapa de Calor de Volumen Semanal */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"14px 16px", marginBottom:12}}>
