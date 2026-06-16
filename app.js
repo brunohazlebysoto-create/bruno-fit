@@ -927,6 +927,23 @@ const TRAINER_AGENT_SCHEMA = {
   }, required:["trainingPhase","deloadRecommendation","exerciseVariations","muscleAlerts","performanceSummary"]
 };
 
+const TIPS_SCHEMA = { type:"OBJECT", properties:{ cards:{ type:"ARRAY", items:{ type:"OBJECT", properties:{ icon:{type:"STRING"}, tipType:{type:"STRING"}, title:{type:"STRING"}, body:{type:"STRING"}, detail:{type:"STRING"} }, required:["icon","tipType","title","body","detail"] } } }, required:["cards"] };
+
+const FALLBACK_TIPS = [
+  { icon:"💧", tipType:"reminder", title:"Hidratación", body:"Apunta a 35ml por kg de peso al día. Un 2% de deshidratación reduce el rendimiento hasta un 20%.", detail:"Beber agua fría durante el entreno puede mejorar la tolerancia al calor." },
+  { icon:"🛌", tipType:"reminder", title:"Sueño = crecimiento", body:"El músculo crece durante el descanso, no en el gym. Prioriza 7-9 horas para maximizar la síntesis proteica.", detail:"Menos de 6 horas reduce los niveles de testosterona y aumenta el cortisol." },
+  { icon:"🥩", tipType:"tip", title:"Proteína post-entreno", body:"Consume 30-40g de proteína dentro de las 2 horas post-entreno. La ventana anabólica es real aunque más amplia de lo que se creía.", detail:"El batido + una fruta es una combinación eficiente y rápida." },
+  { icon:"📈", tipType:"tip", title:"Sobrecarga progresiva", body:"Sin progresión no hay adaptación. Aumenta 1.25–2.5kg cuando puedas completar todas las series en el rango alto de reps.", detail:"Pequeños aumentos constantes superan a grandes saltos esporádicos." },
+  { icon:"🔄", tipType:"tip", title:"Varía el agarre", body:"En jalones: agarre supino activa más bíceps, neutro reduce tensión en muñecas, prono enfoca más espalda alta.", detail:"Rotar el agarre cada 3-4 semanas previene el sobreuso articular." },
+  { icon:"⚡", tipType:"motivation", title:"Consistencia > Intensidad", body:"3 sesiones semanales durante 6 meses superan a 6 sesiones durante 2 semanas. La constancia es la ventaja más infravalorada.", detail:"Los resultados se acumulan de forma no lineal — sigue aunque no lo notes." },
+  { icon:"🧘", tipType:"reminder", title:"Movilidad antes de entrenar", body:"5 minutos de movilidad dinámica mejoran el rango de movimiento y reducen lesiones. Evita el estiramiento estático antes de levantar.", detail:"Hip circles, rotaciones de hombro y sentadilla profunda son suficientes." },
+  { icon:"📊", tipType:"tip", title:"Entrena con RIR", body:"Dejar 1-3 repeticiones en reserva (RIR 1-3) maximiza la hipertrofia con menor fatiga acumulada que ir siempre al fallo.", detail:"Al fallo en cada serie puede duplicar el tiempo de recuperación necesario." },
+  { icon:"🎯", tipType:"tip", title:"Conexión mente-músculo", body:"Pensar activamente en el músculo que trabajas puede aumentar su activación hasta un 30%. Baja el peso si es necesario para sentirlo.", detail:"La contracción intencional en la posición de máximo estiramiento es clave." },
+  { icon:"🍌", tipType:"reminder", title:"Carbos pre-entreno", body:"Una fuente de carbohidratos 30-60 min antes del entreno mejora el rendimiento en sesiones de más de 45 minutos.", detail:"Plátano, avena o arroz son opciones simples y efectivas." },
+  { icon:"💪", tipType:"motivation", title:"El principio de especificidad", body:"El cuerpo se adapta exactamente a lo que practicas. Si quieres fuerza, entrena fuerza. Si quieres resistencia, entrena resistencia.", detail:"La especificidad es la ley más subestimada del entrenamiento." },
+  { icon:"🔥", tipType:"tip", title:"Calentar el patrón, no el músculo", body:"El calentamiento ideal replica el movimiento de los ejercicios principales con menor peso — no es solo correr o bicicleta.", detail:"Hacer 2 series livianas del primer ejercicio es un calentamiento eficiente." },
+];
+
 // ── Funciones estadísticas ──
 function linearRegression(ys) {
   if (!ys || ys.length < 2) return { slope: 0, intercept: ys?.[0] || 0 };
@@ -1017,21 +1034,24 @@ function calcProgressiveOverload(exlog) {
 }
 
 function detectMuscleImbalances(exlog) {
-  const muscleCount = {};
+  let push = 0, pull = 0, quad = 0, hams = 0;
+  const cutoff = Date.now() - 7 * 86400000;
   Object.entries(exlog||{}).forEach(([exName, sets])=>{
     if (!sets || sets.length === 0) return;
-    const recent = sets.filter(s=>s?.date && new Date(s.date) > new Date(Date.now()-28*86400000));
-    if (recent.length === 0) return;
     const muscles = MUSCLES[exName] || [];
-    muscles.forEach(m=>{ muscleCount[m] = (muscleCount[m]||0) + recent.length; });
+    const isPush = muscles.some(m => /pectoral|tríceps|tricep|deltoid/i.test(m));
+    const isPull = muscles.some(m => /espalda|bíceps|bicep|trapecio|rombo|dorsal/i.test(m));
+    const isQuad = muscles.some(m => /cuádriceps|cuadricep/i.test(m));
+    const isHam = muscles.some(m => /isquio/i.test(m));
+    const n = (sets||[]).filter(s=>s?.date&&s.type!=="warmup"&&new Date(s.date).getTime()>cutoff).length;
+    if (isPush) push += n;
+    if (isPull) pull += n;
+    if (isQuad) quad += n;
+    if (isHam) hams += n;
   });
   const imbalances = [];
-  const push = (muscleCount["Pectoral"]||0) + (muscleCount["Tríceps"]||0);
-  const pull = (muscleCount["Espalda"]||0) + (muscleCount["Bíceps"]||0);
-  const quad = (muscleCount["Cuádriceps"]||0);
-  const hams = (muscleCount["Isquios"]||0);
-  if (push > 0 && pull > 0 && push/pull > 1.5) imbalances.push(`Empuje (${push} series) vs Jalón (${pull} series) — desbalance ${Math.round(push/pull*10)/10}:1`);
-  if (quad > 0 && hams > 0 && quad/hams > 1.5) imbalances.push(`Cuádriceps (${quad}) vs Isquios (${hams}) — desbalance ${Math.round(quad/hams*10)/10}:1`);
+  if (push>0&&pull>0&&push/pull>1.5) imbalances.push(`Empuje (${push} series) vs Jalón (${pull} series) — ratio ${Math.round(push/pull*10)/10}:1`);
+  if (quad>0&&hams>0&&quad/hams>1.5) imbalances.push(`Cuádriceps (${quad} series) vs Isquios (${hams} series) — ratio ${Math.round(quad/hams*10)/10}:1`);
   return imbalances;
 }
 
@@ -1225,6 +1245,8 @@ export default function App(){
   const [pdfBusy, setPdfBusy] = useState(false);
   const [coachPersonality, setCoachPersonality] = useState("técnico");
   const [showFocusMode, setShowFocusMode] = useState(false);
+  const [backupToast, setBackupToast] = useState(false);
+  const nightlyBackupRef = useRef(null); // holds latest state for midnight callback
 
   // Elevated Calendar States & Helpers
   const [calMonth, setCalMonth] = useState(() => new Date());
@@ -2524,6 +2546,56 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  // Mantener ref actualizada con el estado más reciente para el backup nocturno
+  nightlyBackupRef.current = { notes, exlog, exercises, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, meals, splits, bodyComp, shoppingList, presetKey, activeSplitKey, customPresets, customSuggestions, chat, experiments, smartGoals, challenges, weeklyInsight, upcomingEvent, supabase, supabaseUser };
+
+  // Backup automático: al abrir la app (si se perdió el de medianoche) y cada 00:00
+  useEffect(() => {
+    if (!loaded) return; // esperar a que los datos estén cargados
+
+    const doBackup = async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      if (localStorage.getItem("last_backup_date") === today) return;
+      localStorage.setItem("last_backup_date", today);
+      const st = nightlyBackupRef.current;
+      const snap = { exportedAt: new Date().toISOString(), notes: st.notes, exlog: st.exlog, exercises: st.exercises, foodlog: st.foodlog, waterlog: st.waterlog, suppslog: st.suppslog, metricslog: st.metricslog, suppsInventory: st.suppsInventory, workoutDurations: st.workoutDurations, meals: st.meals, splits: st.splits, bodyComp: st.bodyComp, shoppingList: st.shoppingList, presetKey: st.presetKey, activeSplitKey: st.activeSplitKey, customPresets: st.customPresets, customSuggestions: st.customSuggestions, smartGoals: st.smartGoals, challenges: st.challenges };
+      // 1. Descargar JSON
+      try {
+        const blob = new Blob([JSON.stringify(snap, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `brunofit-backup-${today}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (_) {}
+      // 2. Guardar en Supabase si está autenticado
+      if (st.supabase && st.supabaseUser) {
+        try {
+          await st.supabase.from("profiles").upsert({ id: st.supabaseUser.id, email: st.supabaseUser.email, full_state: JSON.stringify(snap), last_backup: today, updated_at: new Date().toISOString() });
+        } catch (_) {}
+      }
+      // 3. Toast de confirmación
+      setBackupToast(true);
+      setTimeout(() => setBackupToast(false), 5000);
+    };
+
+    // Al abrir la app: correr si el backup de hoy no se hizo
+    doBackup();
+
+    // A las 00:00: programar backup para medianoche y repetir cada día
+    const schedule = () => {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(24, 0, 0, 0);
+      return setTimeout(() => { doBackup(); schedule(); }, next - now);
+    };
+    const tid = schedule();
+    return () => clearTimeout(tid);
+  }, [loaded]);
 
   // Importar datos desde JSON
   const importDataJSON = (file) => {
@@ -4220,7 +4292,15 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
           onClose={() => setShowFocusMode(false)}
           splits={splits}
           exlog={exlog}
+          exercises={exercises}
         />
+      )}
+
+      {backupToast && (
+        <div style={{position:"fixed", bottom:90, left:"50%", transform:"translateX(-50%)", background:"rgba(21,23,15,0.96)", border:`1px solid ${C.lime}44`, borderRadius:12, padding:"10px 16px", zIndex:9999, display:"flex", alignItems:"center", gap:8, boxShadow:"0 4px 20px rgba(0,0,0,0.4)"}}>
+          <span style={{fontSize:14}}>🔒</span>
+          <span style={{fontSize:12.5, color:C.lime, fontWeight:700}}>Copia automática guardada</span>
+        </div>
       )}
 
       {prAlerts.length > 0 && <Confetti key={prAlerts.join("|").slice(0, 24)} />}
@@ -8764,7 +8844,13 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
 }
 
 /* ===== MODO FOCO ===== */
-function FocusMode({ onClose, splits, exlog }) {
+function FocusMode({ onClose, splits, exlog, exercises }) {
+  // Helper: get muscle list for any exercise (MUSCLES constant + custom exercises fallback)
+  const getMuscles = (name) => {
+    if (MUSCLES[name]) return MUSCLES[name];
+    const allExs = Object.values(exercises || {}).flat();
+    return allExs.find(e => e.name === name)?.musculos || [];
+  };
   const circuitSplit = splits.find(s => s.key === "E") || DEFAULT_SPLITS.find(s => s.key === "E");
   const circuitExs = circuitSplit?.ex || [];
   const exDuration = 60;
@@ -8884,7 +8970,7 @@ function FocusMode({ onClose, splits, exlog }) {
   const fmtTime = (s) => `${Math.floor(s/60).toString().padStart(2,"0")}:${(s%60).toString().padStart(2,"0")}`;
 
   const MUSCLE_COLORS = { "Cuádriceps":C.lime, "Glúteos":C.lime, "Isquios":C.lime, "Pectoral":C.cyan, "Tríceps":C.cyan, "Espalda":C.amber, "Deltoides":C.amber, "Bíceps":C.rose };
-  const exColor = (name) => MUSCLE_COLORS[(MUSCLES[name] || [])[0]] || C.muted;
+  const exColor = (name) => MUSCLE_COLORS[getMuscles(name)[0]] || C.muted;
 
   // --- CARRUSEL POR SPLIT ---
   const [focusSplit, setFocusSplit] = useState(splits[0]?.key || "A");
@@ -9053,7 +9139,7 @@ function FocusMode({ onClose, splits, exlog }) {
                     const last = getLastEntry(exName);
                     const seriesTotal = (exlog[exName] || []).filter(s => s.type !== "warmup").length;
                     const col = exColor(exName);
-                    const muscles = (MUSCLES[exName] || []).slice(0,2);
+                    const muscles = getMuscles(exName).slice(0,2);
                     const hasHistory = last.w > 0;
                     const btnStyle = (active) => ({
                       width:32, height:32, borderRadius:7, cursor:"pointer", fontSize:18, fontWeight:700,
@@ -9160,6 +9246,126 @@ function FocusMode({ onClose, splits, exlog }) {
   );
 }
 
+/* ===== CARRUSEL DE ALERTAS Y SUGERENCIAS ===== */
+const TIP_STYLE = {
+  tip:        { color: C.lime,  bg: "rgba(205,255,74,0.08)",  border: "rgba(205,255,74,0.45)" },
+  reminder:   { color: C.cyan,  bg: "rgba(74,214,255,0.08)",  border: "rgba(74,214,255,0.45)" },
+  motivation: { color: C.amber, bg: "rgba(251,191,36,0.08)",  border: "rgba(251,191,36,0.45)" },
+  warning:    { color: C.rose,  bg: "rgba(255,107,138,0.08)", border: "rgba(255,107,138,0.45)" },
+  imbalance:  { color: C.rose,  bg: "rgba(255,107,138,0.08)", border: C.rose },
+  plateau:    { color: C.amber, bg: "rgba(251,191,36,0.08)",  border: C.amber },
+  overload:   { color: C.cyan,  bg: "rgba(74,214,255,0.08)",  border: C.cyan },
+};
+
+function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions, aiTips }) {
+  // Hard-dismiss: data cards (imbalance/plateau/overload) go away permanently
+  const [dismissed, setDismissed] = React.useState(new Set());
+  // Soft-dismiss: tips cycle (shown once per rotation, then repeat)
+  const [tipIdx, setTipIdx] = React.useState(0);
+  const touchRef = React.useRef({ startX: 0 });
+  const [swipeX, setSwipeX] = React.useState(0);
+  const [swiping, setSwiping] = React.useState(false);
+
+  const tips = aiTips && aiTips.length > 0 ? aiTips : FALLBACK_TIPS;
+
+  const dataCards = React.useMemo(() => {
+    const list = [];
+    (muscleImbalances || []).forEach((text, i) => {
+      const isPP = text.includes("Empuje");
+      list.push({
+        id: "imb" + i, tipType: "imbalance",
+        icon: "⚖️",
+        title: isPP ? "Desbalance Empuje/Jalón" : "Desbalance Cuáds/Isquios",
+        body: text.replace("series", "ser") + (isPP ? " — Empuje = Pecho+Hombros+Tríceps · Jalón = Espalda+Bíceps" : ""),
+        detail: "Ideal ≤ 1.3:1. Añade más jalones esta semana para equilibrar."
+      });
+    });
+    (plateauAlerts || []).slice(0, 3).forEach((p, i) => list.push({
+      id: "plt" + i, tipType: "plateau", icon: "⚡",
+      title: "Estancamiento: " + p.exercise,
+      body: `Sin progreso en ${p.weeks} semanas con ${p.weight}kg. El cuerpo se adaptó al estímulo actual.`,
+      detail: "Prueba: aumentar volumen, reducir RIR, cambiar el ejercicio o deload."
+    }));
+    Object.entries(overloadSuggestions || {}).slice(0, 3).forEach(([ex, s], i) => list.push({
+      id: "ovl" + i, tipType: "overload", icon: "↑",
+      title: "Sube el peso: " + ex,
+      body: `${s.currentMax}kg → ${s.suggested}kg. ${s.reason || "Llevas varias sesiones completando bien las reps."}`,
+      detail: "Un aumento pequeño sostenido es mejor que esperar al momento perfecto."
+    }));
+    return list.filter(c => !dismissed.has(c.id));
+  }, [muscleImbalances, plateauAlerts, overloadSuggestions, dismissed]);
+
+  // Show data cards first, then the current tip card
+  const currentTip = tips[tipIdx % tips.length];
+  const tipCard = { id: "tip", tipType: currentTip.tipType || "tip", icon: currentTip.icon, title: currentTip.title, body: currentTip.body, detail: currentTip.detail };
+  const allCards = [...dataCards, tipCard];
+  const card = allCards[0]; // always show first in queue
+
+  const totalCount = dataCards.length + tips.length;
+
+  const dismissCurrent = () => {
+    if (card.id === "tip") {
+      // Soft dismiss: advance to next tip
+      setTipIdx(prev => (prev + 1) % tips.length);
+    } else {
+      setDismissed(prev => new Set([...prev, card.id]));
+    }
+    setSwipeX(0); setSwiping(false);
+  };
+
+  const onTouchStart = (e) => {
+    touchRef.current.startX = e.touches[0].clientX;
+    setSwiping(true); setSwipeX(0);
+  };
+  const onTouchMove = (e) => {
+    if (!swiping) return;
+    setSwipeX(Math.min(0, e.touches[0].clientX - touchRef.current.startX));
+  };
+  const onTouchEnd = () => {
+    if (swipeX < -70) dismissCurrent();
+    else { setSwipeX(0); setSwiping(false); }
+  };
+
+  const st = TIP_STYLE[card.tipType] || TIP_STYLE.tip;
+  const remaining = dataCards.length + (tips.length - (card.id === "tip" ? 0 : 0)); // visual count
+
+  return (
+    <div style={{marginBottom:12}}>
+      <div
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        style={{
+          background: st.bg, border: `1.5px solid ${st.border}`,
+          borderRadius: 14, padding: "12px 14px",
+          transform: `translateX(${swipeX}px)`,
+          opacity: 1 - Math.abs(swipeX) / 200,
+          transition: swiping ? "none" : "transform 0.25s ease, opacity 0.25s",
+          userSelect: "none"
+        }}
+      >
+        <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:8}}>
+          <div style={{display:"flex", alignItems:"center", gap:6, flex:1}}>
+            <span style={{fontSize:16}}>{card.icon}</span>
+            <span style={{fontSize:12.5, fontWeight:800, color:st.color}}>{card.title}</span>
+          </div>
+          <button onClick={dismissCurrent} style={{background:"none", border:"none", color:st.color, fontSize:18, cursor:"pointer", lineHeight:1, padding:"0 2px", opacity:.65, flexShrink:0}}>×</button>
+        </div>
+        <div style={{fontSize:11.5, color:C.ink, marginTop:6, lineHeight:1.5}}>{card.body}</div>
+        {card.detail && <div style={{fontSize:10.5, color:C.muted, marginTop:5, lineHeight:1.4}}>{card.detail}</div>}
+      </div>
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:5}}>
+        <div style={{display:"flex", gap:4, alignItems:"center"}}>
+          {allCards.slice(0, Math.min(8, allCards.length)).map((c, i) => (
+            <div key={c.id + i} style={{width:i===0?14:5, height:5, borderRadius:99, background:i===0?st.border:`${st.border}50`, transition:"width .2s"}}/>
+          ))}
+        </div>
+        <span style={{fontSize:9.5, color:C.muted}}>← desliza para pasar</span>
+      </div>
+    </div>
+  );
+}
+
 /* ===== TAB ENTRENAMIENTO ===== */
 function Entreno({
   exlog, setExlog, exercises, setExercises, geminiKey, handleAnalyzeWorkout, importWorkoutData,
@@ -9192,6 +9398,37 @@ function Entreno({
     if (chatText) combined += `Comentarios/sensaciones de chat recientes: ${chatText}.`;
     return combined || "Sin sensaciones o fatiga reportadas recientemente.";
   };
+
+  // --- AI Tips for InsightsCarousel ---
+  const [aiTips, setAiTips] = useState([]);
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const cacheKey = "insights_tips_" + today;
+    const cached = getAICache("tips", cacheKey);
+    if (cached) { setAiTips(cached); return; }
+    if (!geminiKey) return;
+    const cutoff = Date.now() - 7 * 86400000;
+    let push = 0, pull = 0, legs = 0;
+    Object.entries(exlog || {}).forEach(([n, sets]) => {
+      const ms = MUSCLES[n] || [];
+      const isPush = ms.some(m => /pectoral|tríceps|tricep|deltoid/i.test(m));
+      const isPull = ms.some(m => /espalda|bíceps|bicep|dorsal/i.test(m));
+      const isLegs = ms.some(m => /cuádriceps|isquio|glúteo/i.test(m));
+      const n7 = (sets || []).filter(s => s?.date && s.type !== "warmup" && new Date(s.date).getTime() > cutoff).length;
+      if (isPush) push += n7; if (isPull) pull += n7; if (isLegs) legs += n7;
+    });
+    const ctx = `Entrenador: Push ${push} series · Pull ${pull} series · Piernas ${legs} series (últimos 7 días). Plateaus: ${(plateauAlerts||[]).length}. Sugerencias sobrecarga: ${Object.keys(overloadSuggestions||{}).length}. Notas recientes: ${getRecentSensationsText().slice(0, 200)}.`;
+    callGemini([{ role:"user", content: `Genera 6 tarjetas variadas de coaching fitness personalizado para Bruno basándote en este contexto: ${ctx}\n\nGenera EXACTAMENTE 6 tarjetas, variando entre: consejo técnico de entrenamiento, recordatorio de nutrición, consejo de recuperación, dato científico curioso, motivación, o advertencia específica. Mezcla tipos, no repitas el mismo tipo seguido. Cada tarjeta máx 2 líneas.` }],
+      "Eres coach fitness experto. Responde SOLO en JSON válido con el array 'cards'. Cada card: {icon, tipType (tip|reminder|motivation|warning), title, body, detail}. En español. Máx 25 palabras por body, 15 por detail.",
+      TIPS_SCHEMA
+    ).then(raw => {
+      try {
+        const parsed = cleanAndParseJSON(raw);
+        const tips = (parsed?.cards || []).filter(t => t.title && t.body);
+        if (tips.length >= 3) { setAiTips(tips); setAICache("tips", cacheKey, tips); }
+      } catch (_) {}
+    }).catch(() => {});
+  }, []);
 
   // --- Splits Manual Editor States ---
   const [showSplitsEditor, setShowSplitsEditor] = useState(false);
@@ -9621,6 +9858,7 @@ function Entreno({
           }
         }
         setExercises({...exercises, [sel]: [...dayExs, {name: addText.trim(), tecnico, equipo, musculos}]});
+        setSplits((splits || DEFAULT_SPLITS).map(s => s.key === sel ? {...s, ex: [...new Set([...(s.ex||[]), addText.trim()])]} : s));
       } else {
         let nombre = addText.trim(), tecnico = "", equipo = "peso libre", musculos = [];
         const cachedD = getAICache("exdesc", addText.trim());
@@ -9661,6 +9899,7 @@ function Entreno({
           }
         }
         setExercises({...exercises, [sel]: [...dayExs, {name: nombre, tecnico, equipo, musculos}]});
+        setSplits((splits || DEFAULT_SPLITS).map(s => s.key === sel ? {...s, ex: [...new Set([...(s.ex||[]), nombre])]} : s));
       }
       setAddText("");
       setAdding(false);
@@ -9753,30 +9992,12 @@ function Entreno({
         </div>
       )}
 
-      {muscleImbalances && muscleImbalances.length > 0 && (
-        <div style={{
-          background: "rgba(255,107,138,.08)",
-          border: `1.5px solid ${C.rose}`,
-          borderRadius: 14,
-          padding: "12px 16px",
-          marginBottom: 12,
-          display: "flex",
-          flexDirection: "column",
-          gap: 6
-        }}>
-          <div style={{fontSize:13, fontWeight:800, color:C.rose, display:"flex", alignItems:"center", gap:6}}>
-            <span>⚠️ Desequilibrio Muscular Detectado</span>
-          </div>
-          <div style={{fontSize:12, color:C.ink, lineHeight:1.45}}>
-            Tu volumen de entrenamiento reciente muestra asimetrías importantes:
-          </div>
-          <ul style={{margin:0, paddingLeft:16, fontSize:12, color:C.muted}}>
-            {muscleImbalances.map((imb, idx) => (
-              <li key={idx} style={{marginBottom:2}}>{imb}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <InsightsCarousel
+        muscleImbalances={muscleImbalances}
+        plateauAlerts={plateauAlerts}
+        overloadSuggestions={overloadSuggestions}
+        aiTips={aiTips}
+      />
 
       {/* Mapa de Calor de Volumen Semanal */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"14px 16px", marginBottom:12}}>
@@ -10849,7 +11070,10 @@ function Entreno({
                                 const existing = allExerciseObjects.find(o => o.name === ex.name);
                                 if (existing) {
                                   const alreadyInDay = dayExs.some(d => d.name === existing.name);
-                                  if (!alreadyInDay) setExercises({...exercises, [sel]: [...dayExs, {name:existing.name, tecnico:existing.tecnico||"", equipo:existing.equipo||"peso libre", musculos:existing.musculos||[]}]});
+                                  if (!alreadyInDay) {
+                                    setExercises({...exercises, [sel]: [...dayExs, {name:existing.name, tecnico:existing.tecnico||"", equipo:existing.equipo||"peso libre", musculos:existing.musculos||[]}]});
+                                    setSplits((splits || DEFAULT_SPLITS).map(s => s.key === sel ? {...s, ex: [...new Set([...(s.ex||[]), existing.name])]} : s));
+                                  }
                                   setAddText(""); setAdding(false);
                                 } else {
                                   setAddText(ex.name);
