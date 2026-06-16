@@ -1508,8 +1508,9 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           try {
             const { data: { session } } = await client.auth.getSession();
             if (session?.user) {
+              await saveKey("last_logged_in_user_id", session.user.id);
               setSupabaseUser(session.user);
-              setSbError(""); // limpiar cualquier error viejo al restaurar sesión
+              setSbError("");
               setTimeout(() => loadFullStateFromSupabase(session.user.id), 1500);
             }
           } catch(e) {
@@ -2249,8 +2250,13 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       });
       if (error) throw error;
       if (data?.user) {
+        // Si cambia el usuario, limpiar estado local antes de cargar el nuevo perfil
+        const prevUserId = await loadKey("last_logged_in_user_id", null);
+        if (prevUserId && prevUserId !== data.user.id) {
+          await clearLocalUserState();
+        }
+        await saveKey("last_logged_in_user_id", data.user.id);
         setSupabaseUser(data.user);
-        // Primero intentar restaurar desde la nube (si hay datos más recientes)
         const restored = await loadFullStateFromSupabase(data.user.id);
         setSbError(restored ? "Datos restaurados desde la nube." : "Sesión iniciada. Sincronizando...");
         if (!restored) {
@@ -2279,11 +2285,14 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       });
       if (error) throw error;
       if (data?.user) {
+        // Si cambia el usuario, limpiar estado local antes de crear el perfil nuevo
+        const prevUserId = await loadKey("last_logged_in_user_id", null);
+        if (prevUserId && prevUserId !== data.user.id) {
+          await clearLocalUserState();
+        }
+        await saveKey("last_logged_in_user_id", data.user.id);
         setSupabaseUser(data.user);
-        // Registrar el perfil y sincronizar datos locales a la nube automáticamente
-        setTimeout(() => {
-          syncLocalToSupabase();
-        }, 1000);
+        setTimeout(() => syncLocalToSupabase(), 1000);
         setSbError("Cuenta creada e inicio de sesión exitoso.");
       }
     } catch(err) {
@@ -2309,6 +2318,32 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     } finally {
       setSbSyncing(false);
     }
+  };
+
+  // Borra todo el estado local para evitar filtración de datos entre usuarios en el mismo dispositivo
+  const clearLocalUserState = async () => {
+    setNotes([]); await saveKey("notes", []);
+    setExlog({}); await saveKey("exlog", {});
+    setExercises({}); await saveKey("exercises", {});
+    setFoodlog({}); await saveKey("foodlog", {});
+    setWaterlog({}); await saveKey("waterlog", {});
+    setSuppslog({}); await saveKey("suppslog", {});
+    setMetricslog({}); await saveKey("metricslog", {});
+    setSuppsInventory({}); await saveKey("supps_inventory", {});
+    setWorkoutDurations({}); await saveKey("workout_durations", {});
+    setMeals([]); await saveKey("meals", []);
+    setSplits(DEFAULT_SPLITS); await saveKey("training_splits", DEFAULT_SPLITS);
+    setBodyComp(null); await saveKey("body_comp", null);
+    setShoppingList(null); await saveKey("shopping_list", null);
+    setCustomPresets({}); await saveKey("custom_presets", {});
+    setCustomSuggestions([]); await saveKey("custom_suggestions", []);
+    setChat([]); await saveKey("chat", []);
+    setExperiments([]); await saveKey("experiments", []);
+    setSmartGoals([]); await saveKey("smart_goals", []);
+    setChallenges([]); await saveKey("challenges", []);
+    setWeeklyInsight(""); await saveKey("weekly_insight", "");
+    setUpcomingEvent(""); await saveKey("upcoming_event", "");
+    await saveKey("last_local_update", 0);
   };
 
   const syncLocalToSupabase = async (silent = false) => {
