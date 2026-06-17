@@ -3189,7 +3189,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         }
       } else if (act.type === "UPDATE_SPLITS" && act.data) {
         if (act.data.splits && Array.isArray(act.data.splits) && act.data.splits.length > 0) {
-          nextSplits = act.data.splits;
+          nextSplits = act.data.splits.map(newS => {
+            const existing = (splits || []).find(s => s.key === newS.key);
+            return { ...newS, ex: (newS.ex && newS.ex.length) ? newS.ex : (existing?.ex || []) };
+          });
           hasSplits = true;
         }
       } else if (act.type === "CHANGE_PHASE" && act.data) {
@@ -9890,7 +9893,13 @@ function Entreno({
 
   // --- Splits Manual Actions & Helpers ---
   const startEditSplits = () => {
-    setEditSplitsData((splits || DEFAULT_SPLITS).map(s => ({ ...s, ex: [...(s.ex || [])] })));
+    setEditSplitsData((splits || DEFAULT_SPLITS).map(s => {
+      const canonical = (exercises[s.key] || []).map(e => e.name);
+      const canonSet = new Set(canonical.map(n => n.toLowerCase()));
+      const extra = Object.keys(exlog || {}).filter(n => canonSet.has(n.toLowerCase()) && !canonical.some(c => c.toLowerCase() === n.toLowerCase()));
+      const merged = [...new Set([...(s.ex || []), ...canonical, ...extra])];
+      return { ...s, ex: merged };
+    }));
     setEditingSplitIdx(0);
     setNewExText("");
     setShowSplitsEditor(true);
@@ -11760,19 +11769,36 @@ function Entreno({
               </div>
             )}
 
-            <div style={{display:"flex", gap:8, borderTop:`1px solid ${C.line}`, paddingTop:12}}>
-              <button 
-                onClick={() => setShowSplitsEditor(false)}
-                style={{flex:1, padding:"10px", background:"none", border:`1px solid ${C.line}`, color:C.muted, borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+            <div style={{borderTop:`1px solid ${C.line}`, paddingTop:12, display:"flex", flexDirection:"column", gap:8}}>
+              <button
+                onClick={() => {
+                  const next = editSplitsData.map(day => {
+                    const canonical = (exercises[day.key] || []).map(e => e.name);
+                    const canonSet = new Set(canonical.map(n => n.toLowerCase()));
+                    const extra = Object.keys(exlog || {}).filter(n => canonSet.has(n.toLowerCase()) && !canonical.some(c => c.toLowerCase() === n.toLowerCase()));
+                    const merged = [...new Set([...day.ex, ...canonical, ...extra])];
+                    return { ...day, ex: merged };
+                  });
+                  setEditSplitsData(next);
+                }}
+                style={{width:"100%", padding:"8px", background:"none", border:`1px solid ${C.cyan}66`, color:C.cyan, borderRadius:8, fontSize:11.5, fontWeight:700, cursor:"pointer"}}
               >
-                Cancelar
+                Recuperar atajos del historial
               </button>
-              <button 
-                onClick={() => saveSplitsAndSyncExercises(editSplitsData)}
-                style={{flex:1, padding:"10px", background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
-              >
-                Guardar Todo
-              </button>
+              <div style={{display:"flex", gap:8}}>
+                <button
+                  onClick={() => setShowSplitsEditor(false)}
+                  style={{flex:1, padding:"10px", background:"none", border:`1px solid ${C.line}`, color:C.muted, borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => saveSplitsAndSyncExercises(editSplitsData)}
+                  style={{flex:1, padding:"10px", background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+                >
+                  Guardar Todo
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -13577,6 +13603,90 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         <div style={{fontSize:12.5, fontWeight:800, marginBottom:2}}>Evolución: Masa Magra vs Masa Grasa</div>
         {renderBodyCompChart(bodyCompHistory)}
       </div>
+
+      {/* Radar chart de medidas corporales */}
+      {(() => {
+        const entry = metricslog[selectedDateStr] || {};
+        const prevDates = Object.keys(metricslog).filter(d => d < selectedDateStr).sort().slice(-1);
+        const prevEntry = prevDates.length > 0 ? (metricslog[prevDates[0]] || {}) : null;
+
+        const fields = [
+          { label:"Brazo", cur: entry.brazoDer ? (((+entry.brazoDer||0)+(+entry.brazoIzq||0))/2) : null, max:50 },
+          { label:"Muslo", cur: entry.musloDer ? (((+entry.musloDer||0)+(+entry.musloIzq||0))/2) : null, max:80 },
+          { label:"Pantorrilla", cur: entry.pantorrillaDer ? (((+entry.pantorrillaDer||0)+(+entry.pantorrillaIzq||0))/2) : null, max:50 },
+          { label:"Cintura", cur: entry.cintura ? (+entry.cintura||0) : null, max:120, invert:true },
+          { label:"Pecho", cur: entry.pecho ? (+entry.pecho||0) : null, max:130 },
+          { label:"Peso", cur: entry.weight ? (+entry.weight||0) : null, max:130 },
+        ];
+        const hasData = fields.some(f => f.cur !== null && f.cur > 0);
+        if (!hasData) return null;
+
+        const prevFields = prevEntry ? [
+          { cur: prevEntry.brazoDer ? (((+prevEntry.brazoDer||0)+(+prevEntry.brazoIzq||0))/2) : null, max:50 },
+          { cur: prevEntry.musloDer ? (((+prevEntry.musloDer||0)+(+prevEntry.musloIzq||0))/2) : null, max:80 },
+          { cur: prevEntry.pantorrillaDer ? (((+prevEntry.pantorrillaDer||0)+(+prevEntry.pantorrillaIzq||0))/2) : null, max:50 },
+          { cur: prevEntry.cintura ? (+prevEntry.cintura||0) : null, max:120, invert:true },
+          { cur: prevEntry.pecho ? (+prevEntry.pecho||0) : null, max:130 },
+          { cur: prevEntry.weight ? (+prevEntry.weight||0) : null, max:130 },
+        ] : null;
+
+        const N = fields.length;
+        const R = 75, cx = 95, cy = 90;
+        const angles = fields.map((_, i) => (2 * Math.PI * i / N) - Math.PI / 2);
+
+        const toXY = (r, angle) => [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
+
+        const polygon = (vals, fillColor, opacity) => {
+          const pts = vals.map((v, i) => {
+            const norm = v !== null ? Math.min(1, Math.max(0, v / (fields[i].max || 1))) : 0;
+            const r2 = norm * R;
+            return toXY(r2, angles[i]).map(x => x.toFixed(1)).join(",");
+          });
+          return <polygon points={pts.join(" ")} fill={fillColor} fillOpacity={opacity} stroke={fillColor} strokeWidth="1.5" strokeLinejoin="round"/>;
+        };
+
+        const curVals = fields.map(f => f.cur);
+        const prevVals = prevFields ? prevFields.map(f => f.cur) : null;
+
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
+            <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", gap:6}}>
+              <Activity size={15} color={C.cyan}/> Radar Corporal
+              {prevDates.length > 0 && <span style={{fontSize:10, color:C.muted, fontWeight:500}}>vs {prevDates[0]}</span>}
+            </div>
+            <svg width="100%" viewBox={`0 0 190 180`} style={{display:"block", maxWidth:260, margin:"0 auto"}}>
+              {[0.25, 0.5, 0.75, 1].map(scale => (
+                <polygon key={scale}
+                  points={angles.map(a => toXY(R*scale, a).map(x => x.toFixed(1)).join(",")).join(" ")}
+                  fill="none" stroke={C.line} strokeWidth="0.8"/>
+              ))}
+              {angles.map((a, i) => {
+                const [x1, y1] = toXY(0, a);
+                const [x2, y2] = toXY(R, a);
+                const [lx, ly] = toXY(R + 12, a);
+                return (
+                  <g key={i}>
+                    <line x1={x1.toFixed(1)} y1={y1.toFixed(1)} x2={x2.toFixed(1)} y2={y2.toFixed(1)} stroke={C.line} strokeWidth="0.8"/>
+                    <text x={lx.toFixed(1)} y={ly.toFixed(1)} textAnchor="middle" dominantBaseline="middle" fill={C.muted} fontSize="8">{fields[i].label}</text>
+                  </g>
+                );
+              })}
+              {prevVals && polygon(prevVals, C.amber, 0.15)}
+              {polygon(curVals, C.cyan, 0.25)}
+              {curVals.map((v, i) => {
+                if (v === null) return null;
+                const norm = Math.min(1, Math.max(0, v / (fields[i].max || 1)));
+                const [px, py] = toXY(norm * R, angles[i]);
+                return <circle key={i} cx={px.toFixed(1)} cy={py.toFixed(1)} r="3" fill={C.cyan} stroke={C.panel} strokeWidth="1.2"/>;
+              })}
+            </svg>
+            <div style={{display:"flex", gap:12, justifyContent:"center", fontSize:10, color:C.muted, marginTop:4}}>
+              <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:8, height:8, borderRadius:"50%", background:C.cyan}}/> Hoy</span>
+              {prevVals && <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:8, height:8, borderRadius:"50%", background:C.amber}}/> Anterior</span>}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Radar chart de medidas corporales */}
       {(() => {
