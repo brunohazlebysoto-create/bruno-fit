@@ -649,6 +649,9 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
         if (responseSchema) {
           generationConfig.responseMimeType = "application/json";
           generationConfig.responseSchema = responseSchema;
+          // Disable thinking for structured output — thinking tokens can exhaust
+          // the budget before the JSON is complete, causing empty/malformed responses
+          generationConfig.thinkingConfig = { thinkingBudget: 0 };
         }
 
         const body = {
