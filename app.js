@@ -9921,13 +9921,10 @@ function Entreno({
 
   // --- Splits Manual Actions & Helpers ---
   const startEditSplits = () => {
-    setEditSplitsData((splits || DEFAULT_SPLITS).map(s => {
-      const canonical = (exercises[s.key] || []).map(e => e.name);
-      const canonSet = new Set(canonical.map(n => n.toLowerCase()));
-      const extra = Object.keys(exlog || {}).filter(n => canonSet.has(n.toLowerCase()) && !canonical.some(c => c.toLowerCase() === n.toLowerCase()));
-      const merged = [...new Set([...(s.ex || []), ...canonical, ...extra])];
-      return { ...s, ex: merged };
-    }));
+    const baseSplits = (splits || DEFAULT_SPLITS).map(s => ({ ...s, ex: [...(s.ex || []), ...(exercises[s.key] || []).map(e => e.name)] }));
+    // Deduplicate ex per split
+    const deduped = baseSplits.map(s => ({ ...s, ex: [...new Set(s.ex)] }));
+    setEditSplitsData(deduped);
     setEditingSplitIdx(0);
     setNewExText("");
     setShowSplitsEditor(true);
@@ -11800,14 +11797,80 @@ function Entreno({
             <div style={{borderTop:`1px solid ${C.line}`, paddingTop:12, display:"flex", flexDirection:"column", gap:8}}>
               <button
                 onClick={() => {
-                  const next = editSplitsData.map(day => {
-                    const canonical = (exercises[day.key] || []).map(e => e.name);
-                    const canonSet = new Set(canonical.map(n => n.toLowerCase()));
-                    const extra = Object.keys(exlog || {}).filter(n => canonSet.has(n.toLowerCase()) && !canonical.some(c => c.toLowerCase() === n.toLowerCase()));
-                    const merged = [...new Set([...day.ex, ...canonical, ...extra])];
-                    return { ...day, ex: merged };
+                  const allExlogNames = Object.keys(exlog || {});
+
+                  // Build date→exercises co-occurrence map
+                  const dateToExs = {};
+                  allExlogNames.forEach(exName => {
+                    (exlog[exName] || []).forEach(s => {
+                      if (s?.date) {
+                        const d = s.date.slice(0, 10);
+                        if (!dateToExs[d]) dateToExs[d] = [];
+                        if (!dateToExs[d].includes(exName)) dateToExs[d].push(exName);
+                      }
+                    });
                   });
-                  setEditSplitsData(next);
+
+                  // Keyword → target muscles map for split name matching
+                  const KW = {
+                    empuje:['Pectoral','Deltoides','Tríceps'], push:['Pectoral','Deltoides','Tríceps'],
+                    jalón:['Espalda','Bíceps','Antebrazo'], jal:['Espalda','Bíceps','Antebrazo'], pull:['Espalda','Bíceps','Antebrazo'],
+                    pierna:['Cuádriceps','Isquios','Glúteos','Pantorrillas'], leg:['Cuádriceps','Isquios','Glúteos','Pantorrillas'],
+                    brazo:['Bíceps','Tríceps','Antebrazo'], arm:['Bíceps','Tríceps','Antebrazo'],
+                  };
+
+                  // Target muscles per split (from split name keywords)
+                  const splitTargets = {};
+                  editSplitsData.forEach(day => {
+                    const nl = day.name.toLowerCase();
+                    let ms = [];
+                    Object.entries(KW).forEach(([kw, mlist]) => { if (nl.includes(kw)) ms = [...ms, ...mlist]; });
+                    splitTargets[day.key] = [...new Set(ms)];
+                  });
+
+                  // Score how well an exercise fits a split via muscle matching
+                  const muscleScore = (exName, splitKey) => {
+                    const targets = splitTargets[splitKey];
+                    if (!targets || targets.length === 0) return 0.5; // circuito/unknown → neutral
+                    const mgs = MUSCLES[exName] || Object.values(exercises || {}).flat().find(e => e.name === exName)?.musculos || [];
+                    return mgs.filter(m => targets.some(t => m === t || m.startsWith(t.slice(0,5)))).length;
+                  };
+
+                  // Co-occurrence scores (seed = existing ex[] entries)
+                  const coScore = {};
+                  editSplitsData.forEach(day => {
+                    coScore[day.key] = {};
+                    const seeds = new Set((day.ex || []).map(n => n.toLowerCase()));
+                    if (seeds.size === 0) return;
+                    Object.values(dateToExs).forEach(dayExs => {
+                      if (dayExs.some(n => seeds.has(n.toLowerCase()))) {
+                        dayExs.forEach(n => {
+                          if (!seeds.has(n.toLowerCase()))
+                            coScore[day.key][n] = (coScore[day.key][n] || 0) + 1;
+                        });
+                      }
+                    });
+                  });
+
+                  // Assign each exlog exercise to best split
+                  const assignments = {};
+                  editSplitsData.forEach(day => { assignments[day.key] = new Set(day.ex || []); });
+
+                  allExlogNames.forEach(exName => {
+                    const alreadyIn = editSplitsData.some(d => (d.ex || []).some(e => e.toLowerCase() === exName.toLowerCase()));
+                    if (alreadyIn) return;
+                    // Co-occurrence takes priority
+                    let bestKey = null, bestCo = 0;
+                    editSplitsData.forEach(d => { const s = coScore[d.key][exName] || 0; if (s > bestCo) { bestCo = s; bestKey = d.key; } });
+                    if (bestKey) { assignments[bestKey].add(exName); return; }
+                    // Muscle-keyword fallback
+                    let bestMKey = null, bestMS = -1;
+                    editSplitsData.forEach(d => { const s = muscleScore(exName, d.key); if (s > bestMS) { bestMS = s; bestMKey = d.key; } });
+                    if (bestMKey) assignments[bestMKey].add(exName);
+                    else assignments[editSplitsData[0]?.key]?.add(exName);
+                  });
+
+                  setEditSplitsData(editSplitsData.map(day => ({ ...day, ex: [...assignments[day.key]] })));
                 }}
                 style={{width:"100%", padding:"8px", background:"none", border:`1px solid ${C.cyan}66`, color:C.cyan, borderRadius:8, fontSize:11.5, fontWeight:700, cursor:"pointer"}}
               >
