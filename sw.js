@@ -1,4 +1,4 @@
-const CACHE_NAME = "brunofit-cache-v4";
+const CACHE_NAME = "brunofit-cache-v6";
 const ASSETS = [
   "./index.html",
   "./style.css",

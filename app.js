@@ -494,6 +494,8 @@ async function parseDailyCloudData(cloudData, today) {
   return { finalLog, finalWater, finalSupplements };
 }
 
+let _rrIdx = 0; // round-robin global para Gemini keys
+
 async function callGemini(messages, systemInstruction, responseSchema = null) {
   let apiKeysStr = await loadKey("gemini_api_key", "");
   
@@ -521,15 +523,16 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
 
   const orderedKeys = [];
   if (geminiKeys.length > 0) {
-    const startGemini = Math.floor(Math.random() * geminiKeys.length);
+    // Round-robin estricto: cada llamada empieza en la siguiente clave
+    const startGemini = _rrIdx % geminiKeys.length;
+    _rrIdx = (_rrIdx + 1) % geminiKeys.length;
     for (let count = 0; count < geminiKeys.length; count++) {
       orderedKeys.push(geminiKeys[(startGemini + count) % geminiKeys.length]);
     }
   }
   if (openRouterKeys.length > 0) {
-    const startOR = Math.floor(Math.random() * openRouterKeys.length);
     for (let count = 0; count < openRouterKeys.length; count++) {
-      orderedKeys.push(openRouterKeys[(startOR + count) % openRouterKeys.length]);
+      orderedKeys.push(openRouterKeys[count % openRouterKeys.length]);
     }
   }
 
@@ -636,7 +639,8 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
           };
         });
 
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
+        const nativeModel = (await loadKey("gemini_native_model", "gemini-2.5-flash")) || "gemini-2.5-flash";
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${nativeModel}:generateContent?key=${apiKey}`;
         
         const generationConfig = {
           temperature: 0.2
@@ -663,7 +667,9 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
 
         if (!res.ok) {
           const errorData = await res.json().catch(() => ({}));
-          throw new Error(errorData.error?.message || `HTTP ${res.status}`);
+          const errMsg = errorData.error?.message || `HTTP ${res.status}`;
+          console.error(`[Gemini key ${idx+1}/${orderedKeys.length}] ${res.status}: ${errMsg}`);
+          throw new Error(errMsg);
         }
 
         const data = await res.json();
@@ -675,11 +681,16 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
       const is429 = e.message && (e.message.includes("429") || e.message.includes("RESOURCE_EXHAUSTED") || e.message.includes("quota") || e.message.includes("limit"));
       console.warn(`Error con la API Key ${idx + 1}/${orderedKeys.length}: ${e.message}. Intentando con la siguiente...`);
       if (is429 && idx < orderedKeys.length - 1) {
-        await new Promise(r => setTimeout(r, 1500));
+        // backoff exponencial: 2s, 4s, 8s… entre claves
+        await new Promise(r => setTimeout(r, Math.min(2000 * Math.pow(2, idx), 16000)));
       }
     }
   }
 
+  const isQuota = lastError?.message && (lastError.message.includes("429") || lastError.message.includes("RESOURCE_EXHAUSTED") || lastError.message.includes("quota") || lastError.message.includes("limit"));
+  if (isQuota) {
+    throw new Error("⏱️ Límite de peticiones alcanzado en todas las claves. Si todas tus claves son de la misma cuenta de Google, comparten la misma cuota — crea claves desde cuentas distintas para multiplicarla. O espera 1 minuto e intenta de nuevo.");
+  }
   throw lastError || new Error("No se pudo conectar con ninguna API Key.");
 }
 
@@ -827,6 +838,39 @@ function Chart({entries, color=C.lime, height=128}){
   );
 }
 
+/* ===== FITDAYS SCHEMA ===== */
+const FITDAYS_SCHEMA = {
+  type:"OBJECT", properties:{
+    peso:{ type:"NUMBER" },
+    imc:{ type:"NUMBER" },
+    grasaPct:{ type:"NUMBER" },
+    masaGrasa:{ type:"NUMBER" },
+    grasaSubc:{ type:"NUMBER" },
+    masaMuscular:{ type:"NUMBER" },
+    musculoEsq:{ type:"NUMBER" },
+    masaEsqueletica:{ type:"NUMBER" },
+    aguaKg:{ type:"NUMBER" },
+    pctAgua:{ type:"NUMBER" },
+    proteinaKg:{ type:"NUMBER" },
+    pctProteina:{ type:"NUMBER" },
+    visceral:{ type:"NUMBER" },
+    bmr:{ type:"NUMBER" },
+    edadCorporal:{ type:"NUMBER" },
+    whr:{ type:"NUMBER" },
+    puntuacion:{ type:"NUMBER" },
+    grasaTronco:{ type:"NUMBER" },
+    grasaBrazoDer:{ type:"NUMBER" },
+    grasaBrazoIzq:{ type:"NUMBER" },
+    grasaPiernaDer:{ type:"NUMBER" },
+    grasaPiernaIzq:{ type:"NUMBER" },
+    musculoTronco:{ type:"NUMBER" },
+    musculoBrazoDer:{ type:"NUMBER" },
+    musculoBrazoIzq:{ type:"NUMBER" },
+    musculoPiernaDer:{ type:"NUMBER" },
+    musculoPiernaIzq:{ type:"NUMBER" },
+  }, required:["peso","grasaPct"]
+};
+
 /* ===== COMPONENTE PRINCIPAL APP ===== */
 
 /* ===== AI INTELLIGENCE ENGINE — 20 FEATURES ===== */
@@ -894,6 +938,23 @@ const TRAINER_AGENT_SCHEMA = {
   }, required:["trainingPhase","deloadRecommendation","exerciseVariations","muscleAlerts","performanceSummary"]
 };
 
+const TIPS_SCHEMA = { type:"OBJECT", properties:{ cards:{ type:"ARRAY", items:{ type:"OBJECT", properties:{ icon:{type:"STRING"}, tipType:{type:"STRING"}, title:{type:"STRING"}, body:{type:"STRING"}, detail:{type:"STRING"}, extra:{type:"ARRAY", items:{type:"STRING"}} }, required:["icon","tipType","title","body","detail","extra"] } } }, required:["cards"] };
+
+const FALLBACK_TIPS = [
+  { icon:"💧", tipType:"reminder", title:"Hidratación", body:"Apunta a 35ml por kg de peso al día. Un 2% de deshidratación reduce el rendimiento hasta un 20%.", extra:["Si tu orina es amarillo oscuro antes de entrenar, ya estás en déficit hídrico.", "→ Toma 500ml al despertar, 300ml antes de entrenar y 200ml cada 20 min durante el entreno.", "→ En días de mucho sudor añade una pizca de sal al agua — funciona igual que el isotónico."] },
+  { icon:"🛌", tipType:"reminder", title:"Sueño = crecimiento", body:"El músculo crece durante el descanso, no en el gym. 7-9 horas maximizan la síntesis proteica.", extra:["Menos de 6h reduce la testosterona, eleva el cortisol y frena la recuperación muscular.", "→ Corta pantallas 30 min antes de dormir — la luz azul retrasa la melatonina hasta 90 min.", "→ Habitación a 18-20°C mejora el sueño profundo, la fase donde se libera hormona de crecimiento."] },
+  { icon:"🥩", tipType:"tip", title:"Proteína post-entreno", body:"Consume 30-40g de proteína en las 2 horas post-entreno para maximizar la síntesis proteica.", extra:["La ventana anabólica es más amplia de lo que se creía (2-4h), pero más cerca = mejor.", "→ Combina proteína rápida (suero, huevos) con carbohidrato simple (fruta, arroz blanco).", "→ Si entrenas en ayunas, toma al menos 5g de EAA durante el entreno para minimizar el catabolismo."] },
+  { icon:"📈", tipType:"tip", title:"Sobrecarga progresiva", body:"Sin progresión no hay adaptación. Aumenta 1.25–2.5kg cuando completes todas las series en el rango alto.", extra:["El cuerpo solo crece si el estímulo aumenta — la progresión de carga es la herramienta clave.", "→ Sin discos de 1.25kg, usa progresión de reps: busca 1 rep más por serie antes de subir peso.", "→ Lleva un registro escrito — sin datos no sabes si estás progresando de verdad."] },
+  { icon:"🔄", tipType:"tip", title:"Varía el agarre en jalón", body:"Agarre supino activa más bíceps, neutro reduce tensión en muñecas, prono enfoca la espalda alta.", extra:["Rotar el agarre cada 3-4 semanas previene el sobreuso articular y añade variedad al estímulo.", "→ Agarre neutro (palmas enfrentadas) permite más carga y es el más cómodo para la mayoría.", "→ Combina jalón supino con remo para maximizar bíceps sin necesitar sesión separada."] },
+  { icon:"⚡", tipType:"motivation", title:"Consistencia > Intensidad", body:"3 sesiones semanales durante 6 meses superan a 6 sesiones durante 2 semanas. La constancia gana.", extra:["Los resultados se acumulan de forma no lineal — los primeros meses parecen lentos, luego se disparan.", "→ Si tienes un mal día, entrena igual pero reduce el volumen a la mitad — mantener el hábito importa más.", "→ La sesión 'mediocre' cuenta exactamente igual que la perfecta en el cómputo anual."] },
+  { icon:"🧘", tipType:"reminder", title:"Movilidad dinámica pre-entreno", body:"5 min de movilidad dinámica mejoran el rango de movimiento y reducen lesiones. Evita estiramientos estáticos.", extra:["El estiramiento estático antes de levantar puede reducir la fuerza hasta un 8% — guárdalo para después.", "→ Rutina express: 10 hip circles + 10 rotaciones de hombro + 10 sentadillas profundas sin peso.", "→ Prioriza movilidad de cadera y hombros — son las articulaciones con mayor impacto en el rendimiento."] },
+  { icon:"📊", tipType:"tip", title:"Entrena con RIR", body:"Dejar 1-3 repeticiones en reserva (RIR 1-3) maximiza la hipertrofia con menor fatiga acumulada.", extra:["Ir siempre al fallo puede duplicar el tiempo de recuperación sin añadir más hipertrofia.", "→ Usa RIR 2-3 en las series de acumulación, RIR 0-1 solo en la última serie de cada ejercicio.", "→ Para calcular tu RIR: al terminar la serie pregúntate cuántas reps más podrías hacer con buena técnica."] },
+  { icon:"🎯", tipType:"tip", title:"Conexión mente-músculo", body:"Pensar activamente en el músculo que trabajas puede aumentar su activación hasta un 30%.", extra:["La activación intencional importa especialmente en músculos difíciles de sentir como glúteos y espalda alta.", "→ Reduce el peso un 20% y añade 2 seg de pausa en la posición de máximo estiramiento.", "→ Para pecho: imagina juntar los codos en la contracción, no solo empujar el peso."] },
+  { icon:"🍌", tipType:"reminder", title:"Carbos pre-entreno", body:"Carbohidratos 30-60 min antes del entreno mejoran el rendimiento en sesiones de más de 45 min.", extra:["Sin carbos disponibles, el cuerpo puede catabolizar músculo para obtener energía en sesiones largas.", "→ Opciones rápidas: plátano, 30g avena con leche, o 2 tostadas con mermelada.", "→ Si entrenas en ayunas, considera al menos 5g de BCAA o EAA para minimizar el catabolismo."] },
+  { icon:"💪", tipType:"motivation", title:"Especificidad del entrenamiento", body:"El cuerpo se adapta exactamente a lo que practicas. Si quieres fuerza, entrena fuerza.", extra:["Hacer cardio excesivo mientras buscas hipertrofia compite directamente con las adaptaciones musculares.", "→ Define tu objetivo principal y diseña el 80% del entreno en torno a él.", "→ Especificidad no significa monotonía — varía ejercicios accesorios, no los patrones de movimiento principales."] },
+  { icon:"🔥", tipType:"tip", title:"Calentamiento específico", body:"El calentamiento ideal replica los movimientos del entreno con menor peso — no solo correr o bicicleta.", extra:["2 series de activación con 40-60% del peso de trabajo preparan mejor las articulaciones que 10 min de cardio.", "→ Para press de pecho: 15 reps con barra vacía + 8 reps con el 60% antes del peso de trabajo.", "→ Para sentadilla: sentadilla goblet con 10kg + hip hinge con bandas activan toda la cadena posterior."] },
+];
+
 // ── Funciones estadísticas ──
 function linearRegression(ys) {
   if (!ys || ys.length < 2) return { slope: 0, intercept: ys?.[0] || 0 };
@@ -947,7 +1008,7 @@ function detectPlateaus(exlog) {
   const plateaus = [];
   Object.entries(exlog||{}).forEach(([exName, sets])=>{
     if (!sets || sets.length < 9) return;
-    const sorted = [...sets].filter(s=>s?.date&&s?.w).sort((a,b)=>new Date(a.date)-new Date(b.date));
+    const sorted = [...sets].filter(s=>s?.date&&s?.w).sort((a,b)=>a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
     // Agrupamos por semana
     const byWeek = {};
     sorted.forEach(s=>{
@@ -972,7 +1033,7 @@ function calcProgressiveOverload(exlog) {
   const suggestions = {};
   Object.entries(exlog||{}).forEach(([exName, sets])=>{
     if (!sets || sets.length === 0) return;
-    const sorted = [...sets].filter(s=>s?.date&&s?.w).sort((a,b)=>new Date(b.date)-new Date(a.date));
+    const sorted = [...sets].filter(s=>s?.date&&s?.w).sort((a,b)=>b.date < a.date ? -1 : (b.date > a.date ? 1 : 0));
     const recent = sorted.slice(0,5);
     const maxW = Math.max(...recent.map(s=>parseFloat(s.w)||0));
     const maxReps = Math.max(...recent.filter(s=>parseFloat(s.w)===maxW).map(s=>parseInt(s.reps)||0));
@@ -984,21 +1045,24 @@ function calcProgressiveOverload(exlog) {
 }
 
 function detectMuscleImbalances(exlog) {
-  const muscleCount = {};
+  let push = 0, pull = 0, quad = 0, hams = 0;
+  const cutoff = Date.now() - 7 * 86400000;
   Object.entries(exlog||{}).forEach(([exName, sets])=>{
     if (!sets || sets.length === 0) return;
-    const recent = sets.filter(s=>s?.date && new Date(s.date) > new Date(Date.now()-28*86400000));
-    if (recent.length === 0) return;
     const muscles = MUSCLES[exName] || [];
-    muscles.forEach(m=>{ muscleCount[m] = (muscleCount[m]||0) + recent.length; });
+    const isPush = muscles.some(m => /pectoral|tríceps|tricep|deltoid/i.test(m));
+    const isPull = muscles.some(m => /espalda|bíceps|bicep|trapecio|rombo|dorsal/i.test(m));
+    const isQuad = muscles.some(m => /cuádriceps|cuadricep/i.test(m));
+    const isHam = muscles.some(m => /isquio/i.test(m));
+    const n = (sets||[]).filter(s=>s?.date&&s.type!=="warmup"&&new Date(s.date).getTime()>cutoff).length;
+    if (isPush) push += n;
+    if (isPull) pull += n;
+    if (isQuad) quad += n;
+    if (isHam) hams += n;
   });
   const imbalances = [];
-  const push = (muscleCount["Pectoral"]||0) + (muscleCount["Tríceps"]||0);
-  const pull = (muscleCount["Espalda"]||0) + (muscleCount["Bíceps"]||0);
-  const quad = (muscleCount["Cuádriceps"]||0);
-  const hams = (muscleCount["Isquios"]||0);
-  if (push > 0 && pull > 0 && push/pull > 1.5) imbalances.push(`Empuje (${push} series) vs Jalón (${pull} series) — desbalance ${Math.round(push/pull*10)/10}:1`);
-  if (quad > 0 && hams > 0 && quad/hams > 1.5) imbalances.push(`Cuádriceps (${quad}) vs Isquios (${hams}) — desbalance ${Math.round(quad/hams*10)/10}:1`);
+  if (push>0&&pull>0&&push/pull>1.5) imbalances.push(`Empuje (${push} series) vs Jalón (${pull} series) — ratio ${Math.round(push/pull*10)/10}:1`);
+  if (quad>0&&hams>0&&quad/hams>1.5) imbalances.push(`Cuádriceps (${quad} series) vs Isquios (${hams} series) — ratio ${Math.round(quad/hams*10)/10}:1`);
   return imbalances;
 }
 
@@ -1192,6 +1256,8 @@ export default function App(){
   const [pdfBusy, setPdfBusy] = useState(false);
   const [coachPersonality, setCoachPersonality] = useState("técnico");
   const [showFocusMode, setShowFocusMode] = useState(false);
+  const [backupToast, setBackupToast] = useState(false);
+  const nightlyBackupRef = useRef(null); // holds latest state for midnight callback
 
   // Elevated Calendar States & Helpers
   const [calMonth, setCalMonth] = useState(() => new Date());
@@ -1218,7 +1284,7 @@ export default function App(){
   const getMetricsForDate = (dateStr) => {
     const entries = Object.entries(metricslog || {})
       .filter(([d]) => d <= dateStr)
-      .sort((a, b) => b[0].localeCompare(a[0]));
+      .sort((a, b) => b[0] < a[0] ? -1 : (b[0] > a[0] ? 1 : 0));
     
     if (entries.length > 0) {
       const latest = entries[0][1] || {};
@@ -1240,7 +1306,7 @@ export default function App(){
     
     const wNotes = (notes || [])
       .filter(n => n && n.type === "peso" && n.date && n.date.slice(0, 10) <= dateStr && n.weight)
-      .sort((a, b) => b.date.localeCompare(a.date));
+      .sort((a, b) => b.date < a.date ? -1 : (b.date > a.date ? 1 : 0));
     const wVal = parseFloat(wNotes.length > 0 ? wNotes[0].weight : ((notes || []).find(n => n && n.type === "peso" && n.weight)?.weight || START_W)) || START_W;
     
     return {
@@ -1453,8 +1519,9 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           try {
             const { data: { session } } = await client.auth.getSession();
             if (session?.user) {
+              await saveKey("last_logged_in_user_id", session.user.id);
               setSupabaseUser(session.user);
-              setSbError(""); // limpiar cualquier error viejo al restaurar sesión
+              setSbError("");
               setTimeout(() => loadFullStateFromSupabase(session.user.id), 1500);
             }
           } catch(e) {
@@ -2194,8 +2261,13 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       });
       if (error) throw error;
       if (data?.user) {
+        // Si cambia el usuario, limpiar estado local antes de cargar el nuevo perfil
+        const prevUserId = await loadKey("last_logged_in_user_id", null);
+        if (prevUserId && prevUserId !== data.user.id) {
+          await clearLocalUserState();
+        }
+        await saveKey("last_logged_in_user_id", data.user.id);
         setSupabaseUser(data.user);
-        // Primero intentar restaurar desde la nube (si hay datos más recientes)
         const restored = await loadFullStateFromSupabase(data.user.id);
         setSbError(restored ? "Datos restaurados desde la nube." : "Sesión iniciada. Sincronizando...");
         if (!restored) {
@@ -2224,11 +2296,14 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       });
       if (error) throw error;
       if (data?.user) {
+        // Si cambia el usuario, limpiar estado local antes de crear el perfil nuevo
+        const prevUserId = await loadKey("last_logged_in_user_id", null);
+        if (prevUserId && prevUserId !== data.user.id) {
+          await clearLocalUserState();
+        }
+        await saveKey("last_logged_in_user_id", data.user.id);
         setSupabaseUser(data.user);
-        // Registrar el perfil y sincronizar datos locales a la nube automáticamente
-        setTimeout(() => {
-          syncLocalToSupabase();
-        }, 1000);
+        setTimeout(() => syncLocalToSupabase(), 1000);
         setSbError("Cuenta creada e inicio de sesión exitoso.");
       }
     } catch(err) {
@@ -2254,6 +2329,32 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     } finally {
       setSbSyncing(false);
     }
+  };
+
+  // Borra todo el estado local para evitar filtración de datos entre usuarios en el mismo dispositivo
+  const clearLocalUserState = async () => {
+    setNotes([]); await saveKey("notes", []);
+    setExlog({}); await saveKey("exlog", {});
+    setExercises({}); await saveKey("exercises", {});
+    setFoodlog({}); await saveKey("foodlog", {});
+    setWaterlog({}); await saveKey("waterlog", {});
+    setSuppslog({}); await saveKey("suppslog", {});
+    setMetricslog({}); await saveKey("metricslog", {});
+    setSuppsInventory({}); await saveKey("supps_inventory", {});
+    setWorkoutDurations({}); await saveKey("workout_durations", {});
+    setMeals([]); await saveKey("meals", []);
+    setSplits(DEFAULT_SPLITS); await saveKey("training_splits", DEFAULT_SPLITS);
+    setBodyComp(null); await saveKey("body_comp", null);
+    setShoppingList(null); await saveKey("shopping_list", null);
+    setCustomPresets({}); await saveKey("custom_presets", {});
+    setCustomSuggestions([]); await saveKey("custom_suggestions", []);
+    setChat([]); await saveKey("chat", []);
+    setExperiments([]); await saveKey("experiments", []);
+    setSmartGoals([]); await saveKey("smart_goals", []);
+    setChallenges([]); await saveKey("challenges", []);
+    setWeeklyInsight(""); await saveKey("weekly_insight", "");
+    setUpcomingEvent(""); await saveKey("upcoming_event", "");
+    await saveKey("last_local_update", 0);
   };
 
   const syncLocalToSupabase = async (silent = false) => {
@@ -2491,6 +2592,56 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  // Mantener ref actualizada con el estado más reciente para el backup nocturno
+  nightlyBackupRef.current = { notes, exlog, exercises, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, meals, splits, bodyComp, shoppingList, presetKey, activeSplitKey, customPresets, customSuggestions, chat, experiments, smartGoals, challenges, weeklyInsight, upcomingEvent, supabase, supabaseUser };
+
+  // Backup automático: al abrir la app (si se perdió el de medianoche) y cada 00:00
+  useEffect(() => {
+    if (!loaded) return; // esperar a que los datos estén cargados
+
+    const doBackup = async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      if (localStorage.getItem("last_backup_date") === today) return;
+      localStorage.setItem("last_backup_date", today);
+      const st = nightlyBackupRef.current;
+      const snap = { exportedAt: new Date().toISOString(), notes: st.notes, exlog: st.exlog, exercises: st.exercises, foodlog: st.foodlog, waterlog: st.waterlog, suppslog: st.suppslog, metricslog: st.metricslog, suppsInventory: st.suppsInventory, workoutDurations: st.workoutDurations, meals: st.meals, splits: st.splits, bodyComp: st.bodyComp, shoppingList: st.shoppingList, presetKey: st.presetKey, activeSplitKey: st.activeSplitKey, customPresets: st.customPresets, customSuggestions: st.customSuggestions, smartGoals: st.smartGoals, challenges: st.challenges };
+      // 1. Descargar JSON
+      try {
+        const blob = new Blob([JSON.stringify(snap, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `brunofit-backup-${today}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (_) {}
+      // 2. Guardar en Supabase si está autenticado
+      if (st.supabase && st.supabaseUser) {
+        try {
+          await st.supabase.from("profiles").upsert({ id: st.supabaseUser.id, email: st.supabaseUser.email, full_state: JSON.stringify(snap), last_backup: today, updated_at: new Date().toISOString() });
+        } catch (_) {}
+      }
+      // 3. Toast de confirmación
+      setBackupToast(true);
+      setTimeout(() => setBackupToast(false), 5000);
+    };
+
+    // Al abrir la app: correr si el backup de hoy no se hizo
+    doBackup();
+
+    // A las 00:00: programar backup para medianoche y repetir cada día
+    const schedule = () => {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(24, 0, 0, 0);
+      return setTimeout(() => { doBackup(); schedule(); }, next - now);
+    };
+    const tid = schedule();
+    return () => clearTimeout(tid);
+  }, [loaded]);
 
   // Importar datos desde JSON
   const importDataJSON = (file) => {
@@ -2789,7 +2940,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     const tdee = calcTDEE(fLog, mLog);
     setTdeeEstimate(tdee);
     if (tdee && tgt) {
-      const latestM = Object.entries(mLog||{}).filter(([_,v])=>v?.weight).sort((a,b)=>b[0].localeCompare(a[0]))[0]?.[1];
+      const latestM = Object.entries(mLog||{}).filter(([_,v])=>v?.weight).sort((a,b)=>b[0] < a[0] ? -1 : (b[0] > a[0] ? 1 : 0))[0]?.[1];
       if (latestM) setProjections(calcBodyProjection(parseFloat(latestM.weight), parseFloat(latestM.grasaPct)||25, tdee, tgt.kcal, 12));
     }
     if (trend && Math.abs(trend.kgPerWeek) < 0.1 && trend.dataPoints >= 7) {
@@ -3199,7 +3350,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     // Progresión por ejercicio (primer set más antiguo vs más reciente últimas 4 sem)
     const progressLines = Object.entries(recentByEx)
       .map(([ex, sets]) => {
-        const sorted = [...sets].sort((a, b) => new Date(a.date) - new Date(b.date));
+        const sorted = [...sets].sort((a, b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
         if (sorted.length < 2) return null;
         const first = sorted[0], last = sorted[sorted.length - 1];
         if (first.w === last.w) return null;
@@ -3223,7 +3374,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     const weightEntries = Object.entries(metricslog || {})
       .map(([d, m]) => ({ date: d, w: m?.weight }))
       .filter(e => e.w)
-      .sort((a, b) => a.date.localeCompare(b.date));
+      .sort((a, b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
     let weightTrend = 'Sin registros de peso suficientes.';
     if (weightEntries.length >= 2) {
       const oldest = weightEntries[Math.max(0, weightEntries.length - 8)];
@@ -3321,12 +3472,57 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       ])];
       const exerciseNamesStr = allExerciseNames.join(", ");
 
+      const nowHour = new Date().getHours();
+      const timeBlock = nowHour < 6 ? "madrugada (antes de las 6h)" : nowHour < 12 ? `mañana (${nowHour}:00h)` : nowHour < 15 ? `mediodía (${nowHour}:00h)` : nowHour < 19 ? `tarde (${nowHour}:00h)` : `noche (${nowHour}:00h)`;
+      const trainedToday = todayWorkout && !todayWorkout.includes("Sin entreno") && todayWorkout.trim().length > 10;
+      const remKcal = Math.max(0, target.kcal - totals.kcal);
+      const remP = Math.max(0, target.p - totals.p);
+      const remC = Math.max(0, target.c - totals.c);
+      const remF = Math.max(0, target.f - totals.f);
+      const mealContext = nowHour < 9 ? "Bruno aún no ha desayunado — orienta hacia desayuno + pre-entreno si aplica." : nowHour < 13 ? "Hora de almuerzo próxima — considera kcal restantes para las comidas del resto del día." : nowHour < 16 ? "Tarde post-almuerzo — puede quedar merienda y cena." : nowHour < 20 ? "Tarde/noche — probablemente quedan cena y snack." : "Noche — enfócate en cerrar macros del día y recuperación nocturna.";
+
+      // Get Fitdays body composition data
+      const getFitdaysCompositionText = () => {
+        const keys = Object.keys(metricslog || {}).sort().reverse();
+        if (keys.length === 0) return "Sin registros Fitdays.";
+        const latest = metricslog[keys[0]];
+        if (!latest) return "Sin registros Fitdays.";
+
+        let comp = "";
+        if (latest.puntuacion) comp += `Score Fitdays: ${latest.puntuacion}/100. `;
+        if (latest.edadCorporal) comp += `Edad corporal: ${latest.edadCorporal} años. `;
+        if (latest.musculoEsq) comp += `Músculo esquelético: ${latest.musculoEsq}%. `;
+        if (latest.masaMuscular) comp += `Masa muscular: ${latest.masaMuscular}kg. `;
+        if (latest.grasaSubc) comp += `Grasa subcutánea: ${latest.grasaSubc}%. `;
+        if (latest.whr) comp += `WHR (cintura/cadera): ${latest.whr}. `;
+
+        // Segmental analysis
+        if (latest.musculoBrazoDer || latest.musculoBrazoIzq) {
+          const dif = Math.abs((latest.musculoBrazoDer || 0) - (latest.musculoBrazoIzq || 0));
+          if (dif > 0.3) comp += `⚠️ Asimetría muscular en brazos: D ${latest.musculoBrazoDer}kg vs I ${latest.musculoBrazoIzq}kg. `;
+        }
+        if (latest.musculoPiernaDer || latest.musculoPiernaIzq) {
+          const dif = Math.abs((latest.musculoPiernaDer || 0) - (latest.musculoPiernaIzq || 0));
+          if (dif > 0.5) comp += `⚠️ Asimetría muscular en piernas: D ${latest.musculoPiernaDer}kg vs I ${latest.musculoPiernaIzq}kg. `;
+        }
+        if (latest.grasaTronco && latest.grasaBrazoDer && latest.grasaPiernaDer) {
+          const torsoRatio = latest.grasaTronco / (latest.grasaBrazoDer + latest.grasaPiernaDer);
+          if (torsoRatio > 3) comp += `Concentración de grasa en tronco (mayor que miembros). Prioriza: dominadas, remos, press. `;
+        }
+
+        return comp || "Sin datos segmentales en Fitdays.";
+      };
+      const fitdaysComp = getFitdaysCompositionText();
+
       const sys = `Eres el coach nutricional y de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)}
+MOMENTO ACTUAL: ${timeBlock}. ADAPTA tu respuesta a este contexto horario — no sugieras desayuno si es de noche, ni cena si es de mañana. ${mealContext}
 Plan nutricional activo: ${target.kcal} kcal (${target.label}), P:${target.p}g / C:${target.c}g / G:${target.f}g.
 Métricas antropométricas y corporales: ${metricsSummary}
+Datos de Composición Corporal (Fitdays): ${fitdaysComp}
 Historial nutricional acumulado reciente: ${recentNutrition}
 Día de Split de entrenamiento activo hoy: Día ${activeSplit.key} (${activeSplit.name}), combustible de carbohidratos asignado: ${activeSplit.fuel}.
-Hoy lleva consumido: ${Math.round(totals.kcal)} kcal, P:${Math.round(totals.p)}g C:${Math.round(totals.c)}g G:${Math.round(totals.f)}g (Restante hoy: ${Math.round(Math.max(0, target.kcal - totals.kcal))} kcal, P:${Math.round(Math.max(0, target.p - totals.p))}g C:${Math.round(Math.max(0, target.c - totals.c))}g G:${Math.round(Math.max(0, target.f - totals.f))}g).
+Estado de entrenamiento hoy: ${trainedToday ? "✓ YA ENTRENÓ HOY — no preguntes si va a entrenar, asume recuperación activa." : "✗ AÚN NO HA ENTRENADO HOY — puedes orientar pre-entreno, timing y energía si aplica."}
+Hoy lleva consumido: ${Math.round(totals.kcal)} kcal, P:${Math.round(totals.p)}g C:${Math.round(totals.c)}g G:${Math.round(totals.f)}g. Restante: ${Math.round(remKcal)} kcal, P:${Math.round(remP)}g C:${Math.round(remC)}g G:${Math.round(remF)}g.
 
 Entrenamiento realizado por Bruno hoy:
 ${todayWorkout}
@@ -3336,7 +3532,7 @@ ${workoutHistory}
 --- FIN HISTORIAL ---
 
 Español. ${coachPersonality==="motivacional" ? "Tono motivacional, empático y energético. Celebra logros, usa frases inspiradoras, motiva a Bruno a superar sus límites." : coachPersonality==="nutricionista" ? "Enfócate principalmente en nutrición, timing de comidas, macros y estrategias alimentarias. Profundiza en el aspecto nutricional sobre el entrenamiento." : coachPersonality==="psicólogo" ? "Tono empático, comprensivo y de apoyo. Atiende el aspecto mental y emocional del fitness. Ayuda a manejar el estrés, la motivación y los hábitos." : "Directo, técnico y basado en datos. Prioriza análisis de progresión, volumen, PRs y optimización del rendimiento."}
-FORMATO DE RESPUESTA (chatResponse): Texto limpio y legible para chat móvil. PERMITIDO: párrafos cortos, listas con "• item" (un ítem por línea), **negrita** para datos clave, emojis puntuales para separar secciones. PROHIBIDO: ### headers, listas con * en medio de una frase, párrafos de más de 4 líneas. Máximo 4 ítems por lista; si hay más datos, agrúpalos. Separá las secciones con una línea en blanco.
+FORMATO DE RESPUESTA (chatResponse): Texto limpio y legible para chat móvil. PERMITIDO: párrafos cortos, listas con "• item" (un ítem por línea), **negrita** para datos clave, emojis puntuales para separar secciones. PROHIBIDO ABSOLUTO: cualquier encabezado markdown (# ## ### #### ##### — NUNCA uses el símbolo #), listas con * en medio de una frase, párrafos de más de 4 líneas. Máximo 4 ítems por lista; si hay más datos, agrúpalos. Separá las secciones con una línea en blanco.
 Usa el historial para dar recomendaciones personalizadas y basadas en datos reales (PRs, progresión, volumen). Si detectás estancamiento o regresión en algún ejercicio, mencionalo proactivamente.
 REGLA DE CALCULADORA INVERSA: Si Bruno te pregunta qué cenar o comer para cerrar el día o cómo completar sus macros restantes (ej. 'me quedan 600 calorías y 50g de proteína...'), calcula con precisión matemática una combinación rápida de alimentos (ej. claras, huevo entero, gramos exactos de pechuga de pollo, scoop de whey) para cuadrar sus números de forma exacta.
 REGLA CRÍTICA DE PORCIONES E INGREDIENTES: Cuando recomiendes porciones, alimentos o comidas en el chat, debes ajustar estrictamente las porciones (detallando gramos exactos) al plan nutricional seleccionado por Bruno (${target.label}) y a las necesidades energéticas del split del día (${activeSplit.fuel}). No recomiendes las mismas porciones por defecto. Si está en "Volumen" o día de "Carbo alto", propón porciones abundantes de carbohidratos. Si está en "Definición" o día de "Carbo medio", sé sumamente estricto y reduce las porciones de carbohidratos, sugiriendo fuentes de proteína magra más saciantes.
@@ -3405,15 +3601,25 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
       .filter(n => (n.date || "").slice(0,10) === selectedDateStr)
       .map(n => n.text).join(" / ") || "Sin notas de sensaciones.";
 
-    const msg = `[ANÁLISIS DE ENTRENAMIENTO — todos los datos ya están cargados en tu sistema]
+    const msg = `[ANÁLISIS DE ENTRENAMIENTO — ${selectedDateStr}]
 
-Ejercicios completados hoy (${selectedDateStr}):
+Ejercicios completados hoy:
 ${todayWorkout}
 
 ${nutritionLine}
 Sensaciones/notas del día: ${todaySensations}
 
-Analiza este entrenamiento directamente con los datos anteriores y con mi historial que ya tenés. Evalúa: progresión vs semanas previas, si el volumen y los pesos fueron adecuados, y dá 2-3 recomendaciones concretas para la próxima sesión. No me pidas que registre datos — todo ya está en tu sistema.`;
+Analiza este entrenamiento usando mi historial completo que ya tenés. Responde con EXACTAMENTE esta estructura, en este orden:
+
+**Progresión** — compará cada ejercicio con las 2-4 semanas anteriores: ¿subí peso, mantuve o bajé? ¿más o menos series/reps?
+
+**Lo que salió bien** — 2-3 puntos concretos positivos de la sesión de hoy.
+
+**Lo que mejorar** — 2-3 puntos concretos con el problema y la corrección exacta.
+
+**Próxima sesión** — para cada ejercicio principal: peso objetivo, reps y series recomendadas. Sé específico con números.
+
+No repitas los datos que ya te mandé. No me pidas registrar nada.`;
     await sendCoachMessage(msg);
   };
 
@@ -4145,7 +4351,15 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
           onClose={() => setShowFocusMode(false)}
           splits={splits}
           exlog={exlog}
+          exercises={exercises}
         />
+      )}
+
+      {backupToast && (
+        <div style={{position:"fixed", bottom:90, left:"50%", transform:"translateX(-50%)", background:"rgba(21,23,15,0.96)", border:`1px solid ${C.lime}44`, borderRadius:12, padding:"10px 16px", zIndex:9999, display:"flex", alignItems:"center", gap:8, boxShadow:"0 4px 20px rgba(0,0,0,0.4)"}}>
+          <span style={{fontSize:14}}>🔒</span>
+          <span style={{fontSize:12.5, color:C.lime, fontWeight:700}}>Copia automática guardada</span>
+        </div>
       )}
 
       {prAlerts.length > 0 && <Confetti key={prAlerts.join("|").slice(0, 24)} />}
@@ -4452,10 +4666,10 @@ function MarkdownText({ text, style = {} }) {
 
     if (!tr) { i++; continue; }
 
-    // ### / ## / # headers
-    const hm = tr.match(/^(#{1,3})\s+(.*)/);
+    // # through ###### headers (strip all leading hashes)
+    const hm = tr.match(/^(#{1,6})\s+(.*)/);
     if (hm) {
-      const lvl = hm[1].length;
+      const lvl = Math.min(hm[1].length, 3);
       out.push(
         <div key={i} style={{ fontSize: lvl === 1 ? 15 : lvl === 2 ? 13.5 : 13, fontWeight: 800, color: C.lime, marginTop: 10, marginBottom: 3, lineHeight: 1.3 }}>
           {renderInline(hm[2])}
@@ -7522,7 +7736,7 @@ function Coach({
   const contextSummary = React.useMemo(() => {
     const nutritionDays = Object.keys(foodlog || {}).filter(d => (foodlog[d]||[]).length > 0).length;
     const workoutSessions = Object.keys(exlog || {}).filter(d => (exlog[d]||[]).length > 0).length;
-    const latestMetrics = Object.entries(metricslog || {}).sort((a,b) => b[0].localeCompare(a[0]))[0];
+    const latestMetrics = Object.entries(metricslog || {}).sort((a,b) => b[0] < a[0] ? -1 : (b[0] > a[0] ? 1 : 0))[0];
     const latestWeight = latestMetrics ? latestMetrics[1]?.weight : null;
     return { nutritionDays, workoutSessions, latestWeight };
   }, [foodlog, exlog, metricslog]);
@@ -7672,6 +7886,40 @@ function Perfil({
   bodyComp
 }) {
   const [showKeyField, setShowKeyField] = useState(false);
+  const [geminiNativeModel, setGeminiNativeModel] = useState("gemini-2.5-flash");
+  const [keyStatuses, setKeyStatuses] = useState({});
+  const [availableGeminiModels, setAvailableGeminiModels] = useState([]);
+  useEffect(() => {
+    loadKey("gemini_native_model", "gemini-2.5-flash").then(m => setGeminiNativeModel(m || "gemini-2.5-flash"));
+    loadKey("gemini_available_models", []).then(ms => { if (Array.isArray(ms) && ms.length) setAvailableGeminiModels(ms); });
+  }, []);
+  const saveGeminiNativeModel = (m) => { setGeminiNativeModel(m); saveKey("gemini_native_model", m); };
+
+  const testSingleKey = async (key) => {
+    const id = key.slice(0, 12);
+    setKeyStatuses(prev => ({ ...prev, [id]: "testing" }));
+    try {
+      let ok = false;
+      if (key.startsWith("sk-or-")) {
+        // OpenRouter: verificar con models list
+        const res = await fetch("https://openrouter.ai/api/v1/models", {
+          headers: { "Authorization": `Bearer ${key}` }
+        });
+        ok = res.ok;
+      } else {
+        // Gemini: listar modelos — no gasta cuota de generación
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}&pageSize=1`);
+        ok = res.ok;
+      }
+      setKeyStatuses(prev => ({ ...prev, [id]: ok ? "ok" : "error" }));
+    } catch {
+      setKeyStatuses(prev => ({ ...prev, [id]: "error" }));
+    }
+  };
+
+  const testAllKeys = async (keys) => {
+    await Promise.all(keys.map(k => testSingleKey(k)));
+  };
   const [newKeyInput, setNewKeyInput] = useState("");
   const [linkInput, setLinkInput] = useState("");
   const [linkSuccess, setLinkSuccess] = useState(null);
@@ -7895,20 +8143,33 @@ function Perfil({
 
             {keysList.length > 0 ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6, background: "var(--panel-bg-sec)", padding: 10, borderRadius: "var(--radius-md)", border: "1px solid var(--line-color)" }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>Claves activas ({keysList.length}):</div>
-                {keysList.map((k, idx) => (
-                  <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, background: "var(--panel-bg)", padding: "8px 10px", borderRadius: "var(--radius-sm)", border: "1px solid var(--line-color)" }}>
-                    <span style={{ fontFamily: "monospace", color: "var(--text-ink)" }}>
-                      {k.length > 15 ? `${k.slice(0, 8)}...${k.slice(-4)}` : "Clave activa"}
-                    </span>
-                    <button 
-                      onClick={() => handleRemoveKey(idx)} 
-                      style={{ background: "none", border: "none", color: "var(--accent-rose)", cursor: "pointer", fontSize: 11, fontWeight: 700, padding: 4 }}
-                    >
-                      Eliminar
-                    </button>
-                  </div>
-                ))}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>Claves activas ({keysList.length}):</div>
+                  <button onClick={() => testAllKeys(keysList)} style={{ fontSize: 10, fontWeight: 700, color: "var(--accent-cyan)", background: "none", border: "1px solid var(--accent-cyan)", borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}>
+                    Probar todas
+                  </button>
+                </div>
+                {keysList.map((k, idx) => {
+                  const id = k.slice(0, 12);
+                  const st = keyStatuses[id];
+                  const dotColor = st === "ok" ? "#7fff6a" : st === "error" ? "var(--accent-rose)" : st === "testing" ? "var(--accent-amber)" : "var(--line-color)";
+                  const dotLabel = st === "ok" ? "OK" : st === "error" ? "Error" : st === "testing" ? "..." : "—";
+                  return (
+                    <div key={id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, background: "var(--panel-bg)", padding: "8px 10px", borderRadius: "var(--radius-sm)", border: `1px solid ${st === "ok" ? "#7fff6a44" : st === "error" ? "rgba(255,107,138,0.3)" : "var(--line-color)"}` }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor, flexShrink: 0, boxShadow: st === "ok" ? "0 0 6px #7fff6a" : st === "error" ? "0 0 6px var(--accent-rose)" : "none", animation: st === "testing" ? "pulse 1s infinite" : "none" }} />
+                        <span style={{ fontFamily: "monospace", color: "var(--text-ink)" }}>
+                          {k.startsWith("sk-or-") ? "OpenRouter · " : "Gemini · "}{k.length > 15 ? `${k.slice(0, 6)}...${k.slice(-4)}` : "Clave"}
+                        </span>
+                        <span style={{ fontSize: 10, color: dotColor, fontWeight: 700 }}>{dotLabel}</span>
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button onClick={() => testSingleKey(k)} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "2px 6px" }}>Probar</button>
+                        <button onClick={() => handleRemoveKey(idx)} style={{ background: "none", border: "none", color: "var(--accent-rose)", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "2px 6px" }}>✕</button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               <div style={{ fontSize: 11, color: "var(--text-muted)", textAlign: "center", padding: "12px 0", border: "1px dashed var(--line-color)", borderRadius: "var(--radius-md)" }}>
@@ -7946,6 +8207,43 @@ function Perfil({
                     style={{ background: "var(--panel-bg)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-sm)", padding: "8px 10px", fontSize: 12, color: "var(--text-ink)", marginTop: 4 }}
                   />
                 )}
+              </div>
+            )}
+            {/* Selector de modelo Gemini nativo */}
+            {keysList.some(k => !k.startsWith("sk-or-")) && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, background: "var(--panel-bg-sec)", padding: 10, borderRadius: "var(--radius-md)", border: "1px solid var(--line-color)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "var(--accent-cyan)", textTransform: "uppercase", letterSpacing: ".05em" }}>Modelo Gemini:</div>
+                  <button onClick={async () => {
+                    const firstKey = keysList.find(k => !k.startsWith("sk-or-"));
+                    if (!firstKey) return;
+                    try {
+                      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${firstKey}&pageSize=50`);
+                      const data = await res.json();
+                      const names = (data.models || [])
+                        .map(m => m.name?.replace("models/", ""))
+                        .filter(n => n && /flash|pro/i.test(n))
+                        .sort();
+                      if (names.length) { setAvailableGeminiModels(names); saveKey("gemini_available_models", names); }
+                    } catch {}
+                  }} style={{ fontSize: 10, color: "var(--accent-cyan)", background: "none", border: "1px solid var(--accent-cyan)", borderRadius: 6, padding: "2px 7px", cursor: "pointer", fontWeight: 700 }}>
+                    Cargar modelos
+                  </button>
+                </div>
+                <select
+                  value={geminiNativeModel}
+                  onChange={e => saveGeminiNativeModel(e.target.value)}
+                  style={{ background: "var(--panel-bg)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-sm)", padding: "8px 10px", fontSize: 12, color: "var(--text-ink)", width: "100%" }}
+                >
+                  {(() => {
+                    const opts = availableGeminiModels.length > 0 ? availableGeminiModels : ["gemini-2.5-flash","gemini-2.5-flash-lite","gemini-2.5-pro","gemini-2.0-flash"];
+                    const all = opts.includes(geminiNativeModel) ? opts : [geminiNativeModel, ...opts];
+                    return all.map(m => <option key={m} value={m}>{m}</option>);
+                  })()}
+                </select>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", lineHeight: 1.4 }}>
+                  Tocá <b>Cargar modelos</b> para ver los disponibles con tu clave.
+                </div>
               </div>
             )}
             <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.4 }}>
@@ -8689,7 +8987,13 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
 }
 
 /* ===== MODO FOCO ===== */
-function FocusMode({ onClose, splits, exlog }) {
+function FocusMode({ onClose, splits, exlog, exercises }) {
+  // Helper: get muscle list for any exercise (MUSCLES constant + custom exercises fallback)
+  const getMuscles = (name) => {
+    if (MUSCLES[name]) return MUSCLES[name];
+    const allExs = Object.values(exercises || {}).flat();
+    return allExs.find(e => e.name === name)?.musculos || [];
+  };
   const circuitSplit = splits.find(s => s.key === "E") || DEFAULT_SPLITS.find(s => s.key === "E");
   const circuitExs = circuitSplit?.ex || [];
   const exDuration = 60;
@@ -8809,7 +9113,7 @@ function FocusMode({ onClose, splits, exlog }) {
   const fmtTime = (s) => `${Math.floor(s/60).toString().padStart(2,"0")}:${(s%60).toString().padStart(2,"0")}`;
 
   const MUSCLE_COLORS = { "Cuádriceps":C.lime, "Glúteos":C.lime, "Isquios":C.lime, "Pectoral":C.cyan, "Tríceps":C.cyan, "Espalda":C.amber, "Deltoides":C.amber, "Bíceps":C.rose };
-  const exColor = (name) => MUSCLE_COLORS[(MUSCLES[name] || [])[0]] || C.muted;
+  const exColor = (name) => MUSCLE_COLORS[getMuscles(name)[0]] || C.muted;
 
   // --- CARRUSEL POR SPLIT ---
   const [focusSplit, setFocusSplit] = useState(splits[0]?.key || "A");
@@ -8818,7 +9122,7 @@ function FocusMode({ onClose, splits, exlog }) {
   const getLastEntry = (exName) => {
     const work = (exlog[exName] || []).filter(s => s.type !== "warmup");
     if (work.length === 0) return { w: 0, reps: "8" };
-    const last = [...work].sort((a,b) => new Date(b.date) - new Date(a.date))[0];
+    const last = [...work].sort((a,b) => b.date < a.date ? -1 : (b.date > a.date ? 1 : 0))[0];
     return { w: parseFloat(last.w) || 0, reps: String(parseInt(last.reps) || 8) };
   };
   const getVals = (exName) => overrides[exName] || getLastEntry(exName);
@@ -8978,7 +9282,7 @@ function FocusMode({ onClose, splits, exlog }) {
                     const last = getLastEntry(exName);
                     const seriesTotal = (exlog[exName] || []).filter(s => s.type !== "warmup").length;
                     const col = exColor(exName);
-                    const muscles = (MUSCLES[exName] || []).slice(0,2);
+                    const muscles = getMuscles(exName).slice(0,2);
                     const hasHistory = last.w > 0;
                     const btnStyle = (active) => ({
                       width:32, height:32, borderRadius:7, cursor:"pointer", fontSize:18, fontWeight:700,
@@ -9085,6 +9389,177 @@ function FocusMode({ onClose, splits, exlog }) {
   );
 }
 
+/* ===== CARRUSEL DE ALERTAS Y SUGERENCIAS ===== */
+const TIP_STYLE = {
+  tip:        { color: C.lime,  bg: "rgba(205,255,74,0.08)",  border: "rgba(205,255,74,0.45)" },
+  reminder:   { color: C.cyan,  bg: "rgba(74,214,255,0.08)",  border: "rgba(74,214,255,0.45)" },
+  motivation: { color: C.amber, bg: "rgba(251,191,36,0.08)",  border: "rgba(251,191,36,0.45)" },
+  warning:    { color: C.rose,  bg: "rgba(255,107,138,0.08)", border: "rgba(255,107,138,0.45)" },
+  imbalance:  { color: C.rose,  bg: "rgba(255,107,138,0.08)", border: C.rose },
+  plateau:    { color: C.amber, bg: "rgba(251,191,36,0.08)",  border: C.amber },
+  overload:   { color: C.cyan,  bg: "rgba(74,214,255,0.08)",  border: C.cyan },
+};
+
+function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions, aiTips }) {
+  const [dismissed, setDismissed] = React.useState(() => {
+    try { return new Set(JSON.parse(sessionStorage.getItem("carousel_dismissed") || "[]")); } catch { return new Set(); }
+  });
+  const [tipIdx, setTipIdx] = React.useState(() => {
+    try { return parseInt(sessionStorage.getItem("carousel_tip_idx") || "0", 10); } catch { return 0; }
+  });
+  const [expanded, setExpanded] = React.useState(false);
+  const touchRef = React.useRef({ startX: 0, moved: false });
+  const [swipeX, setSwipeX] = React.useState(0);
+  const [swiping, setSwiping] = React.useState(false);
+
+  const tips = aiTips && aiTips.length > 0 ? aiTips : FALLBACK_TIPS;
+
+  const dataCards = React.useMemo(() => {
+    const list = [];
+    (muscleImbalances || []).forEach((text, i) => {
+      const isPP = text.includes("Empuje");
+      list.push({
+        id: "imb" + i, tipType: "imbalance", icon: "⚖️",
+        title: isPP ? "Desbalance Empuje/Jalón" : "Desbalance Cuáds/Isquios",
+        body: text.replace("series", "ser") + (isPP ? " — Empuje = Pecho+Hombros+Tríceps · Jalón = Espalda+Bíceps" : ""),
+        extra: isPP
+          ? ["Ideal 1:1 a 1.3:1. El desequilibrio sostenido puede causar dolor de hombro y mala postura.", "Esta semana: reemplaza 1 serie de press por remo, y añade face pulls al final.", "El ejercicio más eficiente para equilibrar: remo con mancuerna unilateral (no necesita mucho tiempo)."]
+          : ["Desequilibrio cuáds/isquios eleva el riesgo de lesión de rodilla y LCA.", "Añade peso muerto rumano o curl de pierna al final de tu próxima sesión de piernas.", "Objetivo: al menos 1 serie de isquios por cada 1.5 de cuádriceps."]
+      });
+    });
+    (plateauAlerts || []).slice(0, 3).forEach((p, i) => list.push({
+      id: "plt" + i, tipType: "plateau", icon: "⚡",
+      title: "Estancamiento: " + p.exercise,
+      body: `Sin progreso en ${p.weeks} semanas con ${p.weight}kg.`,
+      extra: [
+        "El cuerpo se adapta al estímulo repetido — necesita un cambio para crecer de nuevo.",
+        "Opción A · Doble progresión: baja a 3 sets × 6 reps, sube 2.5kg y trabaja hasta llegar a 3×10 antes de volver a subir.",
+        "Opción B · Técnica: reduce el peso 10% durante 2 semanas enfocándote en tempo 3-1-2 (bajada-pausa-subida).",
+        "Opción C · Variación: cambia a un ejercicio parecido (ej. si estás estancado en press banca → press inclinado) por 4 semanas y luego vuelve.",
+        "Opción D · Deload: una semana con 50% del volumen habitual y sin fallo muscular restaura el SNC."
+      ]
+    }));
+    Object.entries(overloadSuggestions || {}).slice(0, 3).forEach(([ex, s], i) => list.push({
+      id: "ovl" + i, tipType: "overload", icon: "↑",
+      title: "Subir peso: " + ex,
+      body: `${s.currentMax}kg → ${s.suggested}kg. ${s.reason || "Completando todas las series en rango alto."}`,
+      extra: [
+        "Cuándo subir: cuando completas TODAS las series en el límite superior del rango de reps (sin fallar en las últimas).",
+        `Cómo: sube ${Math.round((s.suggested - s.currentMax) * 10) / 10}kg. Si no tienes ese disco, sube al siguiente disponible y baja 1-2 reps hasta adaptarte.`,
+        "Si fallas demasiado pronto: el aumento fue prematuro, baja al peso anterior 1 semana más.",
+        "Regla de oro: mejor subir pequeño y completar que subir grande y fallar series."
+      ]
+    }));
+    return list.filter(c => !dismissed.has(c.id));
+  }, [muscleImbalances, plateauAlerts, overloadSuggestions, dismissed]);
+
+  const currentTip = tips[tipIdx % tips.length];
+  const tipCard = { id: "tip", tipType: currentTip.tipType || "tip", icon: currentTip.icon, title: currentTip.title, body: currentTip.body, extra: (currentTip.extra && currentTip.extra.length > 0) ? currentTip.extra : (currentTip.detail ? [currentTip.detail] : []) };
+  const allCards = [...dataCards, tipCard];
+  const card = allCards[0];
+
+  const dismissCurrent = () => {
+    setExpanded(false);
+    if (card.id === "tip") {
+      setTipIdx(prev => {
+        const next = (prev + 1) % tips.length;
+        try { sessionStorage.setItem("carousel_tip_idx", String(next)); } catch {}
+        return next;
+      });
+    } else {
+      setDismissed(prev => {
+        const next = new Set([...prev, card.id]);
+        try { sessionStorage.setItem("carousel_dismissed", JSON.stringify([...next])); } catch {}
+        return next;
+      });
+    }
+    setSwipeX(0); setSwiping(false);
+  };
+
+  const onTouchStart = (e) => {
+    touchRef.current = { startX: e.touches[0].clientX, moved: false };
+    setSwiping(true); setSwipeX(0);
+  };
+  const onTouchMove = (e) => {
+    if (!swiping) return;
+    const dx = e.touches[0].clientX - touchRef.current.startX;
+    if (Math.abs(dx) > 8) touchRef.current.moved = true;
+    setSwipeX(Math.min(0, dx));
+  };
+  const onTouchEnd = () => {
+    if (!touchRef.current.moved) {
+      setExpanded(prev => !prev);
+      setSwipeX(0); setSwiping(false);
+    } else if (swipeX < -70) {
+      dismissCurrent();
+    } else {
+      setSwipeX(0); setSwiping(false);
+    }
+  };
+
+  const st = TIP_STYLE[card.tipType] || TIP_STYLE.tip;
+
+  return (
+    <div style={{marginBottom:12}}>
+      <div
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        style={{
+          background: st.bg, border: `1.5px solid ${st.border}`,
+          borderRadius: 14, padding: "12px 14px", cursor: "pointer",
+          transform: `translateX(${swipeX}px)`,
+          opacity: 1 - Math.abs(swipeX) / 200,
+          transition: swiping ? "none" : "transform 0.25s ease, opacity 0.25s",
+          userSelect: "none"
+        }}
+      >
+        {/* Header row */}
+        <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:8}}>
+          <div style={{display:"flex", alignItems:"center", gap:6, flex:1}}>
+            <span style={{fontSize:16}}>{card.icon}</span>
+            <span style={{fontSize:12.5, fontWeight:800, color:st.color}}>{card.title}</span>
+          </div>
+          <div style={{display:"flex", alignItems:"center", gap:6, flexShrink:0}}>
+            <span style={{fontSize:10, color:st.color, opacity:.7}}>{expanded ? "▲" : "▼"}</span>
+            <button onTouchEnd={e => { e.stopPropagation(); dismissCurrent(); }} onClick={e => { e.stopPropagation(); dismissCurrent(); }} style={{background:"none", border:"none", color:st.color, fontSize:18, cursor:"pointer", lineHeight:1, padding:"0 2px", opacity:.6}}>×</button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div style={{fontSize:11.5, color:C.ink, marginTop:6, lineHeight:1.5}}>{card.body}</div>
+
+        {/* Expanded detail */}
+        {expanded && card.extra && card.extra.length > 0 && (
+          <div style={{marginTop:10, display:"flex", flexDirection:"column", gap:6, borderTop:`1px solid ${st.border}`, paddingTop:10}}>
+            {card.extra.map((line, i) => (
+              <div key={i} style={{display:"flex", gap:7, alignItems:"flex-start"}}>
+                <span style={{color:st.color, fontWeight:800, fontSize:11, flexShrink:0, marginTop:1}}>{i === 0 ? "ℹ" : "→"}</span>
+                <span style={{fontSize:11, color: i === 0 ? C.muted : C.ink, lineHeight:1.5}}>{line}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Tap hint when collapsed */}
+        {!expanded && (
+          <div style={{fontSize:9.5, color:st.color, opacity:.55, marginTop:5, textAlign:"right"}}>toca para ver más</div>
+        )}
+      </div>
+
+      {/* Dots + swipe hint */}
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:5}}>
+        <div style={{display:"flex", gap:4, alignItems:"center"}}>
+          {allCards.slice(0, Math.min(8, allCards.length)).map((c, i) => (
+            <div key={c.id + i} style={{width:i===0?14:5, height:5, borderRadius:99, background:i===0?st.border:`${st.border}50`, transition:"width .2s"}}/>
+          ))}
+        </div>
+        <span style={{fontSize:9.5, color:C.muted}}>← desliza para pasar</span>
+      </div>
+    </div>
+  );
+}
+
 /* ===== TAB ENTRENAMIENTO ===== */
 function Entreno({
   exlog, setExlog, exercises, setExercises, geminiKey, handleAnalyzeWorkout, importWorkoutData,
@@ -9117,6 +9592,37 @@ function Entreno({
     if (chatText) combined += `Comentarios/sensaciones de chat recientes: ${chatText}.`;
     return combined || "Sin sensaciones o fatiga reportadas recientemente.";
   };
+
+  // --- AI Tips for InsightsCarousel ---
+  const [aiTips, setAiTips] = useState([]);
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const cacheKey = "insights_tips_" + today;
+    const cached = getAICache("tips", cacheKey);
+    if (cached) { setAiTips(cached); return; }
+    if (!geminiKey) return;
+    const cutoff = Date.now() - 7 * 86400000;
+    let push = 0, pull = 0, legs = 0;
+    Object.entries(exlog || {}).forEach(([n, sets]) => {
+      const ms = MUSCLES[n] || [];
+      const isPush = ms.some(m => /pectoral|tríceps|tricep|deltoid/i.test(m));
+      const isPull = ms.some(m => /espalda|bíceps|bicep|dorsal/i.test(m));
+      const isLegs = ms.some(m => /cuádriceps|isquio|glúteo/i.test(m));
+      const n7 = (sets || []).filter(s => s?.date && s.type !== "warmup" && new Date(s.date).getTime() > cutoff).length;
+      if (isPush) push += n7; if (isPull) pull += n7; if (isLegs) legs += n7;
+    });
+    const ctx = `Entrenador: Push ${push} series · Pull ${pull} series · Piernas ${legs} series (últimos 7 días). Plateaus: ${(plateauAlerts||[]).length}. Sugerencias sobrecarga: ${Object.keys(overloadSuggestions||{}).length}. Notas recientes: ${getRecentSensationsText().slice(0, 200)}.`;
+    callGemini([{ role:"user", content: `Genera 6 tarjetas variadas de coaching fitness personalizado para Bruno basándote en este contexto: ${ctx}\n\nGenera EXACTAMENTE 6 tarjetas con tipTypes variados (tip, reminder, motivation, warning) — no repitas el mismo tipo consecutivo. El campo 'extra' debe tener EXACTAMENTE 3 strings: [0] contexto/por qué importa, [1] acción concreta hoy (empieza con →), [2] otra acción o dato práctico (empieza con →).` }],
+      "Eres coach fitness experto. Responde SOLO en JSON válido con el array 'cards'. Cada card: {icon, tipType, title (máx 4 palabras), body (máx 25 palabras), detail (igual a extra[0], máx 20 palabras), extra: [string×3]}. En español.",
+      TIPS_SCHEMA
+    ).then(raw => {
+      try {
+        const parsed = cleanAndParseJSON(raw);
+        const tips = (parsed?.cards || []).filter(t => t.title && t.body);
+        if (tips.length >= 3) { setAiTips(tips); setAICache("tips", cacheKey, tips); }
+      } catch (_) {}
+    }).catch(() => {});
+  }, []);
 
   // --- Splits Manual Editor States ---
   const [showSplitsEditor, setShowSplitsEditor] = useState(false);
@@ -9201,7 +9707,7 @@ function Entreno({
   const dayExs = (exercises || {})[sel] || [];
   const dayMuscles = [...new Set(dayExs.flatMap(e => e.musculos || []))];
   const last = (n) => { const a = (exlog || {})[n]; return a && a.length ? a[0] : null; };
-  const chartData = (n) => ((exlog || {})[n] || []).slice().sort((a,b) => new Date(a.date) - new Date(b.date));
+  const chartData = (n) => ((exlog || {})[n] || []).slice().sort((a,b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
 
   useEffect(() => {
     (async () => {
@@ -9552,6 +10058,7 @@ function Entreno({
           }
         }
         setExercises({...exercises, [sel]: [...dayExs, {name: addText.trim(), tecnico, equipo, musculos}]});
+        setSplits((splits || DEFAULT_SPLITS).map(s => s.key === sel ? {...s, ex: [...new Set([...(s.ex||[]), addText.trim()])]} : s));
       } else {
         let nombre = addText.trim(), tecnico = "", equipo = "peso libre", musculos = [];
         const cachedD = getAICache("exdesc", addText.trim());
@@ -9592,6 +10099,7 @@ function Entreno({
           }
         }
         setExercises({...exercises, [sel]: [...dayExs, {name: nombre, tecnico, equipo, musculos}]});
+        setSplits((splits || DEFAULT_SPLITS).map(s => s.key === sel ? {...s, ex: [...new Set([...(s.ex||[]), nombre])]} : s));
       }
       setAddText("");
       setAdding(false);
@@ -9684,30 +10192,12 @@ function Entreno({
         </div>
       )}
 
-      {muscleImbalances && muscleImbalances.length > 0 && (
-        <div style={{
-          background: "rgba(255,107,138,.08)",
-          border: `1.5px solid ${C.rose}`,
-          borderRadius: 14,
-          padding: "12px 16px",
-          marginBottom: 12,
-          display: "flex",
-          flexDirection: "column",
-          gap: 6
-        }}>
-          <div style={{fontSize:13, fontWeight:800, color:C.rose, display:"flex", alignItems:"center", gap:6}}>
-            <span>⚠️ Desequilibrio Muscular Detectado</span>
-          </div>
-          <div style={{fontSize:12, color:C.ink, lineHeight:1.45}}>
-            Tu volumen de entrenamiento reciente muestra asimetrías importantes:
-          </div>
-          <ul style={{margin:0, paddingLeft:16, fontSize:12, color:C.muted}}>
-            {muscleImbalances.map((imb, idx) => (
-              <li key={idx} style={{marginBottom:2}}>{imb}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <InsightsCarousel
+        muscleImbalances={muscleImbalances}
+        plateauAlerts={plateauAlerts}
+        overloadSuggestions={overloadSuggestions}
+        aiTips={aiTips}
+      />
 
       {/* Mapa de Calor de Volumen Semanal */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"14px 16px", marginBottom:12}}>
@@ -10780,7 +11270,10 @@ function Entreno({
                                 const existing = allExerciseObjects.find(o => o.name === ex.name);
                                 if (existing) {
                                   const alreadyInDay = dayExs.some(d => d.name === existing.name);
-                                  if (!alreadyInDay) setExercises({...exercises, [sel]: [...dayExs, {name:existing.name, tecnico:existing.tecnico||"", equipo:existing.equipo||"peso libre", musculos:existing.musculos||[]}]});
+                                  if (!alreadyInDay) {
+                                    setExercises({...exercises, [sel]: [...dayExs, {name:existing.name, tecnico:existing.tecnico||"", equipo:existing.equipo||"peso libre", musculos:existing.musculos||[]}]});
+                                    setSplits((splits || DEFAULT_SPLITS).map(s => s.key === sel ? {...s, ex: [...new Set([...(s.ex||[]), existing.name])]} : s));
+                                  }
                                   setAddText(""); setAdding(false);
                                 } else {
                                   setAddText(ex.name);
@@ -11314,6 +11807,369 @@ function Entreno({
   );
 }
 
+/* ===== FITDAYS TRENDS MINI-CHART ===== */
+function FitdaysTrends({ metricslog }) {
+  const entries = React.useMemo(() => {
+    return Object.entries(metricslog || {})
+      .filter(([, v]) => v && (v.peso !== undefined || v.weight !== undefined))
+      .sort(([a], [b]) => a < b ? -1 : (a > b ? 1 : 0))
+      .map(([date, v]) => ({ date, peso: v.peso ?? v.weight, grasaPct: v.grasaPct, puntuacion: v.puntuacion, bmr: v.bmr }));
+  }, [metricslog]);
+
+  if (entries.length < 2) return null;
+
+  const W = 300, H = 70, pad = 18;
+  const mkLine = (vals) => {
+    const mn = Math.min(...vals), mx = Math.max(...vals), rg = (mx - mn) || 1;
+    const X = i => pad + (i / (vals.length - 1)) * (W - 2 * pad);
+    const Y = v => H - pad - ((v - mn) / rg) * (H - 2 * pad - 4);
+    return { pts: vals.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" "), X, Y, mn, mx, vals };
+  };
+
+  const pesoVals = entries.map(e => e.peso).filter(v => v != null);
+  const grasaVals = entries.map(e => e.grasaPct).filter(v => v != null);
+  const puntuacionVals = entries.map(e => e.puntuacion).filter(v => v != null);
+  const bmrVals = entries.map(e => e.bmr).filter(v => v != null);
+
+  const hasPeso = pesoVals.length >= 2;
+  const hasGrasa = grasaVals.length >= 2;
+  const hasPuntuacion = puntuacionVals.length >= 2;
+  const hasBmr = bmrVals.length >= 2;
+
+  if (!hasPeso && !hasGrasa && !hasBmr) return null;
+
+  const miniChart = (vals, color, label, unit) => {
+    if (vals.length < 2) return null;
+    const { pts, X, Y } = mkLine(vals);
+    const last = vals[vals.length - 1];
+    const first = vals[0];
+    const up = last >= first;
+    const area = `${X(0).toFixed(1)},${H - pad} ${pts} ${X(vals.length - 1).toFixed(1)},${H - pad}`;
+    return (
+      <div style={{flex:1, minWidth:0}}>
+        <div style={{fontSize:10, color:C.muted, marginBottom:2, display:"flex", justifyContent:"space-between"}}>
+          <span style={{fontWeight:700, color}}>{label}</span>
+          <span style={{color:C.ink, fontWeight:800}}>{last.toFixed(1)}{unit} {up ? "↑" : "↓"}</span>
+        </div>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%", height:H, display:"block"}}>
+          <polygon points={area} fill={color} opacity="0.10"/>
+          <polyline points={pts} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+          {vals.map((v, i) => <circle key={i} cx={X(i)} cy={Y(v)} r="2.5" fill={color}/>)}
+        </svg>
+        <div style={{display:"flex", justifyContent:"space-between", fontSize:9, color:C.muted, marginTop:-2}}>
+          <span>{entries[0].date.slice(5)}</span>
+          <span>{entries[entries.length - 1].date.slice(5)}</span>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
+      <div style={{fontSize:12, fontWeight:800, color:C.ink, marginBottom:10}}>📈 Tendencias Fitdays</div>
+      <div style={{display:"flex", gap:12, flexWrap:"wrap"}}>
+        {hasPeso && miniChart(entries.filter(e => e.peso != null).map(e => e.peso), C.cyan, "Peso", " kg")}
+        <div style={{flex:1, minWidth:0, display:"flex", flexDirection:"column", gap:8}}>
+          {hasGrasa && miniChart(entries.filter(e => e.grasaPct != null).map(e => e.grasaPct), C.amber, "% Grasa", "%")}
+          {hasPuntuacion && miniChart(entries.filter(e => e.puntuacion != null).map(e => e.puntuacion), C.lime, "Score", "")}
+        </div>
+        {hasBmr && miniChart(entries.filter(e => e.bmr != null).map(e => e.bmr), C.rose, "BMR", " kcal")}
+      </div>
+    </div>
+  );
+}
+
+/* ===== FITDAYS IMPORT COMPONENT ===== */
+function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
+  const fileRef = React.useRef(null);
+  const [previews, setPreviews] = React.useState([]);
+  const [imagesData, setImagesData] = React.useState([]);
+  const [busy, setBusy] = React.useState(false);
+  const [extracted, setExtracted] = React.useState(null);
+  const [form, setForm] = React.useState({});
+  const [date, setDate] = React.useState(() => new Date().toISOString().slice(0, 10));
+  const [saved, setSaved] = React.useState(false);
+  const [err, setErr] = React.useState("");
+  const [segGrasaOpen, setSegGrasaOpen] = React.useState(false);
+  const [segMusculoOpen, setSegMusculoOpen] = React.useState(false);
+
+  const compressImage = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxW = 600;
+        const scale = Math.min(1, maxW / img.width);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", 0.8));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  const onFiles = async (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    e.target.value = "";
+    setSaved(false);
+    setExtracted(null);
+    setForm({});
+    setErr("");
+    try {
+      const newPreviews = [];
+      const newImagesData = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const dataUrl = await compressImage(file);
+        newPreviews.push(dataUrl);
+        const b64 = dataUrl.split(",")[1];
+        const mime = ["image/jpeg","image/png","image/webp"].includes(file.type) ? file.type : "image/jpeg";
+        newImagesData.push({ b64, mime });
+      }
+      setPreviews(newPreviews);
+      setImagesData(newImagesData);
+      if (newImagesData.length === 0) {
+        setErr("No se cargó ninguna imagen.");
+      }
+    } catch(ex) {
+      setErr("No se pudieron leer las imágenes.");
+    }
+  };
+
+  const doExtract = async () => {
+    if (imagesData.length === 0 || busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const sys = "Eres un extractor de datos de composición corporal. Analiza estas capturas de pantalla de la app Fitdays y extrae TODOS los valores numéricos visibles. Si un valor aparece en múltiples imágenes, usa el más reciente o calcula un promedio para músculos (ambos lados). Si un valor no aparece claramente, omítelo (no inventes). Devuelve JSON.";
+
+      // Build message with all images
+      const content = [
+        ...imagesData.map(img => ({
+          type: "image",
+          source: { type: "base64", media_type: img.mime, data: img.b64 }
+        })),
+        { type: "text", text: `Extrae todos los datos de composición corporal visibles en estas ${imagesData.length} captura(s) de Fitdays. Si hay datos duplicados/conflictivos en múltiples imágenes, fusiona inteligentemente: prefiere valores no-null, promedia valores de músculos si aparecen en distintas imágenes.` }
+      ];
+
+      const out = await callGemini([{
+        role: "user",
+        content
+      }], sys, FITDAYS_SCHEMA);
+
+      const parsed = cleanAndParseJSON(out);
+      if (!parsed || parsed.peso == null) {
+        setErr("No se detectaron datos. Intenta con otras capturas.");
+      } else {
+        setExtracted(parsed);
+        const f = {};
+        Object.keys(FITDAYS_SCHEMA.properties).forEach(k => {
+          if (parsed[k] != null) f[k] = String(parsed[k]);
+        });
+        setForm(f);
+      }
+    } catch(ex) {
+      setErr("Error IA: " + (ex.message || ex));
+    }
+    setBusy(false);
+  };
+
+  const fv = (k) => form[k] !== undefined ? form[k] : "";
+  const sv = (k) => (v) => setForm(prev => ({ ...prev, [k]: v }));
+
+  const fieldInput = (k, label, unit) => (
+    <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:5}}>
+      <span style={{fontSize:11.5, color:C.muted, flex:"0 0 140px"}}>{label}:</span>
+      <input
+        value={fv(k)}
+        onChange={e => sv(k)(e.target.value)}
+        type="number"
+        inputMode="decimal"
+        style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"5px 8px", color:C.ink, fontSize:12, outline:"none", minWidth:0}}
+      />
+      {unit && <span style={{fontSize:11, color:C.muted, whiteSpace:"nowrap"}}>{unit}</span>}
+    </div>
+  );
+
+  const doSave = () => {
+    if (!date) return;
+    const entry = {};
+    Object.keys(FITDAYS_SCHEMA.properties).forEach(k => {
+      if (form[k] !== undefined && form[k] !== "") {
+        const n = parseFloat(form[k]);
+        if (!isNaN(n)) entry[k] = n;
+      }
+    });
+    if (entry.peso == null && entry.weight == null) {
+      setErr("Se requiere el peso para guardar.");
+      return;
+    }
+    // Map peso -> weight for metricslog compatibility
+    if (entry.peso != null && entry.weight == null) entry.weight = entry.peso;
+    const current = metricslog[date] || {};
+    const updated = { ...current, ...entry };
+    const newLog = { ...metricslog, [date]: updated };
+    setMetricslog(newLog);
+    saveKey("metricslog", newLog);
+    setSaved(true);
+    setErr("");
+  };
+
+  const sectionTitle = (title, color) => (
+    <div style={{fontSize:11, fontWeight:800, color, textTransform:"uppercase", letterSpacing:".08em", marginBottom:6, marginTop:8, borderBottom:`1px solid ${C.line}`, paddingBottom:3}}>
+      {title}
+    </div>
+  );
+
+  return (
+    <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
+      <div style={{fontSize:12.5, fontWeight:800, marginBottom:10}}>📊 Importar Fitdays</div>
+
+      <input ref={fileRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={onFiles}/>
+      <button
+        onClick={() => { fileRef.current?.click(); }}
+        style={{width:"100%", height:38, borderRadius:10, border:`1px solid ${C.cyan}`, background:`${C.cyan}18`, color:C.cyan, fontSize:12.5, fontWeight:800, cursor:"pointer", marginBottom:8}}
+      >
+        📷 Cargar capturas (múltiples)
+      </button>
+
+      {previews.length > 0 && (
+        <div style={{marginBottom:10}}>
+          {/* Preview row of thumbnails */}
+          <div style={{display:"flex", gap:8, marginBottom:10, overflowX:"auto", paddingBottom:4}}>
+            {previews.map((prev, idx) => (
+              <div key={idx} style={{position:"relative", flexShrink:0}}>
+                <img src={prev} alt={`preview-${idx}`} style={{width:75, height:75, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`}}/>
+                <div style={{position:"absolute", top:2, right:2, background:C.panel, border:`1px solid ${C.line}`, borderRadius:4, fontSize:10, fontWeight:700, color:C.muted, padding:"2px 6px"}}>{idx + 1}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{display:"flex", gap:10}}>
+            <button
+              onClick={doExtract}
+              disabled={busy}
+              style={{flex:1, height:38, borderRadius:10, border:"none",
+                background: busy ? C.panel2 : `linear-gradient(135deg,${C.cyan},${C.lime})`,
+                color: busy ? C.muted : "#0c0e0b",
+                fontSize:12.5, fontWeight:800, cursor: busy ? "default" : "pointer",
+                display:"flex", alignItems:"center", justifyContent:"center", gap:6
+              }}
+            >
+              {busy
+                ? <><span style={{display:"inline-block", animation:"spin 1s linear infinite", marginRight:4}}>⟳</span> Extrayendo…</>
+                : `✦ Extraer datos con IA (${previews.length} imagen${previews.length !== 1 ? 's' : ''})`}
+            </button>
+            <button
+              onClick={() => { setPreviews([]); setImagesData([]); setForm({}); setExtracted(null); }}
+              style={{flex:"0 0 auto", height:38, borderRadius:10, border:`1px solid ${C.line}`, background:C.panel2, color:C.muted, fontSize:12, fontWeight:700, cursor:"pointer", padding:"0 12px"}}
+            >
+              ✕ Limpiar
+            </button>
+          </div>
+          {err && <div style={{color:C.rose, fontSize:11, marginTop:5}}>{err}</div>}
+        </div>
+      )}
+
+      {extracted && (
+        <div>
+          <div style={{fontSize:11, color:C.lime, fontWeight:700, marginBottom:8}}>✓ Datos extraídos — revisa y edita si necesitas:</div>
+
+          {/* Date picker */}
+          <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:10}}>
+            <span style={{fontSize:11.5, color:C.muted, flex:"0 0 140px"}}>Fecha:</span>
+            <input
+              type="date"
+              value={date}
+              onChange={e => setDate(e.target.value)}
+              style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"5px 8px", color:C.ink, fontSize:12, outline:"none"}}
+            />
+          </div>
+
+          {sectionTitle("Básico", C.cyan)}
+          {fieldInput("peso", "Peso", "kg")}
+          {fieldInput("imc", "IMC", "")}
+          {fieldInput("puntuacion", "Puntuación", "/100")}
+
+          {sectionTitle("Grasa", C.amber)}
+          {fieldInput("grasaPct", "% Grasa corporal", "%")}
+          {fieldInput("masaGrasa", "Masa grasa", "kg")}
+          {fieldInput("grasaSubc", "Grasa subcutánea", "%")}
+          {fieldInput("visceral", "Grasa visceral", "")}
+
+          {sectionTitle("Músculo", C.lime)}
+          {fieldInput("masaMuscular", "Masa muscular", "kg")}
+          {fieldInput("musculoEsq", "Músculo esquelético", "%")}
+          {fieldInput("masaEsqueletica", "Masa esquelética", "kg")}
+
+          {sectionTitle("Otros", C.muted)}
+          {fieldInput("aguaKg", "Agua corporal", "kg")}
+          {fieldInput("pctAgua", "% Agua", "%")}
+          {fieldInput("proteinaKg", "Proteína", "kg")}
+          {fieldInput("pctProteina", "% Proteína", "%")}
+          {fieldInput("bmr", "BMR", "kcal")}
+          {fieldInput("edadCorporal", "Edad corporal", "")}
+          {fieldInput("whr", "WHR", "")}
+
+          {/* Segmental grasa collapsible */}
+          <div
+            style={{fontSize:11, fontWeight:800, color:C.amber, textTransform:"uppercase", letterSpacing:".08em", marginBottom: segGrasaOpen ? 6 : 0, marginTop:8, borderBottom:`1px solid ${C.line}`, paddingBottom:3, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center"}}
+            onClick={() => setSegGrasaOpen(o => !o)}
+          >
+            <span>Segmental Grasa</span>
+            <span style={{fontSize:14}}>{segGrasaOpen ? "▲" : "▼"}</span>
+          </div>
+          {segGrasaOpen && (
+            <div>
+              {fieldInput("grasaTronco", "Tronco", "kg")}
+              {fieldInput("grasaBrazoDer", "Brazo Der.", "kg")}
+              {fieldInput("grasaBrazoIzq", "Brazo Izq.", "kg")}
+              {fieldInput("grasaPiernaDer", "Pierna Der.", "kg")}
+              {fieldInput("grasaPiernaIzq", "Pierna Izq.", "kg")}
+            </div>
+          )}
+
+          {/* Segmental músculo collapsible */}
+          <div
+            style={{fontSize:11, fontWeight:800, color:C.lime, textTransform:"uppercase", letterSpacing:".08em", marginBottom: segMusculoOpen ? 6 : 0, marginTop:8, borderBottom:`1px solid ${C.line}`, paddingBottom:3, cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center"}}
+            onClick={() => setSegMusculoOpen(o => !o)}
+          >
+            <span>Segmental Músculo</span>
+            <span style={{fontSize:14}}>{segMusculoOpen ? "▲" : "▼"}</span>
+          </div>
+          {segMusculoOpen && (
+            <div>
+              {fieldInput("musculoTronco", "Tronco", "kg")}
+              {fieldInput("musculoBrazoDer", "Brazo Der.", "kg")}
+              {fieldInput("musculoBrazoIzq", "Brazo Izq.", "kg")}
+              {fieldInput("musculoPiernaDer", "Pierna Der.", "kg")}
+              {fieldInput("musculoPiernaIzq", "Pierna Izq.", "kg")}
+            </div>
+          )}
+
+          <button
+            onClick={doSave}
+            style={{width:"100%", height:42, borderRadius:11, border:"none", marginTop:12,
+              background:`linear-gradient(135deg,${C.lime},${C.cyan})`,
+              color:"#0c0e0b", fontSize:13, fontWeight:800, cursor:"pointer"
+            }}
+          >
+            💾 Guardar medición
+          </button>
+          {saved && <div style={{color:C.lime, fontSize:12, fontWeight:700, textAlign:"center", marginTop:6}}>✓ Medición guardada correctamente</div>}
+          {err && <div style={{color:C.rose, fontSize:11, marginTop:5}}>{err}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ===== TAB REGISTRO / PESO / COMPOSICIÓN CORPORAL ===== */
 function Registro({
   notes, setNotes, target, bodyComp, setBodyComp, geminiKey,
@@ -11521,7 +12377,7 @@ function Registro({
       .filter(([dateStr]) => dateStr <= selectedDateStr)
       .map(([dateStr, m]) => ({ date: dateStr, w: m ? m.weight : undefined }))
       .filter(x => x.w !== undefined)
-      .sort((a, b) => b.date.localeCompare(a.date));
+      .sort((a, b) => b.date < a.date ? -1 : (b.date > a.date ? 1 : 0));
     
     if (sortedWeights.length === 0) return null;
     newestW = sortedWeights[0].w;
@@ -11984,7 +12840,7 @@ function Registro({
     // Historial de composición corporal (últimas mediciones)
     const compHistory = Object.entries(metricslog || {})
       .filter(([, m]) => m && (m.musculo || m.grasaPct))
-      .sort((a, b) => a[0].localeCompare(b[0]))
+      .sort((a, b) => a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0))
       .slice(-6)
       .map(([d, m]) => `${d}: ${m.musculo ? m.musculo + 'kg músculo' : ''} ${m.grasaPct ? m.grasaPct + '% grasa' : ''}`.trim())
       .join(" → ");
@@ -11992,7 +12848,7 @@ function Registro({
     // Historial de perímetros (últimas 3 mediciones)
     const perimHistory = Object.entries(metricslog || {})
       .filter(([, m]) => m && (m.brazoDer || m.cintura || m.pecho))
-      .sort((a, b) => a[0].localeCompare(b[0]))
+      .sort((a, b) => a[0] < b[0] ? -1 : (a[0] > b[0] ? 1 : 0))
       .slice(-3)
       .map(([d, m]) => `${d}: brazo ${m.brazoDer || '?'}cm, cintura ${m.cintura || '?'}cm, pecho ${m.pecho || '?'}cm`)
       .join(" | ");
@@ -12748,119 +13604,89 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         {renderBodyCompChart(bodyCompHistory)}
       </div>
 
-      {/* Indicador Visual de Asimetrías de Perímetros */}
-      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
-        <div style={{fontSize:12.5, fontWeight:800, marginBottom:4, display:"flex", alignItems:"center", gap:6}}>
-          <ClipboardList size={15} color={C.lime}/> Mapa Visual de Asimetrías
-        </div>
-        <div style={{fontSize:11.5, color:C.muted, marginBottom:14}}>
-          Diferencias bilaterales mayores a 0.5 cm se marcan en color naranja/rojo.
-        </div>
-        
-        <div style={{display:"flex", gap:14, alignItems:"center", flexWrap:"wrap", justifyContent:"center"}}>
-          {/* SVG Body Outline */}
-          <div style={{background:C.panel2, borderRadius:12, padding:8, border:`1px solid ${C.line}`}}>
-            <svg width="200" height="260" viewBox="0 0 200 260" style={{display:"block", margin:"0 auto"}}>
-              {/* Head */}
-              <circle cx="100" cy="30" r="12" fill="none" stroke={C.muted} strokeWidth="2"/>
-              <text x="100" y="33" fill={C.muted} fontSize="8" textAnchor="middle" fontWeight="bold">Bruno</text>
-              
-              {/* Neck */}
-              <line x1="100" y1="42" x2="100" y2="48" stroke={C.muted} strokeWidth="2"/>
-              
-              {/* Torso */}
-              <path d="M 80,48 L 120,48 L 112,120 L 88,120 Z" fill="none" stroke={C.muted} strokeWidth="2"/>
-              <text x="100" y="85" fill={C.muted} fontSize="8.5" textAnchor="middle">Cintura: {activeMetrics.cintura || "?"}cm</text>
-              <text x="100" y="68" fill={C.muted} fontSize="8.5" textAnchor="middle">Pecho: {activeMetrics.pecho || "?"}cm</text>
-              
-              {/* Pelvis */}
-              <path d="M 88,120 L 112,120 L 115,135 L 85,135 Z" fill="none" stroke={C.muted} strokeWidth="1.8"/>
-              
-              {/* Arms */}
-              <path d="M 80,48 L 55,100" fill="none" stroke={rightArmColor} strokeWidth={rightArmWidth} strokeLinecap="round"/>
-              <text x="45" y="75" fill={rightArmColor} fontSize="9" textAnchor="end" fontWeight="bold">D: {bD || "?"}</text>
-              
-              <path d="M 120,48 L 145,100" fill="none" stroke={leftArmColor} strokeWidth={leftArmWidth} strokeLinecap="round"/>
-              <text x="155" y="75" fill={leftArmColor} fontSize="9" textAnchor="start" fontWeight="bold">I: {bI || "?"}</text>
-              
-              {/* Thighs */}
-              <path d="M 90,135 L 82,190" fill="none" stroke={rightThighColor} strokeWidth={rightThighWidth} strokeLinecap="round"/>
-              <text x="45" y="165" fill={rightThighColor} fontSize="9" textAnchor="end" fontWeight="bold">D: {mD || "?"}</text>
-              
-              <path d="M 110,135 L 118,190" fill="none" stroke={leftThighColor} strokeWidth={leftThighWidth} strokeLinecap="round"/>
-              <text x="155" y="165" fill={leftThighColor} fontSize="9" textAnchor="start" fontWeight="bold">I: {mI || "?"}</text>
-              
-              {/* Calves */}
-              <path d="M 82,190 L 82,240" fill="none" stroke={rightCalfColor} strokeWidth={rightCalfWidth} strokeLinecap="round"/>
-              <text x="45" y="215" fill={rightCalfColor} fontSize="9" textAnchor="end" fontWeight="bold">D: {pD || "?"}</text>
-              
-              <path d="M 118,190 L 118,240" fill="none" stroke={leftCalfColor} strokeWidth={leftCalfWidth} strokeLinecap="round"/>
-              <text x="155" y="215" fill={leftCalfColor} fontSize="9" textAnchor="start" fontWeight="bold">I: {pI || "?"}</text>
+      {/* Radar chart de medidas corporales */}
+      {(() => {
+        const entry = metricslog[selectedDateStr] || {};
+        const prevDates = Object.keys(metricslog).filter(d => d < selectedDateStr).sort().slice(-1);
+        const prevEntry = prevDates.length > 0 ? (metricslog[prevDates[0]] || {}) : null;
 
-              {/* Asymmetry Warnings overlays */}
-              {showBAsym && (
-                <g>
-                  <rect x="75" y="105" width="50" height="12" rx="3" fill="rgba(255,107,138,0.9)"/>
-                  <text x="100" y="114" fill="#000" fontSize="7.5" textAnchor="middle" fontWeight="bold">Δ Brazos: {bDiff.toFixed(1)}</text>
-                </g>
-              )}
-              {showMAsym && (
-                <g>
-                  <rect x="75" y="145" width="50" height="12" rx="3" fill="rgba(255,107,138,0.9)"/>
-                  <text x="100" y="154" fill="#000" fontSize="7.5" textAnchor="middle" fontWeight="bold">Δ Muslos: {mDiff.toFixed(1)}</text>
-                </g>
-              )}
-              {showPAsym && (
-                <g>
-                  <rect x="75" y="200" width="50" height="12" rx="3" fill="rgba(255,107,138,0.9)"/>
-                  <text x="100" y="209" fill="#000" fontSize="7.5" textAnchor="middle" fontWeight="bold">Δ Pantorrillas: {pDiff.toFixed(1)}</text>
-                </g>
-              )}
+        const fields = [
+          { label:"Brazo", cur: entry.brazoDer ? (((+entry.brazoDer||0)+(+entry.brazoIzq||0))/2) : null, max:50 },
+          { label:"Muslo", cur: entry.musloDer ? (((+entry.musloDer||0)+(+entry.musloIzq||0))/2) : null, max:80 },
+          { label:"Pantorrilla", cur: entry.pantorrillaDer ? (((+entry.pantorrillaDer||0)+(+entry.pantorrillaIzq||0))/2) : null, max:50 },
+          { label:"Cintura", cur: entry.cintura ? (+entry.cintura||0) : null, max:120, invert:true },
+          { label:"Pecho", cur: entry.pecho ? (+entry.pecho||0) : null, max:130 },
+          { label:"Peso", cur: entry.weight ? (+entry.weight||0) : null, max:130 },
+        ];
+        const hasData = fields.some(f => f.cur !== null && f.cur > 0);
+        if (!hasData) return null;
+
+        const prevFields = prevEntry ? [
+          { cur: prevEntry.brazoDer ? (((+prevEntry.brazoDer||0)+(+prevEntry.brazoIzq||0))/2) : null, max:50 },
+          { cur: prevEntry.musloDer ? (((+prevEntry.musloDer||0)+(+prevEntry.musloIzq||0))/2) : null, max:80 },
+          { cur: prevEntry.pantorrillaDer ? (((+prevEntry.pantorrillaDer||0)+(+prevEntry.pantorrillaIzq||0))/2) : null, max:50 },
+          { cur: prevEntry.cintura ? (+prevEntry.cintura||0) : null, max:120, invert:true },
+          { cur: prevEntry.pecho ? (+prevEntry.pecho||0) : null, max:130 },
+          { cur: prevEntry.weight ? (+prevEntry.weight||0) : null, max:130 },
+        ] : null;
+
+        const N = fields.length;
+        const R = 75, cx = 95, cy = 90;
+        const angles = fields.map((_, i) => (2 * Math.PI * i / N) - Math.PI / 2);
+
+        const toXY = (r, angle) => [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
+
+        const polygon = (vals, fillColor, opacity) => {
+          const pts = vals.map((v, i) => {
+            const norm = v !== null ? Math.min(1, Math.max(0, v / (fields[i].max || 1))) : 0;
+            const r2 = norm * R;
+            return toXY(r2, angles[i]).map(x => x.toFixed(1)).join(",");
+          });
+          return <polygon points={pts.join(" ")} fill={fillColor} fillOpacity={opacity} stroke={fillColor} strokeWidth="1.5" strokeLinejoin="round"/>;
+        };
+
+        const curVals = fields.map(f => f.cur);
+        const prevVals = prevFields ? prevFields.map(f => f.cur) : null;
+
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
+            <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", gap:6}}>
+              <Activity size={15} color={C.cyan}/> Radar Corporal
+              {prevDates.length > 0 && <span style={{fontSize:10, color:C.muted, fontWeight:500}}>vs {prevDates[0]}</span>}
+            </div>
+            <svg width="100%" viewBox={`0 0 190 180`} style={{display:"block", maxWidth:260, margin:"0 auto"}}>
+              {[0.25, 0.5, 0.75, 1].map(scale => (
+                <polygon key={scale}
+                  points={angles.map(a => toXY(R*scale, a).map(x => x.toFixed(1)).join(",")).join(" ")}
+                  fill="none" stroke={C.line} strokeWidth="0.8"/>
+              ))}
+              {angles.map((a, i) => {
+                const [x1, y1] = toXY(0, a);
+                const [x2, y2] = toXY(R, a);
+                const [lx, ly] = toXY(R + 12, a);
+                return (
+                  <g key={i}>
+                    <line x1={x1.toFixed(1)} y1={y1.toFixed(1)} x2={x2.toFixed(1)} y2={y2.toFixed(1)} stroke={C.line} strokeWidth="0.8"/>
+                    <text x={lx.toFixed(1)} y={ly.toFixed(1)} textAnchor="middle" dominantBaseline="middle" fill={C.muted} fontSize="8">{fields[i].label}</text>
+                  </g>
+                );
+              })}
+              {prevVals && polygon(prevVals, C.amber, 0.15)}
+              {polygon(curVals, C.cyan, 0.25)}
+              {curVals.map((v, i) => {
+                if (v === null) return null;
+                const norm = Math.min(1, Math.max(0, v / (fields[i].max || 1)));
+                const [px, py] = toXY(norm * R, angles[i]);
+                return <circle key={i} cx={px.toFixed(1)} cy={py.toFixed(1)} r="3" fill={C.cyan} stroke={C.panel} strokeWidth="1.2"/>;
+              })}
             </svg>
+            <div style={{display:"flex", gap:12, justifyContent:"center", fontSize:10, color:C.muted, marginTop:4}}>
+              <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:8, height:8, borderRadius:"50%", background:C.cyan}}/> Hoy</span>
+              {prevVals && <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:8, height:8, borderRadius:"50%", background:C.amber}}/> Anterior</span>}
+            </div>
           </div>
-          
-          {/* Warnings List & Suggestions */}
-          <div style={{flex:1, minWidth:220, display:"flex", flexDirection:"column", gap:8}}>
-            {(!showBAsym && !showMAsym && !showPAsym) ? (
-              <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:12, padding:12, fontSize:12.5, color:C.muted}}>
-                ✔ Simetría muscular correcta (diferencias bilaterales ≤ 0.5 cm). Sigue así.
-              </div>
-            ) : (
-              <>
-                <div style={{background:"rgba(255,107,138,.08)", border:`1px solid ${C.rose}`, borderRadius:12, padding:12}}>
-                  <div style={{fontSize:12, fontWeight:800, color:C.rose, marginBottom:6, display:"flex", alignItems:"center", gap:4}}>
-                    <ShieldAlert size={14}/> Asimetrías Significativas Detectadas
-                  </div>
-                  <ul style={{margin:0, paddingLeft:16, fontSize:12, color:C.ink, lineHeight:1.4}}>
-                    {showBAsym && (
-                      <li style={{marginBottom:4}}>
-                        Brazos: diferencia de <b style={{color:C.rose}}>{bDiff.toFixed(1)} cm</b> (Lado {bD > bI ? "Derecho" : "Izquierdo"} dominante).
-                      </li>
-                    )}
-                    {showMAsym && (
-                      <li style={{marginBottom:4}}>
-                        Muslos: diferencia de <b style={{color:C.rose}}>{mDiff.toFixed(1)} cm</b> (Lado {mD > mI ? "Derecho" : "Izquierdo"} dominante).
-                      </li>
-                    )}
-                    {showPAsym && (
-                      <li style={{marginBottom:4}}>
-                        Pantorrillas: diferencia de <b style={{color:C.rose}}>{pDiff.toFixed(1)} cm</b> (Lado {pD > pI ? "Derecho" : "Izquierdo"} dominante).
-                      </li>
-                    )}
-                  </ul>
-                </div>
-                
-                <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:12, padding:12}}>
-                  <div style={{fontSize:11.5, fontWeight:800, color:C.lime, marginBottom:4}}>Recomendación de Entrenamiento Unilateral:</div>
-                  <div style={{fontSize:12, color:C.muted, lineHeight:1.4}}>
-                    Introduce ejercicios unilaterales (mancuernas/poleas) en tus rutinas. Inicia siempre el set con el miembro no dominante (más débil) y limita el miembro dominante al mismo número de repeticiones y peso.
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Radar chart de medidas corporales */}
       {(() => {
@@ -13121,6 +13947,14 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           </div>
         );
       })()}
+
+      {/* Fitdays Trends + Import */}
+      <FitdaysTrends metricslog={metricslog}/>
+      <FitdaysImport
+        metricslog={metricslog}
+        setMetricslog={setMetricslog}
+        geminiKey={geminiKey}
+      />
 
       {/* Galería de fotos de progreso */}
       {(() => {
