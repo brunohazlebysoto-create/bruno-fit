@@ -3598,15 +3598,25 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
       .filter(n => (n.date || "").slice(0,10) === selectedDateStr)
       .map(n => n.text).join(" / ") || "Sin notas de sensaciones.";
 
-    const msg = `[ANÁLISIS DE ENTRENAMIENTO — todos los datos ya están cargados en tu sistema]
+    const msg = `[ANÁLISIS DE ENTRENAMIENTO — ${selectedDateStr}]
 
-Ejercicios completados hoy (${selectedDateStr}):
+Ejercicios completados hoy:
 ${todayWorkout}
 
 ${nutritionLine}
 Sensaciones/notas del día: ${todaySensations}
 
-Analiza este entrenamiento directamente con los datos anteriores y con mi historial que ya tenés. Evalúa: progresión vs semanas previas, si el volumen y los pesos fueron adecuados, y dá 2-3 recomendaciones concretas para la próxima sesión. No me pidas que registre datos — todo ya está en tu sistema.`;
+Analiza este entrenamiento usando mi historial completo que ya tenés. Responde con EXACTAMENTE esta estructura, en este orden:
+
+**Progresión** — compará cada ejercicio con las 2-4 semanas anteriores: ¿subí peso, mantuve o bajé? ¿más o menos series/reps?
+
+**Lo que salió bien** — 2-3 puntos concretos positivos de la sesión de hoy.
+
+**Lo que mejorar** — 2-3 puntos concretos con el problema y la corrección exacta.
+
+**Próxima sesión** — para cada ejercicio principal: peso objetivo, reps y series recomendadas. Sé específico con números.
+
+No repitas los datos que ya te mandé. No me pidas registrar nada.`;
     await sendCoachMessage(msg);
   };
 
@@ -7878,6 +7888,7 @@ function Perfil({
   const [availableGeminiModels, setAvailableGeminiModels] = useState([]);
   useEffect(() => {
     loadKey("gemini_native_model", "gemini-2.5-flash").then(m => setGeminiNativeModel(m || "gemini-2.5-flash"));
+    loadKey("gemini_available_models", []).then(ms => { if (Array.isArray(ms) && ms.length) setAvailableGeminiModels(ms); });
   }, []);
   const saveGeminiNativeModel = (m) => { setGeminiNativeModel(m); saveKey("gemini_native_model", m); };
 
@@ -8210,7 +8221,7 @@ function Perfil({
                         .map(m => m.name?.replace("models/", ""))
                         .filter(n => n && /flash|pro/i.test(n))
                         .sort();
-                      if (names.length) setAvailableGeminiModels(names);
+                      if (names.length) { setAvailableGeminiModels(names); saveKey("gemini_available_models", names); }
                     } catch {}
                   }} style={{ fontSize: 10, color: "var(--accent-cyan)", background: "none", border: "1px solid var(--accent-cyan)", borderRadius: 6, padding: "2px 7px", cursor: "pointer", fontWeight: 700 }}>
                     Cargar modelos
@@ -8221,15 +8232,11 @@ function Perfil({
                   onChange={e => saveGeminiNativeModel(e.target.value)}
                   style={{ background: "var(--panel-bg)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-sm)", padding: "8px 10px", fontSize: 12, color: "var(--text-ink)", width: "100%" }}
                 >
-                  {availableGeminiModels.length > 0
-                    ? availableGeminiModels.map(m => <option key={m} value={m}>{m}</option>)
-                    : <>
-                        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                        <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
-                        <option value="gemini-2.5-pro">gemini-2.5-pro</option>
-                        <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-                      </>
-                  }
+                  {(() => {
+                    const opts = availableGeminiModels.length > 0 ? availableGeminiModels : ["gemini-2.5-flash","gemini-2.5-flash-lite","gemini-2.5-pro","gemini-2.0-flash"];
+                    const all = opts.includes(geminiNativeModel) ? opts : [geminiNativeModel, ...opts];
+                    return all.map(m => <option key={m} value={m}>{m}</option>);
+                  })()}
                 </select>
                 <div style={{ fontSize: 10, color: "var(--text-muted)", lineHeight: 1.4 }}>
                   Tocá <b>Cargar modelos</b> para ver los disponibles con tu clave.
