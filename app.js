@@ -494,6 +494,8 @@ async function parseDailyCloudData(cloudData, today) {
   return { finalLog, finalWater, finalSupplements };
 }
 
+let _rrIdx = 0; // round-robin global para Gemini keys
+
 async function callGemini(messages, systemInstruction, responseSchema = null) {
   let apiKeysStr = await loadKey("gemini_api_key", "");
   
@@ -521,15 +523,16 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
 
   const orderedKeys = [];
   if (geminiKeys.length > 0) {
-    const startGemini = Math.floor(Math.random() * geminiKeys.length);
+    // Round-robin estricto: cada llamada empieza en la siguiente clave
+    const startGemini = _rrIdx % geminiKeys.length;
+    _rrIdx = (_rrIdx + 1) % geminiKeys.length;
     for (let count = 0; count < geminiKeys.length; count++) {
       orderedKeys.push(geminiKeys[(startGemini + count) % geminiKeys.length]);
     }
   }
   if (openRouterKeys.length > 0) {
-    const startOR = Math.floor(Math.random() * openRouterKeys.length);
     for (let count = 0; count < openRouterKeys.length; count++) {
-      orderedKeys.push(openRouterKeys[(startOR + count) % openRouterKeys.length]);
+      orderedKeys.push(openRouterKeys[count % openRouterKeys.length]);
     }
   }
 
@@ -664,7 +667,9 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
 
         if (!res.ok) {
           const errorData = await res.json().catch(() => ({}));
-          throw new Error(errorData.error?.message || `HTTP ${res.status}`);
+          const errMsg = errorData.error?.message || `HTTP ${res.status}`;
+          console.error(`[Gemini key ${idx+1}/${orderedKeys.length}] ${res.status}: ${errMsg}`);
+          throw new Error(errMsg);
         }
 
         const data = await res.json();
