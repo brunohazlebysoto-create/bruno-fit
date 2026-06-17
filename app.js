@@ -7870,35 +7870,30 @@ function Perfil({
   }, []);
   const saveGeminiNativeModel = (m) => { setGeminiNativeModel(m); saveKey("gemini_native_model", m); };
 
-  const testSingleKey = async (key, idx) => {
-    setKeyStatuses(prev => ({ ...prev, [idx]: "testing" }));
+  const testSingleKey = async (key) => {
+    const id = key.slice(0, 12);
+    setKeyStatuses(prev => ({ ...prev, [id]: "testing" }));
     try {
-      const isOR = key.startsWith("sk-or-");
       let ok = false;
-      if (isOR) {
-        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ model: "moonshotai/kimi-k2.6:free", messages: [{ role: "user", content: "ok" }], max_tokens: 1 })
+      if (key.startsWith("sk-or-")) {
+        // OpenRouter: verificar con models list
+        const res = await fetch("https://openrouter.ai/api/v1/models", {
+          headers: { "Authorization": `Bearer ${key}` }
         });
         ok = res.ok;
       } else {
-        const model = geminiNativeModel || "gemini-2.5-flash";
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contents: [{ parts: [{ text: "ok" }], role: "user" }], generationConfig: { maxOutputTokens: 1 } })
-        });
+        // Gemini: listar modelos — no gasta cuota de generación
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}&pageSize=1`);
         ok = res.ok;
       }
-      setKeyStatuses(prev => ({ ...prev, [idx]: ok ? "ok" : "error" }));
+      setKeyStatuses(prev => ({ ...prev, [id]: ok ? "ok" : "error" }));
     } catch {
-      setKeyStatuses(prev => ({ ...prev, [idx]: "error" }));
+      setKeyStatuses(prev => ({ ...prev, [id]: "error" }));
     }
   };
 
   const testAllKeys = async (keys) => {
-    await Promise.all(keys.map((k, i) => testSingleKey(k, i)));
+    await Promise.all(keys.map(k => testSingleKey(k)));
   };
   const [newKeyInput, setNewKeyInput] = useState("");
   const [linkInput, setLinkInput] = useState("");
@@ -8130,11 +8125,12 @@ function Perfil({
                   </button>
                 </div>
                 {keysList.map((k, idx) => {
-                  const st = keyStatuses[idx];
+                  const id = k.slice(0, 12);
+                  const st = keyStatuses[id];
                   const dotColor = st === "ok" ? "#7fff6a" : st === "error" ? "var(--accent-rose)" : st === "testing" ? "var(--accent-amber)" : "var(--line-color)";
                   const dotLabel = st === "ok" ? "OK" : st === "error" ? "Error" : st === "testing" ? "..." : "—";
                   return (
-                    <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, background: "var(--panel-bg)", padding: "8px 10px", borderRadius: "var(--radius-sm)", border: `1px solid ${st === "ok" ? "#7fff6a44" : st === "error" ? "rgba(255,107,138,0.3)" : "var(--line-color)"}` }}>
+                    <div key={id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, background: "var(--panel-bg)", padding: "8px 10px", borderRadius: "var(--radius-sm)", border: `1px solid ${st === "ok" ? "#7fff6a44" : st === "error" ? "rgba(255,107,138,0.3)" : "var(--line-color)"}` }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                         <div style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor, flexShrink: 0, boxShadow: st === "ok" ? "0 0 6px #7fff6a" : st === "error" ? "0 0 6px var(--accent-rose)" : "none", animation: st === "testing" ? "pulse 1s infinite" : "none" }} />
                         <span style={{ fontFamily: "monospace", color: "var(--text-ink)" }}>
@@ -8143,7 +8139,7 @@ function Perfil({
                         <span style={{ fontSize: 10, color: dotColor, fontWeight: 700 }}>{dotLabel}</span>
                       </div>
                       <div style={{ display: "flex", gap: 6 }}>
-                        <button onClick={() => testSingleKey(k, idx)} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "2px 6px" }}>Probar</button>
+                        <button onClick={() => testSingleKey(k)} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "2px 6px" }}>Probar</button>
                         <button onClick={() => handleRemoveKey(idx)} style={{ background: "none", border: "none", color: "var(--accent-rose)", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "2px 6px" }}>✕</button>
                       </div>
                     </div>
