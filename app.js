@@ -673,7 +673,10 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
         }
 
         const data = await res.json();
-        const textOut = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        const parts = data.candidates?.[0]?.content?.parts || [];
+        // gemini-2.5-flash thinking models prepend a {thought:true} part before the actual response
+        const textPart = parts.find(p => !p.thought && p.text != null) || parts[parts.length - 1];
+        const textOut = textPart?.text || "";
         return textOut.trim();
       }
     } catch (e) {
