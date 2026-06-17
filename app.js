@@ -7864,10 +7864,42 @@ function Perfil({
 }) {
   const [showKeyField, setShowKeyField] = useState(false);
   const [geminiNativeModel, setGeminiNativeModel] = useState("gemini-2.5-flash");
+  const [keyStatuses, setKeyStatuses] = useState({}); // idx -> 'testing'|'ok'|'error'
   useEffect(() => {
     loadKey("gemini_native_model", "gemini-2.5-flash").then(m => setGeminiNativeModel(m || "gemini-2.5-flash"));
   }, []);
   const saveGeminiNativeModel = (m) => { setGeminiNativeModel(m); saveKey("gemini_native_model", m); };
+
+  const testSingleKey = async (key, idx) => {
+    setKeyStatuses(prev => ({ ...prev, [idx]: "testing" }));
+    try {
+      const isOR = key.startsWith("sk-or-");
+      let ok = false;
+      if (isOR) {
+        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "moonshotai/kimi-k2.6:free", messages: [{ role: "user", content: "ok" }], max_tokens: 1 })
+        });
+        ok = res.ok;
+      } else {
+        const model = geminiNativeModel || "gemini-2.5-flash";
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contents: [{ parts: [{ text: "ok" }], role: "user" }], generationConfig: { maxOutputTokens: 1 } })
+        });
+        ok = res.ok;
+      }
+      setKeyStatuses(prev => ({ ...prev, [idx]: ok ? "ok" : "error" }));
+    } catch {
+      setKeyStatuses(prev => ({ ...prev, [idx]: "error" }));
+    }
+  };
+
+  const testAllKeys = async (keys) => {
+    await Promise.all(keys.map((k, i) => testSingleKey(k, i)));
+  };
   const [newKeyInput, setNewKeyInput] = useState("");
   const [linkInput, setLinkInput] = useState("");
   const [linkSuccess, setLinkSuccess] = useState(null);
@@ -8091,20 +8123,32 @@ function Perfil({
 
             {keysList.length > 0 ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6, background: "var(--panel-bg-sec)", padding: 10, borderRadius: "var(--radius-md)", border: "1px solid var(--line-color)" }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>Claves activas ({keysList.length}):</div>
-                {keysList.map((k, idx) => (
-                  <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, background: "var(--panel-bg)", padding: "8px 10px", borderRadius: "var(--radius-sm)", border: "1px solid var(--line-color)" }}>
-                    <span style={{ fontFamily: "monospace", color: "var(--text-ink)" }}>
-                      {k.length > 15 ? `${k.slice(0, 8)}...${k.slice(-4)}` : "Clave activa"}
-                    </span>
-                    <button 
-                      onClick={() => handleRemoveKey(idx)} 
-                      style={{ background: "none", border: "none", color: "var(--accent-rose)", cursor: "pointer", fontSize: 11, fontWeight: 700, padding: 4 }}
-                    >
-                      Eliminar
-                    </button>
-                  </div>
-                ))}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>Claves activas ({keysList.length}):</div>
+                  <button onClick={() => testAllKeys(keysList)} style={{ fontSize: 10, fontWeight: 700, color: "var(--accent-cyan)", background: "none", border: "1px solid var(--accent-cyan)", borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}>
+                    Probar todas
+                  </button>
+                </div>
+                {keysList.map((k, idx) => {
+                  const st = keyStatuses[idx];
+                  const dotColor = st === "ok" ? "#7fff6a" : st === "error" ? "var(--accent-rose)" : st === "testing" ? "var(--accent-amber)" : "var(--line-color)";
+                  const dotLabel = st === "ok" ? "OK" : st === "error" ? "Error" : st === "testing" ? "..." : "—";
+                  return (
+                    <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, background: "var(--panel-bg)", padding: "8px 10px", borderRadius: "var(--radius-sm)", border: `1px solid ${st === "ok" ? "#7fff6a44" : st === "error" ? "rgba(255,107,138,0.3)" : "var(--line-color)"}` }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor, flexShrink: 0, boxShadow: st === "ok" ? "0 0 6px #7fff6a" : st === "error" ? "0 0 6px var(--accent-rose)" : "none", animation: st === "testing" ? "pulse 1s infinite" : "none" }} />
+                        <span style={{ fontFamily: "monospace", color: "var(--text-ink)" }}>
+                          {k.startsWith("sk-or-") ? "OpenRouter · " : "Gemini · "}{k.length > 15 ? `${k.slice(0, 6)}...${k.slice(-4)}` : "Clave"}
+                        </span>
+                        <span style={{ fontSize: 10, color: dotColor, fontWeight: 700 }}>{dotLabel}</span>
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button onClick={() => testSingleKey(k, idx)} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "2px 6px" }}>Probar</button>
+                        <button onClick={() => handleRemoveKey(idx)} style={{ background: "none", border: "none", color: "var(--accent-rose)", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "2px 6px" }}>✕</button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               <div style={{ fontSize: 11, color: "var(--text-muted)", textAlign: "center", padding: "12px 0", border: "1px dashed var(--line-color)", borderRadius: "var(--radius-md)" }}>
