@@ -1183,24 +1183,36 @@ const MUSCLE_ALIASES = {
   "Deltoide ant.":"Deltoides","Deltoide lat.":"Deltoides","Deltoide post.":"Deltoides",
   "Core":"Core","Pantorrilla":"Pantorrillas"
 };
-function calcMuscleVolumeBalance(exlog, exercises) {
+function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
   const primaryMuscles = ["Pectoral","Espalda","Cuádriceps","Isquios","Deltoides","Bíceps","Tríceps","Glúteos","Antebrazo","Core","Pantorrillas"];
   const counts = {};
   primaryMuscles.forEach(m=>{ counts[m] = 0; });
-  const cutoff28 = Date.now() - 28*86400000;
+  const cutoff = days >= 999 ? 0 : Date.now() - days * 86400000;
+  let minDate = Infinity;
   Object.entries(exlog||{}).forEach(([exName, sets])=>{
-    const muscleList = (exercises&&exercises[exName]?.musculos) || MUSCLES[exName] || [];
-    const recentSets = (sets||[]).filter(s=>s?.date && new Date(s.date).getTime()>cutoff28 && s?.type!=="warmup");
+    const muscleList = (exercises&&Object.values(exercises).flat().find(e=>e.name===exName)?.musculos) || MUSCLES[exName] || [];
+    const filteredSets = (sets||[]).filter(s=>s?.date && (days >= 999 || new Date(s.date).getTime()>cutoff) && s?.type!=="warmup");
+    filteredSets.forEach(s => {
+      const t = new Date(s.date).getTime();
+      if (t < minDate) minDate = t;
+    });
     muscleList.forEach(rawM=>{
       const m = MUSCLE_ALIASES[rawM] || rawM;
-      if (m in counts) counts[m] += recentSets.length;
+      if (m in counts) counts[m] += filteredSets.length;
     });
   });
+  // Weeks divisor: for "Todo" use full history span, else use days/7
+  let weeks;
+  if (days >= 999) {
+    weeks = minDate < Infinity ? Math.max(1, (Date.now() - minDate) / (7 * 86400000)) : 1;
+  } else {
+    weeks = days / 7;
+  }
   const result = {};
   primaryMuscles.forEach(m=>{
-    const setsPerWeek = Math.round((counts[m]/4)*10)/10;
+    const setsPerWeek = Math.round((counts[m]/weeks)*10)/10;
     let status, recommendation;
-    if (setsPerWeek === 0) { status="neglected"; recommendation="Sin trabajo en 4 sem — añade ≥2 series/sem"; }
+    if (setsPerWeek === 0) { status="neglected"; recommendation="Sin trabajo en este período — añade ≥2 series/sem"; }
     else if (setsPerWeek < 8) { status="low"; recommendation=`Solo ${setsPerWeek} ser/sem — objetivo mínimo 8`; }
     else if (setsPerWeek <= 20) { status="optimal"; recommendation="Volumen en rango óptimo"; }
     else { status="high"; recommendation="Posible sobrevolumen — considera reducir"; }
@@ -8637,23 +8649,37 @@ const SLUG_MUSCLE = {
 
 /* ===== MAPA DE CALOR MUSCULAR ===== */
 function MuscleHeatmap({ exlog, days, onChangeDays }) {
-  const muscleSets = useMemo(() => {
+  const muscleWeekly = useMemo(() => {
     const cutoff = days >= 999 ? 0 : Date.now() - days * 86400000;
     const counts = {};
+    let minDate = Infinity;
     Object.entries(exlog || {}).forEach(([exName, sets]) => {
       const muscles = (MUSCLES[exName] || []).map(m => m === "Deltoide ant." ? "Deltoides" : m);
       (sets || [])
-        .filter(s => s.type !== "warmup" && (days >= 999 || new Date(s.date).getTime() >= cutoff))
-        .forEach(() => muscles.forEach(m => { counts[m] = (counts[m] || 0) + 1; }));
+        .filter(s => s?.date && s.type !== "warmup" && (days >= 999 || new Date(s.date).getTime() >= cutoff))
+        .forEach(s => {
+          const t = new Date(s.date).getTime();
+          if (t < minDate) minDate = t;
+          muscles.forEach(m => { counts[m] = (counts[m] || 0) + 1; });
+        });
     });
-    return counts;
+    // Normalize to sets/week
+    let weeks;
+    if (days >= 999) {
+      weeks = minDate < Infinity ? Math.max(1, (Date.now() - minDate) / (7 * 86400000)) : 1;
+    } else {
+      weeks = days / 7;
+    }
+    const result = {};
+    Object.entries(counts).forEach(([m, n]) => { result[m] = Math.round((n / weeks) * 10) / 10; });
+    return result; // setsPerWeek per muscle
   }, [exlog, days]);
 
   const BASE = { fill: "rgba(38,50,30,0.92)", stroke: "rgba(70,92,54,0.55)" };
   const heat = (name) => {
-    const s = muscleSets[name] || 0;
-    if (!s) return BASE;
-    const pct = Math.min(1, s / 21);
+    const spw = muscleWeekly[name] || 0;
+    if (!spw) return BASE;
+    const pct = Math.min(1, spw / 20);
     const a = 0.28 + pct * 0.72;
     return { fill: `rgba(255,86,108,${a.toFixed(2)})`, stroke: `rgba(255,150,160,${Math.min(1, a + 0.15).toFixed(2)})` };
   };
@@ -8677,8 +8703,8 @@ function MuscleHeatmap({ exlog, days, onChangeDays }) {
     );
   };
 
-  const sorted = Object.entries(muscleSets).sort(([,a],[,b]) => b - a);
-  const total = Object.values(muscleSets).reduce((s,v) => s+v, 0);
+  const sorted = Object.entries(muscleWeekly).sort(([,a],[,b]) => b - a);
+  const total = Object.values(muscleWeekly).reduce((s,v) => s+v, 0);
 
   return (
     <div style={{background:"var(--panel-bg-sec)", border:"1px solid var(--line-color)", borderRadius:14, padding:14}}>
@@ -8724,20 +8750,20 @@ function MuscleHeatmap({ exlog, days, onChangeDays }) {
           <div style={{padding:"8px 4px 0"}}>
             <div style={{height:7, borderRadius:99, background:"linear-gradient(to right,rgba(38,50,30,0.92),rgba(255,86,108,0.5),rgba(255,86,108,1))"}}/>
             <div style={{display:"flex", justifyContent:"space-between", fontSize:9, color:"var(--text-muted)", marginTop:3}}>
-              <span>0</span><span>Series / período</span><span>≥21</span>
+              <span>0</span><span>Series / sem</span><span>≥20/sem</span>
             </div>
           </div>
 
           {/* Chips de músculos más trabajados */}
           <div style={{marginTop:10, display:"flex", gap:5, flexWrap:"wrap"}}>
             {sorted.slice(0,7).map(([m,s]) => {
-              const a = Math.min(1, 0.2 + (s/21)*0.8);
+              const a = Math.min(1, 0.2 + (s/20)*0.8);
               return (
                 <span key={m} style={{fontSize:10, fontWeight:700, padding:"2px 9px", borderRadius:20,
                   background:`rgba(255,86,108,${(a*0.22).toFixed(2)})`,
                   border:`1px solid rgba(255,86,108,${(a*0.55).toFixed(2)})`,
                   color:`rgba(255,120,135,${a.toFixed(2)})`}}>
-                  {m} · {s}
+                  {m} · {s.toFixed(1)}/sem
                 </span>
               );
             })}
@@ -8752,15 +8778,15 @@ function MuscleHeatmap({ exlog, days, onChangeDays }) {
 function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, pdfBusy, exlog, exercises, notes, metricslog, splits, plateauAlerts, overloadSuggestions, muscleImbalances }) {
   const local = data?._local || null;
 
+  const [heatmapDays, setHeatmapDays] = useState(7);
+
   const muscleVol = React.useMemo(() => {
     if (local?.muscleVol) return local.muscleVol;
-    return calcMuscleVolumeBalance(exlog, exercises);
-  }, [local, exlog, exercises]);
+    return calcMuscleVolumeBalance(exlog, exercises, heatmapDays);
+  }, [local, exlog, exercises, heatmapDays]);
 
   const weeklyLoad = React.useMemo(() => local?.weeklyLoad || calcWeeklyTrainingLoad(exlog), [local, exlog]);
   const deloadCheck = React.useMemo(() => local?.deloadCheck || detectDeloadNeed(exlog, notes, metricslog), [local, exlog, notes, metricslog]);
-
-  const [heatmapDays, setHeatmapDays] = useState(7);
 
   const STATUS_COLORS = {
     neglected: { bg:"rgba(244,63,94,0.12)", border:"rgba(244,63,94,0.3)", text:"#f43f5e" },
@@ -8821,7 +8847,9 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
 
         {/* Muscle Volume Balance Grid */}
         <div>
-          <div style={{fontSize:10, fontWeight:700, color:"#9aa088", letterSpacing:".08em", marginBottom:2}}>BALANCE MUSCULAR · series/sem</div>
+          <div style={{fontSize:10, fontWeight:700, color:"#9aa088", letterSpacing:".08em", marginBottom:2}}>
+            BALANCE MUSCULAR · series/sem {heatmapDays >= 999 ? "(todo)" : `(${heatmapDays}d)`}
+          </div>
           <div className="volume-balance-grid">
             {Object.entries(muscleVol).map(([muscle, d]) => {
               const sc = STATUS_COLORS[d.status];
