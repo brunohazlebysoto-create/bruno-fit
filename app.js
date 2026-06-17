@@ -494,6 +494,8 @@ async function parseDailyCloudData(cloudData, today) {
   return { finalLog, finalWater, finalSupplements };
 }
 
+let _rrIdx = 0; // round-robin global para Gemini keys
+
 async function callGemini(messages, systemInstruction, responseSchema = null) {
   let apiKeysStr = await loadKey("gemini_api_key", "");
   
@@ -521,15 +523,16 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
 
   const orderedKeys = [];
   if (geminiKeys.length > 0) {
-    const startGemini = Math.floor(Math.random() * geminiKeys.length);
+    // Round-robin estricto: cada llamada empieza en la siguiente clave
+    const startGemini = _rrIdx % geminiKeys.length;
+    _rrIdx = (_rrIdx + 1) % geminiKeys.length;
     for (let count = 0; count < geminiKeys.length; count++) {
       orderedKeys.push(geminiKeys[(startGemini + count) % geminiKeys.length]);
     }
   }
   if (openRouterKeys.length > 0) {
-    const startOR = Math.floor(Math.random() * openRouterKeys.length);
     for (let count = 0; count < openRouterKeys.length; count++) {
-      orderedKeys.push(openRouterKeys[(startOR + count) % openRouterKeys.length]);
+      orderedKeys.push(openRouterKeys[count % openRouterKeys.length]);
     }
   }
 
@@ -664,7 +667,9 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
 
         if (!res.ok) {
           const errorData = await res.json().catch(() => ({}));
-          throw new Error(errorData.error?.message || `HTTP ${res.status}`);
+          const errMsg = errorData.error?.message || `HTTP ${res.status}`;
+          console.error(`[Gemini key ${idx+1}/${orderedKeys.length}] ${res.status}: ${errMsg}`);
+          throw new Error(errMsg);
         }
 
         const data = await res.json();
@@ -676,11 +681,16 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
       const is429 = e.message && (e.message.includes("429") || e.message.includes("RESOURCE_EXHAUSTED") || e.message.includes("quota") || e.message.includes("limit"));
       console.warn(`Error con la API Key ${idx + 1}/${orderedKeys.length}: ${e.message}. Intentando con la siguiente...`);
       if (is429 && idx < orderedKeys.length - 1) {
-        await new Promise(r => setTimeout(r, 1500));
+        // backoff exponencial: 2s, 4s, 8s… entre claves
+        await new Promise(r => setTimeout(r, Math.min(2000 * Math.pow(2, idx), 16000)));
       }
     }
   }
 
+  const isQuota = lastError?.message && (lastError.message.includes("429") || lastError.message.includes("RESOURCE_EXHAUSTED") || lastError.message.includes("quota") || lastError.message.includes("limit"));
+  if (isQuota) {
+    throw new Error("⏱️ Límite de peticiones alcanzado en todas las claves. Si todas tus claves son de la misma cuenta de Google, comparten la misma cuota — crea claves desde cuentas distintas para multiplicarla. O espera 1 minuto e intenta de nuevo.");
+  }
   throw lastError || new Error("No se pudo conectar con ninguna API Key.");
 }
 
@@ -7864,41 +7874,37 @@ function Perfil({
 }) {
   const [showKeyField, setShowKeyField] = useState(false);
   const [geminiNativeModel, setGeminiNativeModel] = useState("gemini-2.5-flash");
-  const [keyStatuses, setKeyStatuses] = useState({}); // idx -> 'testing'|'ok'|'error'
+  const [keyStatuses, setKeyStatuses] = useState({});
+  const [availableGeminiModels, setAvailableGeminiModels] = useState([]);
   useEffect(() => {
     loadKey("gemini_native_model", "gemini-2.5-flash").then(m => setGeminiNativeModel(m || "gemini-2.5-flash"));
   }, []);
   const saveGeminiNativeModel = (m) => { setGeminiNativeModel(m); saveKey("gemini_native_model", m); };
 
-  const testSingleKey = async (key, idx) => {
-    setKeyStatuses(prev => ({ ...prev, [idx]: "testing" }));
+  const testSingleKey = async (key) => {
+    const id = key.slice(0, 12);
+    setKeyStatuses(prev => ({ ...prev, [id]: "testing" }));
     try {
-      const isOR = key.startsWith("sk-or-");
       let ok = false;
-      if (isOR) {
-        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ model: "moonshotai/kimi-k2.6:free", messages: [{ role: "user", content: "ok" }], max_tokens: 1 })
+      if (key.startsWith("sk-or-")) {
+        // OpenRouter: verificar con models list
+        const res = await fetch("https://openrouter.ai/api/v1/models", {
+          headers: { "Authorization": `Bearer ${key}` }
         });
         ok = res.ok;
       } else {
-        const model = geminiNativeModel || "gemini-2.5-flash";
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contents: [{ parts: [{ text: "ok" }], role: "user" }], generationConfig: { maxOutputTokens: 1 } })
-        });
+        // Gemini: listar modelos — no gasta cuota de generación
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}&pageSize=1`);
         ok = res.ok;
       }
-      setKeyStatuses(prev => ({ ...prev, [idx]: ok ? "ok" : "error" }));
+      setKeyStatuses(prev => ({ ...prev, [id]: ok ? "ok" : "error" }));
     } catch {
-      setKeyStatuses(prev => ({ ...prev, [idx]: "error" }));
+      setKeyStatuses(prev => ({ ...prev, [id]: "error" }));
     }
   };
 
   const testAllKeys = async (keys) => {
-    await Promise.all(keys.map((k, i) => testSingleKey(k, i)));
+    await Promise.all(keys.map(k => testSingleKey(k)));
   };
   const [newKeyInput, setNewKeyInput] = useState("");
   const [linkInput, setLinkInput] = useState("");
@@ -8130,11 +8136,12 @@ function Perfil({
                   </button>
                 </div>
                 {keysList.map((k, idx) => {
-                  const st = keyStatuses[idx];
+                  const id = k.slice(0, 12);
+                  const st = keyStatuses[id];
                   const dotColor = st === "ok" ? "#7fff6a" : st === "error" ? "var(--accent-rose)" : st === "testing" ? "var(--accent-amber)" : "var(--line-color)";
                   const dotLabel = st === "ok" ? "OK" : st === "error" ? "Error" : st === "testing" ? "..." : "—";
                   return (
-                    <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, background: "var(--panel-bg)", padding: "8px 10px", borderRadius: "var(--radius-sm)", border: `1px solid ${st === "ok" ? "#7fff6a44" : st === "error" ? "rgba(255,107,138,0.3)" : "var(--line-color)"}` }}>
+                    <div key={id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, background: "var(--panel-bg)", padding: "8px 10px", borderRadius: "var(--radius-sm)", border: `1px solid ${st === "ok" ? "#7fff6a44" : st === "error" ? "rgba(255,107,138,0.3)" : "var(--line-color)"}` }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                         <div style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor, flexShrink: 0, boxShadow: st === "ok" ? "0 0 6px #7fff6a" : st === "error" ? "0 0 6px var(--accent-rose)" : "none", animation: st === "testing" ? "pulse 1s infinite" : "none" }} />
                         <span style={{ fontFamily: "monospace", color: "var(--text-ink)" }}>
@@ -8143,7 +8150,7 @@ function Perfil({
                         <span style={{ fontSize: 10, color: dotColor, fontWeight: 700 }}>{dotLabel}</span>
                       </div>
                       <div style={{ display: "flex", gap: 6 }}>
-                        <button onClick={() => testSingleKey(k, idx)} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "2px 6px" }}>Probar</button>
+                        <button onClick={() => testSingleKey(k)} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "2px 6px" }}>Probar</button>
                         <button onClick={() => handleRemoveKey(idx)} style={{ background: "none", border: "none", color: "var(--accent-rose)", cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "2px 6px" }}>✕</button>
                       </div>
                     </div>
@@ -8191,19 +8198,41 @@ function Perfil({
             {/* Selector de modelo Gemini nativo */}
             {keysList.some(k => !k.startsWith("sk-or-")) && (
               <div style={{ display: "flex", flexDirection: "column", gap: 6, background: "var(--panel-bg-sec)", padding: 10, borderRadius: "var(--radius-md)", border: "1px solid var(--line-color)" }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: "var(--accent-cyan)", textTransform: "uppercase", letterSpacing: ".05em" }}>Modelo Gemini:</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "var(--accent-cyan)", textTransform: "uppercase", letterSpacing: ".05em" }}>Modelo Gemini:</div>
+                  <button onClick={async () => {
+                    const firstKey = keysList.find(k => !k.startsWith("sk-or-"));
+                    if (!firstKey) return;
+                    try {
+                      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${firstKey}&pageSize=50`);
+                      const data = await res.json();
+                      const names = (data.models || [])
+                        .map(m => m.name?.replace("models/", ""))
+                        .filter(n => n && /flash|pro/i.test(n))
+                        .sort();
+                      if (names.length) setAvailableGeminiModels(names);
+                    } catch {}
+                  }} style={{ fontSize: 10, color: "var(--accent-cyan)", background: "none", border: "1px solid var(--accent-cyan)", borderRadius: 6, padding: "2px 7px", cursor: "pointer", fontWeight: 700 }}>
+                    Cargar modelos
+                  </button>
+                </div>
                 <select
                   value={geminiNativeModel}
                   onChange={e => saveGeminiNativeModel(e.target.value)}
                   style={{ background: "var(--panel-bg)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-sm)", padding: "8px 10px", fontSize: 12, color: "var(--text-ink)", width: "100%" }}
                 >
-                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (Recomendado)</option>
-                  <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite (Mayor cuota)</option>
-                  <option value="gemini-2.5-pro">Gemini 2.5 Pro (Más capaz, menor cuota)</option>
-                  <option value="gemini-2.0-flash">Gemini 2.0 Flash (Cuota máxima gratis)</option>
+                  {availableGeminiModels.length > 0
+                    ? availableGeminiModels.map(m => <option key={m} value={m}>{m}</option>)
+                    : <>
+                        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                        <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+                        <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+                        <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                      </>
+                  }
                 </select>
                 <div style={{ fontSize: 10, color: "var(--text-muted)", lineHeight: 1.4 }}>
-                  Si tenés problemas de cuota → usa <b>2.0 Flash</b> (1500/día gratis) o <b>2.5 Flash Lite</b>.
+                  Tocá <b>Cargar modelos</b> para ver los disponibles con tu clave.
                 </div>
               </div>
             )}
