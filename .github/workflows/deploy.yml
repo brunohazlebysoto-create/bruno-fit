@@ -29,28 +29,41 @@ jobs:
 
           api = HfApi(token=os.environ["HF_TOKEN"])
 
+          # Crear el Space nuevo si no existe (sdk static, público)
+          api.create_repo(
+              repo_id="BrunoEduardo/brunofit",
+              repo_type="space",
+              space_sdk="static",
+              private=False,
+              exist_ok=True,
+          )
+          print("Space verificado/creado!")
+
+          ignore = [
+              ".git/*",
+              ".env",
+              "*.png",
+              "*.jpg",
+              "*.ico",
+              ".github/*",
+              "node_modules/*",
+              "__pycache__/*",
+              "*.test.js",
+              "jest*",
+              "babel*",
+              "package-lock.json",
+              "schema.sql",
+              "deploy_hf.py",
+              "README.md",
+          ]
+
+          # Desplegar al Space nuevo
           api.upload_folder(
               folder_path=".",
-              repo_id="BrunoEduardo/bruno-fit",
+              repo_id="BrunoEduardo/brunofit",
               repo_type="space",
-              ignore_patterns=[
-                  ".git/*",
-                  ".env",
-                  "*.png",
-                  "*.jpg",
-                  "*.ico",
-                  ".github/*",
-                  "node_modules/*",
-                  "__pycache__/*",
-                  "*.test.js",
-                  "jest*",
-                  "babel*",
-                  "package-lock.json",
-                  "schema.sql",
-                  "deploy_hf.py",
-                  "README.md",
-              ],
-              commit_message="deploy: bruno-fit",
+              ignore_patterns=ignore,
+              commit_message="deploy: brunofit",
           )
-          print("Deploy exitoso!")
+          print("Deploy exitoso! URL: https://brunoeduardo-brunofit.hf.space")
           EOF
