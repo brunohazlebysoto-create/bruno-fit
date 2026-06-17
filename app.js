@@ -676,11 +676,16 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
       const is429 = e.message && (e.message.includes("429") || e.message.includes("RESOURCE_EXHAUSTED") || e.message.includes("quota") || e.message.includes("limit"));
       console.warn(`Error con la API Key ${idx + 1}/${orderedKeys.length}: ${e.message}. Intentando con la siguiente...`);
       if (is429 && idx < orderedKeys.length - 1) {
-        await new Promise(r => setTimeout(r, 1500));
+        // backoff exponencial: 2s, 4s, 8s… entre claves
+        await new Promise(r => setTimeout(r, Math.min(2000 * Math.pow(2, idx), 16000)));
       }
     }
   }
 
+  const isQuota = lastError?.message && (lastError.message.includes("429") || lastError.message.includes("RESOURCE_EXHAUSTED") || lastError.message.includes("quota") || lastError.message.includes("limit"));
+  if (isQuota) {
+    throw new Error("⏱️ Límite de peticiones alcanzado en todas las claves. Si todas tus claves son de la misma cuenta de Google, comparten la misma cuota — crea claves desde cuentas distintas para multiplicarla. O espera 1 minuto e intenta de nuevo.");
+  }
   throw lastError || new Error("No se pudo conectar con ninguna API Key.");
 }
 
