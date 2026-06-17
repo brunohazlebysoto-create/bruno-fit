@@ -3038,7 +3038,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         }
       } else if (act.type === "UPDATE_SPLITS" && act.data) {
         if (act.data.splits && Array.isArray(act.data.splits) && act.data.splits.length > 0) {
-          nextSplits = act.data.splits;
+          nextSplits = act.data.splits.map(newS => {
+            const existing = (splits || []).find(s => s.key === newS.key);
+            return { ...newS, ex: (newS.ex && newS.ex.length) ? newS.ex : (existing?.ex || []) };
+          });
           hasSplits = true;
         }
       } else if (act.type === "CHANGE_PHASE" && act.data) {
@@ -9384,7 +9387,13 @@ function Entreno({
 
   // --- Splits Manual Actions & Helpers ---
   const startEditSplits = () => {
-    setEditSplitsData((splits || DEFAULT_SPLITS).map(s => ({ ...s, ex: [...(s.ex || [])] })));
+    setEditSplitsData((splits || DEFAULT_SPLITS).map(s => {
+      const canonical = (exercises[s.key] || []).map(e => e.name);
+      const canonSet = new Set(canonical.map(n => n.toLowerCase()));
+      const extra = Object.keys(exlog || {}).filter(n => canonSet.has(n.toLowerCase()) && !canonical.some(c => c.toLowerCase() === n.toLowerCase()));
+      const merged = [...new Set([...(s.ex || []), ...canonical, ...extra])];
+      return { ...s, ex: merged };
+    }));
     setEditingSplitIdx(0);
     setNewExText("");
     setShowSplitsEditor(true);
@@ -11267,19 +11276,36 @@ function Entreno({
               </div>
             )}
 
-            <div style={{display:"flex", gap:8, borderTop:`1px solid ${C.line}`, paddingTop:12}}>
-              <button 
-                onClick={() => setShowSplitsEditor(false)}
-                style={{flex:1, padding:"10px", background:"none", border:`1px solid ${C.line}`, color:C.muted, borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+            <div style={{borderTop:`1px solid ${C.line}`, paddingTop:12, display:"flex", flexDirection:"column", gap:8}}>
+              <button
+                onClick={() => {
+                  const next = editSplitsData.map(day => {
+                    const canonical = (exercises[day.key] || []).map(e => e.name);
+                    const canonSet = new Set(canonical.map(n => n.toLowerCase()));
+                    const extra = Object.keys(exlog || {}).filter(n => canonSet.has(n.toLowerCase()) && !canonical.some(c => c.toLowerCase() === n.toLowerCase()));
+                    const merged = [...new Set([...day.ex, ...canonical, ...extra])];
+                    return { ...day, ex: merged };
+                  });
+                  setEditSplitsData(next);
+                }}
+                style={{width:"100%", padding:"8px", background:"none", border:`1px solid ${C.cyan}66`, color:C.cyan, borderRadius:8, fontSize:11.5, fontWeight:700, cursor:"pointer"}}
               >
-                Cancelar
+                Recuperar atajos del historial
               </button>
-              <button 
-                onClick={() => saveSplitsAndSyncExercises(editSplitsData)}
-                style={{flex:1, padding:"10px", background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
-              >
-                Guardar Todo
-              </button>
+              <div style={{display:"flex", gap:8}}>
+                <button
+                  onClick={() => setShowSplitsEditor(false)}
+                  style={{flex:1, padding:"10px", background:"none", border:`1px solid ${C.line}`, color:C.muted, borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => saveSplitsAndSyncExercises(editSplitsData)}
+                  style={{flex:1, padding:"10px", background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+                >
+                  Guardar Todo
+                </button>
+              </div>
             </div>
           </div>
         </div>
