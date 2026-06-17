@@ -636,7 +636,8 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
           };
         });
 
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
+        const nativeModel = (await loadKey("gemini_native_model", "gemini-2.5-flash")) || "gemini-2.5-flash";
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${nativeModel}:generateContent?key=${apiKey}`;
         
         const generationConfig = {
           temperature: 0.2
@@ -7862,6 +7863,11 @@ function Perfil({
   bodyComp
 }) {
   const [showKeyField, setShowKeyField] = useState(false);
+  const [geminiNativeModel, setGeminiNativeModel] = useState("gemini-2.5-flash");
+  useEffect(() => {
+    loadKey("gemini_native_model", "gemini-2.5-flash").then(m => setGeminiNativeModel(m || "gemini-2.5-flash"));
+  }, []);
+  const saveGeminiNativeModel = (m) => { setGeminiNativeModel(m); saveKey("gemini_native_model", m); };
   const [newKeyInput, setNewKeyInput] = useState("");
   const [linkInput, setLinkInput] = useState("");
   const [linkSuccess, setLinkSuccess] = useState(null);
@@ -8136,6 +8142,25 @@ function Perfil({
                     style={{ background: "var(--panel-bg)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-sm)", padding: "8px 10px", fontSize: 12, color: "var(--text-ink)", marginTop: 4 }}
                   />
                 )}
+              </div>
+            )}
+            {/* Selector de modelo Gemini nativo */}
+            {keysList.some(k => !k.startsWith("sk-or-")) && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, background: "var(--panel-bg-sec)", padding: 10, borderRadius: "var(--radius-md)", border: "1px solid var(--line-color)" }}>
+                <div style={{ fontSize: 10, fontWeight: 800, color: "var(--accent-cyan)", textTransform: "uppercase", letterSpacing: ".05em" }}>Modelo Gemini:</div>
+                <select
+                  value={geminiNativeModel}
+                  onChange={e => saveGeminiNativeModel(e.target.value)}
+                  style={{ background: "var(--panel-bg)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-sm)", padding: "8px 10px", fontSize: 12, color: "var(--text-ink)", width: "100%" }}
+                >
+                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (Recomendado)</option>
+                  <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite (Mayor cuota)</option>
+                  <option value="gemini-2.5-pro">Gemini 2.5 Pro (Más capaz, menor cuota)</option>
+                  <option value="gemini-2.0-flash">Gemini 2.0 Flash (Cuota máxima gratis)</option>
+                </select>
+                <div style={{ fontSize: 10, color: "var(--text-muted)", lineHeight: 1.4 }}>
+                  Si tenés problemas de cuota → usa <b>2.0 Flash</b> (1500/día gratis) o <b>2.5 Flash Lite</b>.
+                </div>
               </div>
             )}
             <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.4 }}>
