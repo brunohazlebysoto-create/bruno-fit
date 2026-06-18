@@ -1229,6 +1229,40 @@ function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
   return result;
 }
 
+// Activation weights by position (primary muscle = 1.0, decreasing)
+const MUSCLE_ACTIVATION_WEIGHTS = [1.0, 0.6, 0.35, 0.2, 0.1];
+
+function calcSessionMuscleSets(exlog, exercises, dateStr) {
+  const allExObjects = Object.values(exercises || {}).flat();
+  const muscleMap = {}; // muscle → { sets, weightedSets, exNames }
+
+  Object.entries(exlog || {}).forEach(([exName, allSets]) => {
+    const daySets = (allSets || []).filter(s =>
+      s?.date && s.type !== "warmup" &&
+      (() => { try { const d = new Date(s.date); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; } catch(e){ return ""; } })() === dateStr
+    );
+    if (!daySets.length) return;
+
+    const exObj = allExObjects.find(e => e.name === exName);
+    const musculos = exObj?.musculos || [];
+    if (!musculos.length) return;
+
+    const effectiveSets = daySets.length;
+    musculos.forEach((m, idx) => {
+      const w = MUSCLE_ACTIVATION_WEIGHTS[idx] ?? 0.1;
+      if (!muscleMap[m]) muscleMap[m] = { sets: 0, weightedSets: 0, exNames: [] };
+      muscleMap[m].sets += effectiveSets;
+      muscleMap[m].weightedSets += Math.round(effectiveSets * w * 10) / 10;
+      if (!muscleMap[m].exNames.includes(exName)) muscleMap[m].exNames.push(exName);
+    });
+  });
+
+  // Return sorted by weighted sets descending
+  return Object.entries(muscleMap)
+    .sort(([, a], [, b]) => b.weightedSets - a.weightedSets)
+    .map(([muscle, data]) => ({ muscle, ...data }));
+}
+
 export default function App(){
   const [view, setView] = useState(() => {
     return localStorage.getItem("onboarding_shown") ? "hoy" : "onboarding";
@@ -10133,11 +10167,11 @@ function Entreno({
             tecnico = cached.tecnico || ""; equipo = cached.equipo || "peso libre"; musculos = cached.musculos || [];
           } else {
             try {
-              const sys = "Eres un entrenador personal experto. Analiza el ejercicio brindado, identifica su nombre técnico, el tipo de equipo usado y al menos los 3 músculos principales. Devuelve un JSON. Ejemplo:\n" +
+              const sys = "Eres un entrenador personal experto. Analiza el ejercicio brindado, identifica su nombre técnico, el tipo de equipo usado y exactamente 5 músculos ordenados de mayor a menor activación (primario → secundarios → estabilizadores). Devuelve un JSON. Ejemplo:\n" +
                           "{\n" +
                           "  \"tecnico\": \"Extensión de rodilla en máquina\",\n" +
                           "  \"equipo\": \"máquina\",\n" +
-                          "  \"musculos\": [\"Cuádriceps femoral\", \"Vasto lateral\", \"Vasto medial\"]\n" +
+                          "  \"musculos\": [\"Cuádriceps femoral\", \"Vasto lateral\", \"Vasto medial\", \"Recto femoral\", \"Glúteo mayor\"]\n" +
                           "}\n" +
                           "Valores válidos para equipo: \"peso libre\", \"máquina\", \"polea\", \"cuerpo libre\".";
               const schema = {
@@ -10145,7 +10179,7 @@ function Entreno({
                 properties: {
                   tecnico: { type: "STRING" },
                   equipo: { type: "STRING" },
-                  musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Al menos 3 músculos principales" }
+                  musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Exactamente 5 músculos de mayor a menor activación" }
                 },
                 required: ["tecnico", "equipo", "musculos"]
               };
@@ -10171,12 +10205,12 @@ function Entreno({
           musculos = cachedD.musculos || [];
         } else {
           try {
-            const sys = "El usuario describe un ejercicio físico. Identifícalo, indica su nombre técnico, el tipo de equipo y al menos los 3 músculos principales. Devuelve un JSON. Ejemplo:\n" +
+            const sys = "El usuario describe un ejercicio físico. Identifícalo, indica su nombre técnico, el tipo de equipo y exactamente 5 músculos ordenados de mayor a menor activación (primario → secundarios → estabilizadores). Devuelve un JSON. Ejemplo:\n" +
                         "{\n" +
                         "  \"nombre\": \"Vuelos laterales en polea\",\n" +
                         "  \"tecnico\": \"Abducción de hombro en polea baja\",\n" +
                         "  \"equipo\": \"polea\",\n" +
-                        "  \"musculos\": [\"Deltoides lateral\", \"Supraespinoso\", \"Trapecio\"]\n" +
+                        "  \"musculos\": [\"Deltoides lateral\", \"Supraespinoso\", \"Trapecio medio\", \"Infraespinoso\", \"Serrato anterior\"]\n" +
                         "}\n" +
                         "Valores válidos para equipo: \"peso libre\", \"máquina\", \"polea\", \"cuerpo libre\".";
             const schema = {
@@ -10185,7 +10219,7 @@ function Entreno({
                 nombre: { type: "STRING" },
                 tecnico: { type: "STRING" },
                 equipo: { type: "STRING" },
-                musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Al menos 3 músculos principales" }
+                musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Exactamente 5 músculos de mayor a menor activación" }
               },
               required: ["nombre", "tecnico", "equipo", "musculos"]
             };
@@ -10542,6 +10576,37 @@ function Entreno({
                           </button>
                         ))}
                       </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Resumen muscular de la sesión */}
+              {selectedDayWorkouts && (() => {
+                const muscleSets = calcSessionMuscleSets(exlog, exercises, selectedDateStr);
+                if (!muscleSets.length) return null;
+                return (
+                  <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", marginBottom:10}}>
+                    <div style={{fontSize:10, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", marginBottom:8}}>
+                      Músculos trabajados hoy
+                    </div>
+                    <div style={{display:"flex", flexDirection:"column", gap:5}}>
+                      {muscleSets.map(({ muscle, weightedSets, sets, exNames }, i) => {
+                        const maxW = muscleSets[0]?.weightedSets || 1;
+                        const pct = Math.round((weightedSets / maxW) * 100);
+                        const color = i === 0 ? C.lime : i === 1 ? C.cyan : i <= 3 ? C.amber : C.muted;
+                        return (
+                          <div key={muscle}>
+                            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3}}>
+                              <span style={{fontSize:11.5, fontWeight:700, color: i < 3 ? C.ink : C.muted}}>{muscle}</span>
+                              <span style={{fontSize:10, color:C.muted}}>{sets} series</span>
+                            </div>
+                            <div style={{height:4, borderRadius:4, background:"rgba(255,255,255,0.05)", overflow:"hidden"}}>
+                              <div style={{height:"100%", width:`${pct}%`, background:color, borderRadius:4, transition:"width .3s"}}/>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 );
