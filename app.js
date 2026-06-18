@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.18-B";
+const APP_VERSION = "v2025.06.18-C";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -3359,6 +3359,14 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       }
     });
     if (summary.length === 0) return "Ninguno registrado hoy.";
+    // Agrega activación muscular total del día (suma across variantes)
+    const muscleSets = calcSessionMuscleSets(exlog, exercises, todayStr);
+    if (muscleSets.length > 0) {
+      const muscleText = muscleSets.slice(0, 8)
+        .map(({ muscle, weightedSets }) => `${muscle} ~${Math.round(weightedSets * 10) / 10}ser`)
+        .join(', ');
+      summary.push(`\nActivación muscular acumulada hoy: ${muscleText}`);
+    }
     return summary.join("\n");
   };
 
@@ -3437,10 +3445,37 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       weightTrend = `${oldest.w}kg (${oldest.date}) → ${latest.w}kg (${latest.date}) = ${diff > 0 ? '+' : ''}${diff}kg`;
     }
 
+    // Series por grupo muscular (últimas 2 semanas) — suma activaciones ponderadas de todas las variantes
+    const allExObjects = Object.values(exercises || {}).flat();
+    const muscleWeekMap = {};
+    Object.entries(exlog || {}).forEach(([exName, allSets]) => {
+      const exObj = allExObjects.find(e => e.name === exName);
+      const musculos = exObj?.musculos || [];
+      if (!musculos.length) return;
+      (allSets || []).filter(s => s?.date && s.type !== "warmup").forEach(s => {
+        const d = new Date(s.date);
+        const weeksAgo = Math.floor((now - d) / (7 * 24 * 3600 * 1000));
+        if (weeksAgo > 2) return;
+        const lbl = weeksAgo === 0 ? 'Esta semana' : 'Hace 1 sem';
+        if (!muscleWeekMap[lbl]) muscleWeekMap[lbl] = {};
+        musculos.forEach((m, idx) => {
+          const w = MUSCLE_ACTIVATION_WEIGHTS[idx] ?? 0.1;
+          muscleWeekMap[lbl][m] = (muscleWeekMap[lbl][m] || 0) + w;
+        });
+      });
+    });
+    const muscleLines = ['Esta semana', 'Hace 1 sem'].map(lbl => {
+      const mm = muscleWeekMap[lbl];
+      if (!mm) return null;
+      const sorted = Object.entries(mm).sort(([,a],[,b]) => b-a).slice(0, 8);
+      return `  ${lbl}: ${sorted.map(([m,s]) => `${m} ${Math.round(s * 10) / 10}ser`).join(', ')}`;
+    }).filter(Boolean);
+
     let result = '';
     if (prLines.length > 0) result += `PRs actuales (máximo histórico):\n${prLines.join('\n')}\n`;
     if (progressLines.length > 0) result += `Progresión últimas 4 semanas:\n${progressLines.join('\n')}\n`;
     if (volLines.length > 0) result += `Volumen de entrenamiento semanal:\n${volLines.join('\n')}\n`;
+    if (muscleLines.length > 0) result += `Series por grupo muscular (suma variantes, ponderado por activación):\n${muscleLines.join('\n')}\n`;
     result += `Tendencia de peso corporal: ${weightTrend}`;
     return result || 'Sin historial de entrenamiento registrado aún.';
   };
