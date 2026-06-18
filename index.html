@@ -158,8 +158,8 @@
       }
 
       try {
-        // Fetch app.js source (siempre fresco; la caché de compilación vive en IndexedDB)
-        const res = await fetch('./app.js', { cache: 'no-store' });
+        // Fetch app.js source — ?t= busts HF CDN cache; IndexedDB re-uses compiled code if content hash matches
+        const res = await fetch('./app.js?t=' + Date.now(), { cache: 'no-store' });
         if (!res.ok) throw new Error("No se pudo cargar el archivo app.js");
         const appCode = await res.text();
         const hash = await getHash(appCode);
