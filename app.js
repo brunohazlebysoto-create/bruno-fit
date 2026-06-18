@@ -8654,9 +8654,10 @@ const SLUG_MUSCLE = {
 };
 
 /* ===== MAPA DE CALOR MUSCULAR ===== */
-function MuscleHeatmap({ exlog, days, onChangeDays }) {
+function MuscleHeatmap({ exlog, days, onChangeDays, decay = false }) {
   const muscleWeekly = useMemo(() => {
-    const cutoff = days >= 999 ? 0 : Date.now() - days * 86400000;
+    const now = Date.now();
+    const cutoff = days >= 999 ? 0 : now - days * 86400000;
     const counts = {};
     let minDate = Infinity;
     Object.entries(exlog || {}).forEach(([exName, sets]) => {
@@ -8666,20 +8667,24 @@ function MuscleHeatmap({ exlog, days, onChangeDays }) {
         .forEach(s => {
           const t = new Date(s.date).getTime();
           if (t < minDate) minDate = t;
-          muscles.forEach(m => { counts[m] = (counts[m] || 0) + 1; });
+          // decay=true: peso exponencial — hoy=1.0, a los 7 días≈0, >7 días=0
+          const weight = decay ? Math.max(0, 1 - (now - t) / (7 * 86400000)) : 1;
+          if (weight > 0) muscles.forEach(m => { counts[m] = (counts[m] || 0) + weight; });
         });
     });
-    // Normalize to sets/week
+    // Normalize to sets/week (decay mode: weights already encode recency, divide by 1)
     let weeks;
-    if (days >= 999) {
-      weeks = minDate < Infinity ? Math.max(1, (Date.now() - minDate) / (7 * 86400000)) : 1;
+    if (decay) {
+      weeks = 1;
+    } else if (days >= 999) {
+      weeks = minDate < Infinity ? Math.max(1, (now - minDate) / (7 * 86400000)) : 1;
     } else {
       weeks = days / 7;
     }
     const result = {};
     Object.entries(counts).forEach(([m, n]) => { result[m] = Math.round((n / weeks) * 10) / 10; });
-    return result; // setsPerWeek per muscle
-  }, [exlog, days]);
+    return result; // setsPerWeek per muscle (o score ponderado si decay=true)
+  }, [exlog, days, decay]);
 
   const BASE = { fill: "rgba(38,50,30,0.92)", stroke: "rgba(70,92,54,0.55)" };
   const heat = (name) => {
@@ -8824,8 +8829,8 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
           <button onClick={onClose} style={{background:"none", border:"none", color:"#9aa088", cursor:"pointer", padding:4}}><X size={20}/></button>
         </div>
 
-        {/* Muscle Heatmap */}
-        <MuscleHeatmap exlog={exlog} days={heatmapDays} onChangeDays={setHeatmapDays}/>
+        {/* Muscle Heatmap con decay temporal — intensidad se diluye hasta desaparecer a los 7 días */}
+        <MuscleHeatmap exlog={exlog} days={heatmapDays} onChangeDays={setHeatmapDays} decay={true}/>
 
         {/* Phase Indicator */}
         <div className="pop" style={{padding:"12px 14px", display:"flex", alignItems:"center", justifyContent:"space-between"}}>
