@@ -11574,10 +11574,10 @@ function Entreno({
               Quitar Ejercicio
             </div>
             <div style={{fontSize: 12.5, color: C.muted, textAlign: "center"}}>
-              ¿Cómo deseas quitar <strong>{confirmRemoveEx}</strong>?
+              ¿Deseas quitar <strong>{confirmRemoveEx}</strong> de este split?
             </div>
             <div style={{display: "flex", flexDirection: "column", gap: 8, marginTop: 4}}>
-              <button 
+              <button
                 onClick={() => removeExerciseFromSplit(confirmRemoveEx)}
                 style={{
                   background: C.panel2, border: `1px solid ${C.line}`, color: C.lime,
@@ -11585,19 +11585,9 @@ function Entreno({
                   textAlign: "center"
                 }}
               >
-                Quitar de este split únicamente
+                Quitar de este split
               </button>
-              <button 
-                onClick={() => removeExerciseGlobally(confirmRemoveEx)}
-                style={{
-                  background: "rgba(255, 61, 113, 0.12)", border: `1px solid ${C.rose}44`, color: C.rose,
-                  fontWeight: 800, padding: 12, borderRadius: 12, cursor: "pointer",
-                  textAlign: "center"
-                }}
-              >
-                Eliminar por completo de la app (Borra historial)
-              </button>
-              <button 
+              <button
                 onClick={() => setConfirmRemoveEx(null)}
                 style={{
                   background: "none", border: "none", color: C.muted,
