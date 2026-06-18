@@ -42,9 +42,14 @@
       errDiv.style.fontFamily = 'monospace';
       errDiv.style.fontSize = '14px';
       errDiv.style.lineHeight = '1.5';
+      var r = e.reason;
+      var rStr = r instanceof Error ? r.message
+               : (r && r.type) ? 'Error de red/CDN: ' + r.type + (r.target && r.target.src ? ' — ' + r.target.src : '')
+               : (r ? String(r) : 'Desconocida');
+      var stack = (r instanceof Error && r.stack) ? r.stack : 'No disponible';
       errDiv.innerHTML = '<h2>🚨 PROMESA RECHAZADA (UNHANDLED REJECTION)</h2>' +
-        '<p><b>Razón:</b> ' + (e.reason ? (e.reason.message || e.reason) : 'Desconocida') + '</p>' +
-        '<p><b>Stack:</b></p><pre>' + (e.reason && e.reason.stack ? e.reason.stack : 'No disponible') + '</pre>' +
+        '<p><b>Razón:</b> ' + rStr + '</p>' +
+        '<p><b>Stack:</b></p><pre>' + stack + '</pre>' +
         '<p>Por favor, copia este error y envíaselo al asistente para corregirlo de inmediato.</p>';
       root.appendChild(errDiv);
     });
@@ -152,7 +157,7 @@
           script.src = "https://unpkg.com/@babel/standalone/babel.min.js";
           script.crossOrigin = "anonymous";
           script.onload = resolve;
-          script.onerror = reject;
+          script.onerror = (ev) => reject(new Error('No se pudo cargar Babel desde CDN (unpkg.com). Verificá tu conexión. src=' + ev.target.src));
           document.head.appendChild(script);
         });
       }
