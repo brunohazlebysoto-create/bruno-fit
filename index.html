@@ -207,16 +207,17 @@
     })();
   </script>
 
-  <!-- Service Worker registration + auto-reload on update -->
+  <!-- Clear ALL old service workers and caches, then register minimal SW -->
   <script>
     if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => {
+      // Unregister every old SW and nuke all caches before doing anything else
+      Promise.all([
+        navigator.serviceWorker.getRegistrations().then(regs =>
+          Promise.all(regs.map(r => r.unregister()))
+        ),
+        caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k))))
+      ]).finally(() => {
         navigator.serviceWorker.register("./sw.js").catch(() => {});
-        navigator.serviceWorker.addEventListener("message", (e) => {
-          if (e.data && e.data.type === "SW_UPDATED") {
-            window.location.reload();
-          }
-        });
       });
     }
   </script>

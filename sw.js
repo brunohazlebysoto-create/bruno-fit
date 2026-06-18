@@ -1,43 +1,9 @@
-const CACHE_NAME = "brunofit-cache-v8";
-const ASSETS = [
-  "./index.html",
-  "./style.css",
-  "./manifest.json",
-  "./icon-192.png",
-  "./icon-512.png"
-];
-
-self.addEventListener("install", (e) => {
-  e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting())
-  );
-});
-
+// Minimal SW — PWA install only, no caching (IndexedDB handles compiled JS cache)
+self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
-    ).then(() => self.clients.claim())
-     .then(() => self.clients.matchAll({ type: "window" }))
-     .then(clients => clients.forEach(c => c.postMessage({ type: "SW_UPDATED" })))
-  );
-});
-
-self.addEventListener("fetch", (e) => {
-  if (e.request.method !== "GET" ||
-      e.request.url.includes("googleapis.com") ||
-      e.request.url.includes("kvdb.io") ||
-      e.request.url.includes("supabase.co") ||
-      e.request.url.includes("openrouter.ai")) {
-    return;
-  }
-  e.respondWith(
-    fetch(e.request, { cache: "no-store" })
-      .then((res) => {
-        const clone = res.clone();
-        caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
-        return res;
-      })
-      .catch(() => caches.match(e.request))
+    caches.keys()
+      .then(keys => Promise.all(keys.map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
