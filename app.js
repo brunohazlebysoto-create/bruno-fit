@@ -2415,9 +2415,11 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
       // 2. Sincronizar Registro de Métricas y Peso
       const metricEntries = Object.entries(metricslog || {});
+      // ⚡ Bolt: Bulk upsert to fix N+1 performance issue
+      const metricsData = [];
       for (const [dateStr, m] of metricEntries) {
         if (!m || m.weight === undefined) continue;
-        const { error: metErr } = await supabase.from('metrics_logs').upsert({
+        metricsData.push({
           user_id: uId,
           date: dateStr,
           weight: parseFloat(m.weight) || 93.9,
@@ -2433,7 +2435,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           cintura: m.cintura !== undefined && m.cintura !== "" ? parseFloat(m.cintura) : null,
           pecho: m.pecho !== undefined && m.pecho !== "" ? parseFloat(m.pecho) : null,
           updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id, date' });
+        });
+      }
+      if (metricsData.length > 0) {
+        const { error: metErr } = await supabase.from('metrics_logs').upsert(metricsData, { onConflict: 'user_id, date' });
         if (metErr) throw metErr;
       }
 
@@ -2443,6 +2448,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         ...Object.keys(waterlog || {}),
         ...Object.keys(suppslog || {})
       ]);
+      // ⚡ Bolt: Bulk upsert to fix N+1 performance issue
+      const nutritionData = [];
       for (const dateStr of allDates) {
         const foodItems = foodlog[dateStr] || [];
         let kcal = 0, p = 0, c = 0, f = 0;
@@ -2455,7 +2462,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         const waterVal = waterlog[dateStr] || 0;
         const suppsVal = suppslog[dateStr] || { Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false };
 
-        const { error: nutErr } = await supabase.from('nutrition_logs').upsert({
+        nutritionData.push({
           user_id: uId,
           date: dateStr,
           kcal,
@@ -2466,7 +2473,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           food_items: foodItems,
           supplements: suppsVal,
           updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id, date' });
+        });
+      }
+      if (nutritionData.length > 0) {
+        const { error: nutErr } = await supabase.from('nutrition_logs').upsert(nutritionData, { onConflict: 'user_id, date' });
         if (nutErr) throw nutErr;
       }
 
@@ -2481,10 +2491,12 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           workoutGroups[key].push(s);
         });
       });
+      // ⚡ Bolt: Bulk upsert to fix N+1 performance issue
+      const workoutData = [];
       for (const [key, sets] of Object.entries(workoutGroups)) {
         const [dateStr, exerciseName] = key.split('|');
         const duration = workoutDurations[dateStr] || 0;
-        const { error: wkErr } = await supabase.from('workout_logs').upsert({
+        workoutData.push({
           user_id: uId,
           date: dateStr,
           exercise_name: exerciseName,
@@ -2492,6 +2504,9 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           duration: duration,
           updated_at: new Date().toISOString()
         });
+      }
+      if (workoutData.length > 0) {
+        const { error: wkErr } = await supabase.from('workout_logs').upsert(workoutData);
         if (wkErr) throw wkErr;
       }
 
