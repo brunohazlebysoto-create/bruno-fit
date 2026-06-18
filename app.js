@@ -11496,25 +11496,16 @@ function Entreno({
                 <button onClick={() => setEditExObj({...editExObj, isEditing: true})} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
                   ✏️ Editar Ejercicio
                 </button>
-                {editExObj.isSession && (
-                  <button 
-                    onClick={() => { 
-                      delExFromSession(editExObj.ex.name, editExObj.sessionDate); 
-                      setEditExObj(null); 
-                    }} 
-                    style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}
-                  >
-                    🗑️ Quitar de esta Sesión
-                  </button>
-                )}
-                <button 
-                  onClick={() => { 
-                    delExercise(editExObj.ex.name); 
-                    setEditExObj(null); 
-                  }} 
-                  style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:700, padding:10, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer", fontSize:12.5}}
+                <button
+                  onClick={() => {
+                    const dateToUse = editExObj.sessionDate || selectedDateStr;
+                    const canonKey = findExlogKey(editExObj.ex.name);
+                    delExFromSession(canonKey, dateToUse);
+                    setEditExObj(null);
+                  }}
+                  style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}
                 >
-                  🗑️ Borrar Ejercicio (Global)
+                  🗑️ Quitar series de este día
                 </button>
               </>
             ) : (
