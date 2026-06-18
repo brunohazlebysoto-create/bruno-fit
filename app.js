@@ -9740,8 +9740,32 @@ function Entreno({
   const dayObj = (splits || DEFAULT_SPLITS).find(d => d.key === sel) || (splits || DEFAULT_SPLITS)[0] || DEFAULT_SPLITS[0];
   const dayExs = (exercises || {})[sel] || [];
   const dayMuscles = [...new Set(dayExs.flatMap(e => e.musculos || []))];
-  const last = (n) => { const a = (exlog || {})[n]; return a && a.length ? a[0] : null; };
-  const chartData = (n) => ((exlog || {})[n] || []).slice().sort((a,b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
+
+  // Finds the canonical exlog key for an exercise name, tolerating:
+  // - case differences, trailing spaces
+  // - slash notation: "Dominadas / Jalón" ↔ "Dominadas"
+  // Prefers the key that already has the most records.
+  const findExlogKey = (name) => {
+    const el = exlog || {};
+    if (el[name] && el[name].length > 0) return name; // exact match with records
+    const norm = (s) => s.toLowerCase().trim();
+    const nameParts = norm(name).split(/\s*\/\s*/);
+    let bestKey = name, bestLen = 0;
+    for (const key of Object.keys(el)) {
+      if (!el[key] || !el[key].length) continue;
+      const keyNorm = norm(key);
+      const keyParts = keyNorm.split(/\s*\/\s*/);
+      // Case-insensitive exact match OR any part of slash-name matches
+      const match = keyNorm === norm(name) ||
+        nameParts.some(p => keyParts.includes(p)) ||
+        keyParts.some(p => nameParts.includes(p));
+      if (match && el[key].length > bestLen) { bestKey = key; bestLen = el[key].length; }
+    }
+    return bestKey;
+  };
+
+  const last = (n) => { const key = findExlogKey(n); const a = (exlog || {})[key]; return a && a.length ? a[0] : null; };
+  const chartData = (n) => { const key = findExlogKey(n); return ((exlog || {})[key] || []).slice().sort((a,b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0)); };
 
   useEffect(() => {
     (async () => {
@@ -9879,8 +9903,9 @@ function Entreno({
         rir: rirVal
       });
     }
-    const next = {...exlog, [n]: [...newSets.reverse(), ...(exlog[n] || [])].slice(0, 60)}; 
-    setExlog(next); 
+    const canonKey = findExlogKey(n);
+    const next = {...exlog, [canonKey]: [...newSets.reverse(), ...(exlog[canonKey] || [])].slice(0, 60)};
+    setExlog(next);
     setW(""); 
     setReps(""); 
     setSetsCount("1");
@@ -10140,9 +10165,9 @@ function Entreno({
     setAddBusy(false);
   };
 
-  const analyzeProg = async(ex) => { 
+  const analyzeProg = async(ex) => {
     setProgBusy(ex.name);
-    const hist = (exlog[ex.name] || []).slice(0, 8).map(s => {
+    const hist = (exlog[findExlogKey(ex.name)] || []).slice(0, 8).map(s => {
       const rirStr = (s.rir !== undefined && s.rir !== null) ? `@RIR ${s.rir}` : "";
       const repsNum = parseInt(s.reps);
       const rirNum = (s.rir !== undefined && s.rir !== null && !isNaN(parseInt(s.rir))) ? parseInt(s.rir) : 0;
@@ -11029,11 +11054,11 @@ function Entreno({
                   </div>
                 </details>
 
-                {(exlog[ex.name] || []).length === 0 && (
+                {(exlog[findExlogKey(ex.name)] || []).length === 0 && (
                   <div style={{fontSize:12, color:C.muted, padding:"4px 0"}}>Sin registros en bitácora.</div>
                 )}
 
-                {(exlog[ex.name] || []).map((s, i) => (
+                {(exlog[findExlogKey(ex.name)] || []).map((s, i) => (
                   <div key={i} style={{display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${C.line}`, opacity: s.type === "warmup" ? 0.6 : 1}}>
                     <span style={{fontSize:12.5, color:C.muted, minWidth:54}}>{fdate(s.date)}</span>
                     <span style={{fontSize:13.5, fontWeight:600}}>{s.w} kg</span>
@@ -11059,7 +11084,7 @@ function Entreno({
                         Calentamiento
                       </span>
                     )}
-                    <button onClick={() => delSet(ex.name, i)} style={{marginLeft:"auto", background:"none", border:"none", cursor:"pointer", color:C.muted}}>
+                    <button onClick={() => delSet(findExlogKey(ex.name), i)} style={{marginLeft:"auto", background:"none", border:"none", cursor:"pointer", color:C.muted}}>
                       <Trash2 size={14}/>
                     </button>
                   </div>
