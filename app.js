@@ -8657,6 +8657,8 @@ const SLUG_MUSCLE = {
 function MuscleHeatmap({ exlog, days, onChangeDays, decay = false }) {
   const muscleWeekly = useMemo(() => {
     const now = Date.now();
+    // decay solo aplica en la ventana de 7 días
+    const effectiveDecay = decay && days <= 7;
     const cutoff = days >= 999 ? 0 : now - days * 86400000;
     const counts = {};
     let minDate = Infinity;
@@ -8667,14 +8669,14 @@ function MuscleHeatmap({ exlog, days, onChangeDays, decay = false }) {
         .forEach(s => {
           const t = new Date(s.date).getTime();
           if (t < minDate) minDate = t;
-          // decay=true: peso exponencial — hoy=1.0, a los 7 días≈0, >7 días=0
-          const weight = decay ? Math.max(0, 1 - (now - t) / (7 * 86400000)) : 1;
+          // En 7d: peso lineal 1.0→0 según días transcurridos
+          const weight = effectiveDecay ? Math.max(0, 1 - (now - t) / (7 * 86400000)) : 1;
           if (weight > 0) muscles.forEach(m => { counts[m] = (counts[m] || 0) + weight; });
         });
     });
-    // Normalize to sets/week (decay mode: weights already encode recency, divide by 1)
+    // Normalize to sets/week (decay: divide by 1 — weights ya encodifican recencia)
     let weeks;
-    if (decay) {
+    if (effectiveDecay) {
       weeks = 1;
     } else if (days >= 999) {
       weeks = minDate < Infinity ? Math.max(1, (now - minDate) / (7 * 86400000)) : 1;
