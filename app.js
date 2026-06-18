@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.18-E";
+const APP_VERSION = "v2025.06.18-F";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -10113,14 +10113,37 @@ function Entreno({
 
   const handleUpdateExercise = (oldName, newName, newTecnico, newMusculosList) => {
     const updatedExercises = { ...exercises };
+    let found = false;
+
     Object.keys(updatedExercises).forEach(k => {
       updatedExercises[k] = (updatedExercises[k] || []).map(e => {
         if (e.name === oldName) {
+          found = true;
           return { ...e, name: newName, tecnico: newTecnico, musculos: newMusculosList };
         }
         return e;
       });
     });
+
+    // Ejercicio solo en EXERCISE_DB o exlog — insertarlo en los splits que lo referencian
+    if (!found) {
+      (splits || DEFAULT_SPLITS).forEach(s => {
+        if ((s.ex || []).includes(oldName)) {
+          if (!updatedExercises[s.key]) updatedExercises[s.key] = [];
+          // evitar duplicado
+          if (!updatedExercises[s.key].find(e => e.name === oldName || e.name === newName)) {
+            updatedExercises[s.key] = [...updatedExercises[s.key], { name: newName, tecnico: newTecnico, musculos: newMusculosList }];
+            found = true;
+          }
+        }
+      });
+      // Si tampoco está en ningún split (solo en exlog), agregar al split activo
+      if (!found) {
+        if (!updatedExercises[sel]) updatedExercises[sel] = [];
+        updatedExercises[sel] = [...updatedExercises[sel], { name: newName, tecnico: newTecnico, musculos: newMusculosList }];
+      }
+    }
+
     setExercises(updatedExercises);
 
     if (oldName !== newName) {
