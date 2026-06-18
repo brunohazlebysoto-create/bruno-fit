@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.18-C";
+const APP_VERSION = "v2025.06.18-D";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -9690,6 +9690,7 @@ function Entreno({
   const [rir, setRir] = useState("-");
   const [editSetObj, setEditSetObj] = useState(null);
   const [editExObj, setEditExObj] = useState(null);
+  const [refreshMuscleBusy, setRefreshMuscleBusy] = useState(false);
   const [exTab, setExTab] = useState("texto"); // 'texto' or 'nuevo'
   const [mergeTarget, setMergeTarget] = useState("");
   const [showExMgr, setShowExMgr] = useState(false);
@@ -11746,8 +11747,41 @@ function Entreno({
                   </div>
                   
                   <div>
-                    <label style={{fontSize:11, color:C.muted, fontWeight:700}}>Músculos (separados por coma)</label>
-                    <input type="text" id="ee-musculos" defaultValue={(editExObj.ex.musculos || []).join(", ")} style={{width:"100%", padding:"8px", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink, marginTop:4}} />
+                    <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:4}}>
+                      <label style={{fontSize:11, color:C.muted, fontWeight:700}}>Músculos (mayor → menor activación)</label>
+                      <button
+                        disabled={refreshMuscleBusy}
+                        onClick={async () => {
+                          const exName = document.getElementById("ee-name").value.trim() || editExObj.ex.name;
+                          setRefreshMuscleBusy(true);
+                          try {
+                            const sys = "Eres un entrenador personal experto. Analiza el ejercicio brindado, identifica exactamente 5 músculos ordenados de mayor a menor activación (primario → secundarios → estabilizadores). Devuelve un JSON.";
+                            const schema = {
+                              type: "OBJECT",
+                              properties: {
+                                musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Exactamente 5 músculos de mayor a menor activación" }
+                              },
+                              required: ["musculos"]
+                            };
+                            const o = cleanAndParseJSON(await callGemini([{role:"user", content:exName}], sys, schema));
+                            const el = document.getElementById("ee-musculos");
+                            if (el && o?.musculos?.length) el.value = o.musculos.join(", ");
+                          } catch(e) { /* silencioso */ }
+                          setRefreshMuscleBusy(false);
+                        }}
+                        style={{
+                          background: refreshMuscleBusy ? C.panel2 : "rgba(205,255,74,0.1)",
+                          border: `1px solid ${refreshMuscleBusy ? C.line : "rgba(205,255,74,0.4)"}`,
+                          color: refreshMuscleBusy ? C.muted : C.lime,
+                          borderRadius: 8, padding: "3px 8px", fontSize: 10.5,
+                          fontWeight: 800, cursor: refreshMuscleBusy ? "default" : "pointer",
+                          display: "flex", alignItems: "center", gap: 4
+                        }}
+                      >
+                        {refreshMuscleBusy ? <><Loader2 size={10} style={{animation:"spin 1s linear infinite"}}/> Cargando</> : "🔄 IA"}
+                      </button>
+                    </div>
+                    <input type="text" id="ee-musculos" defaultValue={(editExObj.ex.musculos || []).join(", ")} style={{width:"100%", padding:"8px", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink}} />
                   </div>
                 </div>
                 
