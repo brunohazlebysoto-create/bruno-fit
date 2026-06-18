@@ -9744,21 +9744,28 @@ function Entreno({
   // Finds the canonical exlog key for an exercise name, tolerating:
   // - case differences, trailing spaces
   // - slash notation: "Dominadas / Jalón" ↔ "Dominadas"
+  // - abbreviated names: "Remo barra" ↔ "Remo con barra"
   // Prefers the key that already has the most records.
   const findExlogKey = (name) => {
     const el = exlog || {};
     if (el[name] && el[name].length > 0) return name; // exact match with records
     const norm = (s) => s.toLowerCase().trim();
-    const nameParts = norm(name).split(/\s*\/\s*/);
+    const nameNorm = norm(name);
+    const nameParts = nameNorm.split(/\s*\/\s*/);
+    const nameWords = nameNorm.split(/\s+/);
     let bestKey = name, bestLen = 0;
     for (const key of Object.keys(el)) {
       if (!el[key] || !el[key].length) continue;
       const keyNorm = norm(key);
       const keyParts = keyNorm.split(/\s*\/\s*/);
-      // Case-insensitive exact match OR any part of slash-name matches
-      const match = keyNorm === norm(name) ||
-        nameParts.some(p => keyParts.includes(p)) ||
-        keyParts.some(p => nameParts.includes(p));
+      const keyWords = keyNorm.split(/\s+/);
+      const match =
+        keyNorm === nameNorm || // case-insensitive exact
+        nameParts.some(p => keyParts.includes(p)) || // slash part match
+        keyParts.some(p => nameParts.includes(p)) ||
+        // abbreviated word match: all words of the shorter name exist in the longer key
+        (nameWords.length >= 2 && nameWords.every(w => keyWords.includes(w))) ||
+        (keyWords.length >= 2 && keyWords.every(w => nameWords.includes(w)));
       if (match && el[key].length > bestLen) { bestKey = key; bestLen = el[key].length; }
     }
     return bestKey;
