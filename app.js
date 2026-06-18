@@ -9612,6 +9612,7 @@ function Entreno({
   const [editSetObj, setEditSetObj] = useState(null);
   const [editExObj, setEditExObj] = useState(null);
   const [exTab, setExTab] = useState("texto"); // 'texto' or 'nuevo'
+  const [mergeTarget, setMergeTarget] = useState("");
 
   const getRecentSensationsText = () => {
     const sevenDaysAgo = Date.now() - 7 * 86400000;
@@ -10053,7 +10054,31 @@ function Entreno({
     }
   };
 
-  const delExFromSession = (exName, dateStr) => {
+  const handleMergeExercise = (sourceName, targetName) => {
+    if (!targetName || targetName === sourceName) return;
+    // Merge sets from both keys, newest first, max 60
+    const merged = [...(exlog[sourceName] || []), ...(exlog[targetName] || [])]
+      .sort((a, b) => (a.date > b.date ? -1 : 1))
+      .slice(0, 60);
+    const updatedExlog = { ...exlog, [targetName]: merged };
+    delete updatedExlog[sourceName];
+    // Rename in exercises state (replace sourceName → targetName, deduplicate)
+    const updatedExercises = { ...exercises };
+    Object.keys(updatedExercises).forEach(k => {
+      const seen = new Set();
+      updatedExercises[k] = (updatedExercises[k] || [])
+        .map(e => e.name === sourceName ? { ...e, name: targetName } : e)
+        .filter(e => { if (seen.has(e.name)) return false; seen.add(e.name); return true; });
+    });
+    // Rename in splits.ex[]
+    const updatedSplits = (splits || DEFAULT_SPLITS).map(s => ({
+      ...s,
+      ex: [...new Set((s.ex || []).map(n => n === sourceName ? targetName : n))]
+    }));
+    setExlog(updatedExlog);
+    setExercises(updatedExercises);
+    setSplits(updatedSplits);
+  };
     const updatedExlog = { ...exlog };
     if (updatedExlog[exName]) {
       updatedExlog[exName] = updatedExlog[exName].filter(s => getLocalDateFromISO(s.date) !== dateStr);
@@ -11487,14 +11512,20 @@ function Entreno({
             background: C.panel, border:`1px solid ${C.line}`, borderRadius:16,
             padding:20, width:"100%", maxWidth:320, display:"flex", flexDirection:"column", gap:12
           }} onClick={e => e.stopPropagation()}>
-            {!editExObj.isEditing ? (
+            {!editExObj.isEditing && !editExObj.isMerging ? (
               <>
                 <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Opciones de Ejercicio</div>
                 <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>
-                  {editExObj.ex.name} {editExObj.isSession && `(Sesión: ${formatDay(editExObj.sessionDate)})`}
+                  {editExObj.ex.name}
                 </div>
                 <button onClick={() => setEditExObj({...editExObj, isEditing: true})} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
                   ✏️ Editar Ejercicio
+                </button>
+                <button
+                  onClick={() => { setMergeTarget(""); setEditExObj({...editExObj, isMerging: true}); }}
+                  style={{background:"rgba(74,214,255,0.1)", color:C.cyan, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.cyan}44`, cursor:"pointer"}}
+                >
+                  🔗 Fusionar con otro ejercicio
                 </button>
                 <button
                   onClick={() => {
@@ -11506,6 +11537,40 @@ function Entreno({
                   style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}
                 >
                   🗑️ Quitar series de este día
+                </button>
+              </>
+            ) : !editExObj.isEditing && editExObj.isMerging ? (
+              <>
+                <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Fusionar Ejercicio</div>
+                <div style={{fontSize:12, color:C.muted, textAlign:"center"}}>
+                  Todos los registros de <strong>{editExObj.ex.name}</strong> se unirán al ejercicio que elijas.
+                </div>
+                <select
+                  value={mergeTarget}
+                  onChange={e => setMergeTarget(e.target.value)}
+                  style={{width:"100%", padding:"10px 8px", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, color:C.ink, fontSize:13}}
+                >
+                  <option value="">— Selecciona ejercicio destino —</option>
+                  {[...new Set([
+                    ...Object.keys(exlog),
+                    ...Object.values(exercises).flat().map(e => e.name)
+                  ])].filter(n => n !== editExObj.ex.name).sort().map(n => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+                <button
+                  disabled={!mergeTarget}
+                  onClick={() => {
+                    handleMergeExercise(editExObj.ex.name, mergeTarget);
+                    setEditExObj(null);
+                    setMergeTarget("");
+                  }}
+                  style={{background: mergeTarget ? C.lime : C.line, color: mergeTarget ? "#0c0e0b" : C.muted, fontWeight:800, padding:12, borderRadius:12, border:"none", cursor: mergeTarget ? "pointer" : "default"}}
+                >
+                  Confirmar Fusión
+                </button>
+                <button onClick={() => setEditExObj({...editExObj, isMerging: false})} style={{background:"none", border:"none", color:C.muted, fontWeight:700, padding:8, cursor:"pointer"}}>
+                  Volver
                 </button>
               </>
             ) : (
