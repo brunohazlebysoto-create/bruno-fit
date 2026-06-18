@@ -9613,6 +9613,8 @@ function Entreno({
   const [editExObj, setEditExObj] = useState(null);
   const [exTab, setExTab] = useState("texto"); // 'texto' or 'nuevo'
   const [mergeTarget, setMergeTarget] = useState("");
+  const [showExMgr, setShowExMgr] = useState(false);
+  const [exMgrSearch, setExMgrSearch] = useState("");
 
   const getRecentSensationsText = () => {
     const sevenDaysAgo = Date.now() - 7 * 86400000;
@@ -11138,6 +11140,49 @@ function Entreno({
           </div>
         );
       })}
+
+      {/* ===== Gestionar todos los ejercicios ===== */}
+      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, marginBottom:12, overflow:"hidden"}}>
+        <button
+          onClick={() => { setShowExMgr(v => !v); setExMgrSearch(""); }}
+          style={{width:"100%", background:"none", border:"none", padding:"13px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer", color:C.ink}}
+        >
+          <span style={{fontSize:12.5, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".05em"}}>Gestionar todos los ejercicios</span>
+          <span style={{color:C.muted, fontSize:13}}>{showExMgr ? "▴" : "▾"}</span>
+        </button>
+        {showExMgr && (
+          <div style={{padding:"0 14px 14px"}}>
+            <input
+              value={exMgrSearch}
+              onChange={e => setExMgrSearch(e.target.value)}
+              placeholder="Buscar ejercicio…"
+              className="ph"
+              style={{width:"100%", boxSizing:"border-box", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 12px", color:C.ink, fontSize:13, outline:"none", marginBottom:10}}
+            />
+            {Object.keys(exlog || {})
+              .filter(n => !exMgrSearch || n.toLowerCase().includes(exMgrSearch.toLowerCase()))
+              .sort()
+              .map(n => (
+                <div key={n} style={{display:"flex", alignItems:"center", justifyContent:"space-between", padding:"9px 0", borderTop:`1px solid ${C.line}`}}>
+                  <div>
+                    <div style={{fontSize:13, fontWeight:600, color:C.ink}}>{n}</div>
+                    <div style={{fontSize:11, color:C.muted}}>{(exlog[n]||[]).length} registros</div>
+                  </div>
+                  <button
+                    onClick={() => { setMergeTarget(""); setEditExObj({ ex: { name: n }, isMerging: true }); }}
+                    style={{background:"rgba(74,214,255,0.1)", color:C.cyan, fontWeight:700, fontSize:11.5, padding:"6px 12px", borderRadius:8, border:`1px solid ${C.cyan}44`, cursor:"pointer", whiteSpace:"nowrap"}}
+                  >
+                    🔗 Fusionar
+                  </button>
+                </div>
+              ))
+            }
+            {Object.keys(exlog || {}).filter(n => !exMgrSearch || n.toLowerCase().includes(exMgrSearch.toLowerCase())).length === 0 && (
+              <div style={{fontSize:12, color:C.muted, textAlign:"center", padding:"12px 0"}}>Sin ejercicios encontrados</div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Sección Unificada de Carga/Adición */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:14, marginBottom:12, marginTop:10}}>
