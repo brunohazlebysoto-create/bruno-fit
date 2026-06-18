@@ -1,64 +1,43 @@
-const CACHE_NAME = "brunofit-cache-v7";
+const CACHE_NAME = "brunofit-cache-v8";
 const ASSETS = [
   "./index.html",
   "./style.css",
-  "./app.js",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png"
 ];
 
-// Instalar el Service Worker y precargar recursos básicos
 self.addEventListener("install", (e) => {
   e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS);
-    }).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting())
   );
 });
 
-// Activar el Service Worker y limpiar cachés antiguas
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
-        keys.map((key) => {
-          if (key !== CACHE_NAME) {
-            return caches.delete(key);
-          }
-        })
-      );
-    }).then(() => self.clients.claim())
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
+    ).then(() => self.clients.claim())
+     .then(() => self.clients.matchAll({ type: "window" }))
+     .then(clients => clients.forEach(c => c.postMessage({ type: "SW_UPDATED" })))
   );
 });
 
-// Estrategia de red primero (Network First) con fallback a caché
 self.addEventListener("fetch", (e) => {
-  // Solo manejar peticiones GET y evitar APIs externas dinámicas
-  if (
-    e.request.method !== "GET" || 
-    e.request.url.includes("googleapis.com") || 
-    e.request.url.includes("kvdb.io")
-  ) {
+  if (e.request.method !== "GET" ||
+      e.request.url.includes("googleapis.com") ||
+      e.request.url.includes("kvdb.io") ||
+      e.request.url.includes("supabase.co") ||
+      e.request.url.includes("openrouter.ai")) {
     return;
   }
-  
   e.respondWith(
-    // "no-store" evita que la caché HTTP del navegador sirva versiones viejas;
-    // la caché offline propia (CACHE_NAME) sigue siendo el respaldo sin red.
     fetch(e.request, { cache: "no-store" })
       .then((res) => {
-        // Clonar y guardar en caché el recurso más nuevo si la red funciona
-        const resClone = res.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(e.request, resClone);
-        });
+        const clone = res.clone();
+        caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
         return res;
       })
-      .catch(() => {
-        // Si no hay red, servir desde la caché
-        return caches.match(e.request);
-      })
+      .catch(() => caches.match(e.request))
   );
 });
-
