@@ -10081,6 +10081,8 @@ function Entreno({
     setExercises(updatedExercises);
     setSplits(updatedSplits);
   };
+
+  const delExFromSession = (exName, dateStr) => {
     const updatedExlog = { ...exlog };
     if (updatedExlog[exName]) {
       updatedExlog[exName] = updatedExlog[exName].filter(s => getLocalDateFromISO(s.date) !== dateStr);
