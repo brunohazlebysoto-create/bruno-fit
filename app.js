@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.18-D";
+const APP_VERSION = "v2025.06.18-E";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -11755,18 +11755,30 @@ function Entreno({
                           const exName = document.getElementById("ee-name").value.trim() || editExObj.ex.name;
                           setRefreshMuscleBusy(true);
                           try {
-                            const sys = "Eres un entrenador personal experto. Analiza el ejercicio brindado, identifica exactamente 5 músculos ordenados de mayor a menor activación (primario → secundarios → estabilizadores). Devuelve un JSON.";
+                            const sys = "Eres un entrenador personal experto en anatomía y biomecánica. Para el ejercicio dado, lista EXACTAMENTE 5 músculos en orden estricto de mayor a menor activación: 1º músculo principal, 2º secundario más activo, 3º secundario, 4º estabilizador primario, 5º estabilizador secundario. SIEMPRE devuelve exactamente 5, incluso para ejercicios simples — usa sinergistas y estabilizadores. Devuelve SOLO JSON.";
                             const schema = {
                               type: "OBJECT",
                               properties: {
-                                musculos: { type: "ARRAY", items: { type: "STRING" }, description: "Exactamente 5 músculos de mayor a menor activación" }
+                                musculos: {
+                                  type: "ARRAY",
+                                  items: { type: "STRING" },
+                                  minItems: 5,
+                                  maxItems: 5,
+                                  description: "Exactamente 5 músculos de mayor a menor activación"
+                                }
                               },
                               required: ["musculos"]
                             };
-                            const o = cleanAndParseJSON(await callGemini([{role:"user", content:exName}], sys, schema));
+                            const o = cleanAndParseJSON(await callGemini([{role:"user", content:`Ejercicio: ${exName}`}], sys, schema));
                             const el = document.getElementById("ee-musculos");
-                            if (el && o?.musculos?.length) el.value = o.musculos.join(", ");
-                          } catch(e) { /* silencioso */ }
+                            if (el && o?.musculos?.length) {
+                              el.value = o.musculos.slice(0, 5).join(", ");
+                            } else {
+                              alert("La IA no devolvió músculos. Intentá de nuevo.");
+                            }
+                          } catch(e) {
+                            alert("Error al consultar la IA: " + (e?.message || e));
+                          }
                           setRefreshMuscleBusy(false);
                         }}
                         style={{
