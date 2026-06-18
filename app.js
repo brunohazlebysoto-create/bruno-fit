@@ -1,3 +1,5 @@
+const APP_VERSION = "v2025.06.18-A";
+
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
@@ -4053,6 +4055,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             <div style={{marginTop:16}}>
               <div style={{fontSize:13, color:C.muted}}>¡Hola, Bruno!</div>
               <div className="disp" style={{fontSize:32, marginTop:2, lineHeight:1}}>CENTRO DE MANDO</div>
+              <div style={{fontSize:9, color:C.muted, fontWeight:700, letterSpacing:".1em", marginTop:2}}>{APP_VERSION}</div>
             </div>
           )}
           {view === "coach" && (
@@ -15179,6 +15182,10 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
       )}
 
 
+      {/* Version footer */}
+      <div style={{textAlign:"center", padding:"8px 0 24px", fontSize:9, color:"rgba(154,160,136,0.4)", fontWeight:700, letterSpacing:".1em"}}>
+        {APP_VERSION}
+      </div>
     </div>
   );
 }
