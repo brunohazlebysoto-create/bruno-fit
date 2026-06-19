@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.18-J";
+const APP_VERSION = "v2025.06.18-K";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -3398,80 +3398,95 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
   // Resumen histórico completo para dar memoria real al Coach
   const buildWorkoutHistorySummary = () => {
     const now = new Date();
-    const weeksBack = 8; // últimas 8 semanas
-    const weeklyVolume = {}; // { 'Semana N': { sets: 0, tons: 0, days: Set } }
-    const prs = {}; // { ejercicio: maxKg }
-    const recentByEx = {}; // { ejercicio: [sets últimas 4 semanas] }
+    const weeksBack = 8;
+    const weeklyVolume = {};
+    const prs = {};
+    const allExSessions = {}; // { exName: [{date, maxW, maxReps, rm, sets[]}] } últimas 5 sesiones
+    const allExObjects = Object.values(exercises || {}).flat();
+
+    const OPTIMAL_SETS_RANGE = {
+      Pectoral:[10,20], Espalda:[10,20], Cuádriceps:[8,16], Isquios:[6,12],
+      Deltoides:[12,20], Bíceps:[8,16], Tríceps:[8,16], Glúteos:[8,16], Antebrazo:[6,10]
+    };
 
     Object.entries(exlog || {}).forEach(([exName, sets]) => {
+      // ── PRs y volumen semanal ──
       (sets || []).forEach(s => {
-        if (!s || !s.date || !s.w) return;
+        if (!s || !s.date || !s.w || s.type === "warmup") return;
         const d = new Date(s.date);
         const weeksAgo = Math.floor((now - d) / (7 * 24 * 3600 * 1000));
         if (weeksAgo > weeksBack) return;
-
-        // PRs
         if (!prs[exName] || s.w > prs[exName]) prs[exName] = s.w;
-
-        // Volumen semanal
         const weekLabel = weeksAgo === 0 ? 'Esta semana' : `Hace ${weeksAgo} sem`;
         if (!weeklyVolume[weekLabel]) weeklyVolume[weekLabel] = { sets: 0, tons: 0, days: new Set() };
         weeklyVolume[weekLabel].sets++;
         weeklyVolume[weekLabel].tons += (s.w * (parseFloat(s.reps) || 1)) / 1000;
         weeklyVolume[weekLabel].days.add(d.toISOString().slice(0, 10));
-
-        // Series recientes (4 semanas) por ejercicio
-        if (weeksAgo <= 4) {
-          if (!recentByEx[exName]) recentByEx[exName] = [];
-          recentByEx[exName].push({ date: s.date, w: s.w, reps: s.reps });
-        }
       });
+
+      // ── Historial por sesión (últimas 5 sesiones de trabajo) ──
+      const workingSets = (sets || []).filter(s => s && s.date && s.w && s.type !== "warmup");
+      if (workingSets.length > 0) {
+        const byDate = {};
+        workingSets.forEach(s => {
+          const dk = s.date.slice(0, 10);
+          if (!byDate[dk]) byDate[dk] = [];
+          byDate[dk].push(s);
+        });
+        const dates = Object.keys(byDate).sort().reverse().slice(0, 5);
+        allExSessions[exName] = dates.map(dk => {
+          const daySets = byDate[dk];
+          const maxW = Math.max(...daySets.map(s => parseFloat(s.w) || 0));
+          // best 1RM using Epley: w * (1 + (reps+rir)/30)
+          const bestRM = daySets.reduce((best, s) => {
+            const reps = parseInt(s.reps) || 0;
+            const rir = parseInt(s.rir) || 0;
+            const rm = (parseFloat(s.w) || 0) * (1 + (reps + rir) / 30);
+            return rm > best ? rm : best;
+          }, 0);
+          const maxReps = Math.max(...daySets.filter(s => parseFloat(s.w) === maxW).map(s => parseInt(s.reps) || 0));
+          return { date: dk, maxW, maxReps, rm: Math.round(bestRM), nSets: daySets.length };
+        });
+      }
     });
 
-    // PRs top 10 ejercicios
-    const prLines = Object.entries(prs)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
-      .map(([ex, w]) => `  - ${ex}: ${w} kg`);
+    // ── 1. Análisis detallado por ejercicio ──
+    const plateauExercises = [];
+    const overloadTargets = [];
+    const exDetailLines = [];
 
-    // Progresión por ejercicio (primer set más antiguo vs más reciente últimas 4 sem)
-    const progressLines = Object.entries(recentByEx)
-      .map(([ex, sets]) => {
-        const sorted = [...sets].sort((a, b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
-        if (sorted.length < 2) return null;
-        const first = sorted[0], last = sorted[sorted.length - 1];
-        if (first.w === last.w) return null;
-        const diff = (last.w - first.w).toFixed(1);
-        const arrow = diff > 0 ? '↑' : '↓';
-        return `  - ${ex}: ${first.w}kg → ${last.w}kg (${arrow}${Math.abs(diff)}kg)`;
-      })
-      .filter(Boolean)
-      .slice(0, 8);
+    Object.entries(allExSessions).forEach(([exName, sessions]) => {
+      if (!sessions.length) return;
+      const exObj = allExObjects.find(e => e.name === exName);
+      const primaryMuscle = exObj?.musculos?.[0] || "";
 
-    // Volumen últimas 4 semanas
-    const volLines = ['Esta semana', 'Hace 1 sem', 'Hace 2 sem', 'Hace 3 sem']
-      .map(label => {
-        const v = weeklyVolume[label];
-        if (!v) return null;
-        return `  - ${label}: ${v.sets} series, ${v.tons.toFixed(1)} ton, ${v.days.size} días entrenados`;
-      })
-      .filter(Boolean);
+      // Plateau: mismo peso máximo en últimas 3+ sesiones
+      if (sessions.length >= 3) {
+        const last3W = sessions.slice(0, 3).map(s => s.maxW);
+        if (last3W.every(w => w === last3W[0])) {
+          plateauExercises.push({ name: exName, weight: last3W[0], count: last3W.length });
+        }
+      }
 
-    // Tendencia de peso (últimas 8 semanas)
-    const weightEntries = Object.entries(metricslog || {})
-      .map(([d, m]) => ({ date: d, w: m?.weight }))
-      .filter(e => e.w)
-      .sort((a, b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
-    let weightTrend = 'Sin registros de peso suficientes.';
-    if (weightEntries.length >= 2) {
-      const oldest = weightEntries[Math.max(0, weightEntries.length - 8)];
-      const latest = weightEntries[weightEntries.length - 1];
-      const diff = (latest.w - oldest.w).toFixed(1);
-      weightTrend = `${oldest.w}kg (${oldest.date}) → ${latest.w}kg (${latest.date}) = ${diff > 0 ? '+' : ''}${diff}kg`;
-    }
+      // Sobrecarga progresiva: si hizo 8+ reps en última sesión → sugerir subir peso
+      const latest = sessions[0];
+      if (latest && latest.maxReps >= 8) {
+        const isCompound = /sentadill|peso muert|press banca|dominad|jalón|remo barra|prensa/i.test(exName);
+        const inc = isCompound ? 2.5 : 1;
+        overloadTargets.push({ name: exName, cur: latest.maxW, next: latest.maxW + inc, reps: latest.maxReps });
+      }
 
-    // Series por grupo muscular (últimas 2 semanas) — suma activaciones ponderadas de todas las variantes
-    const allExObjects = Object.values(exercises || {}).flat();
+      // Línea de detalle: últimas 3 sesiones con 1RM
+      const recent = sessions.slice(0, 3);
+      const rmTrend = recent.map(s => `${s.date.slice(5)}: ${s.maxW}kg×${s.maxReps||"?"}rep×${s.nSets}ser (1RM~${s.rm})`).join(' | ');
+      // Tendencia 1RM (subiendo/bajando)
+      const rmVals = recent.map(s => s.rm).filter(Boolean);
+      const rmDelta = rmVals.length >= 2 ? rmVals[0] - rmVals[rmVals.length - 1] : 0;
+      const trend = rmDelta > 2 ? " ↑" : rmDelta < -2 ? " ↓" : "";
+      exDetailLines.push(`  ${exName}${primaryMuscle ? " ["+primaryMuscle+"]" : ""}${trend}: ${rmTrend}`);
+    });
+
+    // ── 2. Volumen por grupo muscular (series ponderadas, 2 semanas) ──
     const muscleWeekMap = {};
     Object.entries(exlog || {}).forEach(([exName, allSets]) => {
       const exObj = allExObjects.find(e => e.name === exName);
@@ -3492,16 +3507,34 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     const muscleLines = ['Esta semana', 'Hace 1 sem'].map(lbl => {
       const mm = muscleWeekMap[lbl];
       if (!mm) return null;
-      const sorted = Object.entries(mm).sort(([,a],[,b]) => b-a).slice(0, 8);
-      return `  ${lbl}: ${sorted.map(([m,s]) => `${m} ${Math.round(s * 10) / 10}ser`).join(', ')}`;
+      const sorted = Object.entries(mm).sort(([,a],[,b]) => b-a);
+      const parts = sorted.map(([m, s]) => {
+        const v = Math.round(s * 10) / 10;
+        const opt = OPTIMAL_SETS_RANGE[m];
+        const badge = opt ? (v < opt[0] ? "⚠bajo" : v > opt[1] ? "⬆exceso" : "✓") : "";
+        return `${m}:${v}ser${badge}`;
+      });
+      return `  ${lbl}: ${parts.join(', ')}`;
     }).filter(Boolean);
 
+    // ── 3. Volumen semanal global ──
+    const volLines = ['Esta semana', 'Hace 1 sem', 'Hace 2 sem', 'Hace 3 sem'].map(label => {
+      const v = weeklyVolume[label];
+      if (!v) return null;
+      return `  - ${label}: ${v.sets} series, ${v.tons.toFixed(1)} ton, ${v.days.size} días`;
+    }).filter(Boolean);
+
+    // ── 4. PRs top 8 ──
+    const prLines = Object.entries(prs).sort((a,b)=>b[1]-a[1]).slice(0,8)
+      .map(([ex, w]) => `  ${ex}: ${w}kg`);
+
     let result = '';
-    if (prLines.length > 0) result += `PRs actuales (máximo histórico):\n${prLines.join('\n')}\n`;
-    if (progressLines.length > 0) result += `Progresión últimas 4 semanas:\n${progressLines.join('\n')}\n`;
-    if (volLines.length > 0) result += `Volumen de entrenamiento semanal:\n${volLines.join('\n')}\n`;
-    if (muscleLines.length > 0) result += `Series por grupo muscular (suma variantes, ponderado por activación):\n${muscleLines.join('\n')}\n`;
-    result += `Tendencia de peso corporal: ${weightTrend}`;
+    if (exDetailLines.length) result += `HISTORIAL POR EJERCICIO (últimas sesiones + 1RM estimado Epley):\n${exDetailLines.join('\n')}\n\n`;
+    if (muscleLines.length) result += `VOLUMEN POR MÚSCULO — series ponderadas por activación (✓=óptimo ⚠=bajo ⬆=exceso):\n${muscleLines.join('\n')}\n\n`;
+    if (volLines.length) result += `VOLUMEN SEMANAL GLOBAL:\n${volLines.join('\n')}\n\n`;
+    if (prLines.length) result += `PRs MÁXIMOS HISTÓRICOS:\n${prLines.join('\n')}\n\n`;
+    if (plateauExercises.length) result += `ESTANCAMIENTOS DETECTADOS (mismo peso 3+ sesiones):\n${plateauExercises.map(p=>`  ⚠️ ${p.name}: ${p.weight}kg`).join('\n')}\n\n`;
+    if (overloadTargets.length) result += `OBJETIVOS SOBRECARGA PRÓXIMA SESIÓN (reps≥8 → sube):\n${overloadTargets.slice(0,6).map(t=>`  ${t.name}: ${t.cur}kg×${t.reps}rep → intentar ${t.next}kg`).join('\n')}\n`;
     return result || 'Sin historial de entrenamiento registrado aún.';
   };
 
@@ -3646,10 +3679,12 @@ ${todayWorkout}
 ${workoutHistory}
 --- FIN HISTORIAL ---
 
-Español. ${coachPersonality==="motivacional" ? "Tono motivacional, empático y energético. Celebra logros, usa frases inspiradoras, motiva a Bruno a superar sus límites." : coachPersonality==="nutricionista" ? "Enfócate principalmente en nutrición, timing de comidas, macros y estrategias alimentarias. Profundiza en el aspecto nutricional sobre el entrenamiento." : coachPersonality==="psicólogo" ? "Tono empático, comprensivo y de apoyo. Atiende el aspecto mental y emocional del fitness. Ayuda a manejar el estrés, la motivación y los hábitos." : "Directo, técnico y basado en datos. Prioriza análisis de progresión, volumen, PRs y optimización del rendimiento."}
+Español. ${coachPersonality==="motivacional" ? "Tono motivacional, empático y energético. Celebra logros, usa frases inspiradoras, motiva a Bruno a superar sus límites." : coachPersonality==="nutricionista" ? "Enfócate principalmente en nutrición, timing de comidas, macros y estrategias alimentarias. Profundiza en el aspecto nutricional sobre el entrenamiento." : coachPersonality==="psicólogo" ? "Tono empático, comprensivo y de apoyo. Atiende el aspecto mental y emocional del fitness. Ayuda a manejar el estrés, la motivación y los hábitos." : "Directo, técnico y basado en datos. Prioriza análisis de progresión de fuerza, 1RM, volumen por músculo y optimización del rendimiento. El peso corporal es secundario frente al rendimiento."}
 FORMATO DE RESPUESTA (chatResponse): Texto limpio y legible para chat móvil. PERMITIDO: párrafos cortos, listas con "• item" (un ítem por línea), **negrita** para datos clave, emojis puntuales para separar secciones. PROHIBIDO ABSOLUTO: cualquier encabezado markdown (# ## ### #### ##### — NUNCA uses el símbolo #), listas con * en medio de una frase, párrafos de más de 4 líneas. Máximo 4 ítems por lista; si hay más datos, agrúpalos. Separá las secciones con una línea en blanco.
-Usa el historial para dar recomendaciones personalizadas y basadas en datos reales (PRs, progresión, volumen). Si detectás estancamiento o regresión en algún ejercicio, mencionalo proactivamente.
-REGLA DE CALCULADORA INVERSA: Si Bruno te pregunta qué cenar o comer para cerrar el día o cómo completar sus macros restantes (ej. 'me quedan 600 calorías y 50g de proteína...'), calcula con precisión matemática una combinación rápida de alimentos (ej. claras, huevo entero, gramos exactos de pechuga de pollo, scoop de whey) para cuadrar sus números de forma exacta.
+REGLA DE ANÁLISIS DE ENTRENAMIENTO: Usa SIEMPRE el historial detallado de ejercicios. Para cada ejercicio mencionado: cita el 1RM estimado, la tendencia (subiendo/bajando), y el número de series por semana en los músculos involucrados. Si detectás estancamiento (misma carga 3+ sesiones), propone inmediatamente una variación concreta con nombre del ejercicio alternativo.
+REGLA PRÓXIMA SEMANA: Cuando el tema sea entrenamiento o al finalizar un análisis de sesión, incluye SIEMPRE un bloque "Próxima semana:" con 3-5 puntos específicos: qué peso intentar en los ejercicios principales (basado en sobrecarga progresiva), qué músculo necesita más volumen según el balance muscular, y si hay algún ejercicio que conviene rotar o variar.
+REGLA VARIACIONES: Si un ejercicio lleva 3+ sesiones sin progreso de 1RM, sugiere la variación más adecuada (ej: press banca plano → press inclinado con mancuernas / press banca agarre cerrado / push-ups con lastre). Siempre da el nombre exacto del ejercicio alternativo.
+REGLA DE CALCULADORA INVERSA: Si Bruno te pregunta qué cenar o comer para cerrar el día o cómo completar sus macros restantes, calcula con precisión matemática una combinación rápida de alimentos (gramos exactos) para cuadrar sus números.
 REGLA CRÍTICA DE PORCIONES E INGREDIENTES: Cuando recomiendes porciones, alimentos o comidas en el chat, debes ajustar estrictamente las porciones (detallando gramos exactos) al plan nutricional seleccionado por Bruno (${target.label}) y a las necesidades energéticas del split del día (${activeSplit.fuel}). No recomiendes las mismas porciones por defecto. Si está en "Volumen" o día de "Carbo alto", propón porciones abundantes de carbohidratos. Si está en "Definición" o día de "Carbo medio", sé sumamente estricto y reduce las porciones de carbohidratos, sugiriendo fuentes de proteína magra más saciantes.
 REGLA DE DATOS NUTRICIONALES DE REFERENCIA: Para calcular calorías y macronutrientes de los alimentos registrados (ADD_FOOD) o recomendados en el chat, debes basar tus cálculos estrictamente en bases de datos nutricionales oficiales y verificadas (como USDA FoodData Central o tablas locales de Latinoamérica/Chile). No inventes ni alucines valores; asegúrate de que todas las estimaciones por porción/gramaje sean científicamente coherentes con estas fuentes oficiales.
 
