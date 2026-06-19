@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.18-L";
+const APP_VERSION = "v2025.06.19-M";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -58,6 +58,31 @@ const MUSCLES = {
   "Flexiones de brazos":["Pectoral","Tríceps","Deltoide ant."],
   "Remo Delfín":["Espalda","Deltoides"],
   "Curl con Auto-Resistencia":["Bíceps"],
+  "Apertura alta en poleas":["Pectoral"],
+  "Aperturas polea alta":["Pectoral"],
+  "Aperturas polea baja":["Pectoral","Deltoide ant."],
+  "Cruce en polea alta":["Pectoral"],
+  "Cruces polea alta":["Pectoral"],
+  "Curl de bíceps supino sentado":["Bíceps"],
+  "Curl de bíceps supino":["Bíceps"],
+  "Curl concentrado":["Bíceps"],
+  "Curl bíceps mancuerna":["Bíceps"],
+  "Curl barra":["Bíceps","Antebrazo"],
+  "Press inclinado barra":["Pectoral","Deltoide ant.","Tríceps"],
+  "Press declinado":["Pectoral","Tríceps"],
+  "Press banca mancuerna":["Pectoral","Tríceps","Deltoide ant."],
+  "Jalón al pecho":["Espalda","Bíceps"],
+  "Jalón polea":["Espalda","Bíceps"],
+  "Remo sentado":["Espalda","Bíceps"],
+  "Remo polea baja":["Espalda","Bíceps"],
+  "Elevaciones laterales":["Deltoides"],
+  "Vuelos laterales mancuerna":["Deltoides"],
+  "Press hombro mancuerna":["Deltoides","Tríceps"],
+  "Press militar":["Deltoides","Tríceps"],
+  "Peso muerto rumano":["Isquios","Glúteos"],
+  "Hip thrust":["Glúteos","Isquios"],
+  "Sentadilla goblet":["Cuádriceps","Glúteos"],
+  "Prensa de pierna":["Cuádriceps","Glúteos"],
 };
 
 // Biblioteca de ejercicios — búsqueda local sin API
@@ -1189,7 +1214,15 @@ function detectDeloadNeed(exlog, notes, _metricslog) {
 
 const MUSCLE_ALIASES = {
   "Deltoide ant.":"Deltoides","Deltoide lat.":"Deltoides","Deltoide post.":"Deltoides",
-  "Core":"Core","Pantorrilla":"Pantorrillas"
+  "Deltoides anterior":"Deltoides","Deltoides lateral":"Deltoides","Deltoides posterior":"Deltoides",
+  "Isquiotibiales":"Isquios","Femoral":"Isquios",
+  "Glúteo":"Glúteos","Glúteo mayor":"Glúteos","Glúteo medio":"Glúteos",
+  "Dorsal ancho":"Espalda","Dorsal":"Espalda","Trapecio":"Espalda","Romboides":"Espalda",
+  "Gemelos":"Pantorrillas","Sóleo":"Pantorrillas","Pantorrilla":"Pantorrillas",
+  "Pecho":"Pectoral","Pectoral mayor":"Pectoral",
+  "Bíceps braquial":"Bíceps","Braquial":"Bíceps",
+  "Tríceps braquial":"Tríceps",
+  "Core":"Core","Abdominales":"Core","Oblicuos":"Core","Lumbares":"Espalda",
 };
 function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
   const primaryMuscles = ["Pectoral","Espalda","Cuádriceps","Isquios","Deltoides","Bíceps","Tríceps","Glúteos","Antebrazo","Core","Pantorrillas"];
@@ -1198,7 +1231,8 @@ function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
   const cutoff = days >= 999 ? 0 : Date.now() - days * 86400000;
   let minDate = Infinity;
   Object.entries(exlog||{}).forEach(([exName, sets])=>{
-    const muscleList = (exercises&&Object.values(exercises).flat().find(e=>e.name===exName)?.musculos) || MUSCLES[exName] || [];
+    const _exMusculos = exercises && Object.values(exercises).flat().find(e=>e.name===exName)?.musculos;
+    const muscleList = (_exMusculos?.length ? _exMusculos : MUSCLES[exName]) || [];
     const filteredSets = (sets||[]).filter(s=>s?.date && (days >= 999 || new Date(s.date).getTime()>cutoff) && s?.type!=="warmup");
     filteredSets.forEach(s => {
       const t = new Date(s.date).getTime();
@@ -3777,7 +3811,7 @@ No repitas los datos que ya te mandé. No me pidas registrar nada.`;
     if (pdfBusy) return;
     setPdfBusy(true);
     const w = window.open('', '_blank');
-    if (w) w.document.write('<html><body style="background:#0c0e0b;color:#cdff4a;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center"><div><p style="font-size:22px;margin-bottom:8px">⏳ Generando reporte…</p><p style="font-size:13px;color:#9aa088">Analizando tu semana con IA</p></div></body></html>');
+    if (w) w.document.write('<html><body style="background:#0c0e0b;color:#cdff4a;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center"><div><p style="font-size:22px;margin-bottom:8px">⏳ Generando reporte…</p><p style="font-size:13px;color:#9aa088">Analizando 8 semanas de entrenamiento con IA</p><p style="font-size:12px;color:#666;margin-top:10px;">Esto puede tardar 30–60 segundos ☕</p></div></body></html>');
     try {
       const last7 = [...Array(7)].map((_,i)=>{ const d=new Date(); d.setDate(d.getDate()-i); return d.toISOString().slice(0,10); }).reverse();
       const weekStart = last7[0], weekEnd = last7[6];
@@ -3806,6 +3840,38 @@ No repitas los datos que ya te mandé. No me pidas registrar nada.`;
           weekWorkouts[d][exName].push(s);
         });
       });
+
+      // Per-exercise historical sessions (last 5 per exercise, for strength trend)
+      const exHistorical = {};
+      Object.entries(exlog||{}).forEach(([exName, sets]) => {
+        const workSets = (sets||[]).filter(s => s?.date && s.w && s.type !== "warmup");
+        if (!workSets.length) return;
+        const byDate = {};
+        workSets.forEach(s => { const dk = s.date.slice(0,10); if (!byDate[dk]) byDate[dk] = []; byDate[dk].push(s); });
+        const dates = Object.keys(byDate).sort().reverse().slice(0,5);
+        exHistorical[exName] = dates.map(dk => {
+          const daySets = byDate[dk];
+          const maxW2 = Math.max(...daySets.map(s => parseFloat(s.w)||0));
+          const bestRM = daySets.reduce((best, s) => { const reps = parseInt(s.reps)||0; const rir = parseInt(s.rir)||0; const rm = (parseFloat(s.w)||0)*(1+(reps+rir)/30); return rm > best ? rm : best; }, 0);
+          return { date: dk, maxW: maxW2, rm: Math.round(bestRM), nSets: daySets.length };
+        });
+      });
+
+      // Plateau: same maxW for 3+ consecutive sessions
+      const localPlateaus = [];
+      Object.entries(exHistorical).forEach(([exName, sessions]) => {
+        if (sessions.length >= 3) {
+          const last3W = sessions.slice(0,3).map(s => s.maxW);
+          if (last3W.every(w => w === last3W[0]) && last3W[0] > 0) localPlateaus.push({ name: exName, weight: last3W[0] });
+        }
+      });
+
+      // Technique notes from exercises state
+      const techNotesByEx = {};
+      Object.values(exercises||{}).flat().forEach(ex => { if (ex?.tecnico?.trim()) techNotesByEx[ex.name] = ex.tecnico.trim(); });
+
+      // Full 8-week history for AI (1RM trends, plateaus, muscle volume with optimal ranges)
+      const historyStr = buildWorkoutHistorySummary();
 
       const trainedDays = Object.keys(weekWorkouts).sort();
       const totalSets = trainedDays.reduce((s,d)=>s+Object.values(weekWorkouts[d]).reduce((ss,sets)=>ss+sets.length,0),0);
@@ -3851,44 +3917,51 @@ No repitas los datos que ya te mandé. No me pidas registrar nada.`;
         cargas:{ type:"ARRAY", items:{ type:"OBJECT", properties:{
           ejercicio:{type:"STRING"}, cargaActual:{type:"STRING"}, sugerencia:{type:"STRING"}, esquema:{type:"STRING"}, razon:{type:"STRING"}
         }, required:["ejercicio","sugerencia","esquema","razon"] }},
+        variaciones:{ type:"ARRAY", items:{ type:"OBJECT", properties:{ ejercicio:{type:"STRING"}, alternativa:{type:"STRING"}, motivo:{type:"STRING"} }, required:["ejercicio","alternativa","motivo"] }},
         planProximaSemana:{ type:"ARRAY", items:{type:"STRING"} },
         focoProximaSemana:{ type:"STRING" }
       }, required:["valoracion","analisis","progresion","cargas","focoProximaSemana"] };
 
-      const sys = `Eres el coach personal de Bruno. Tu análisis va a ser leído por su entrenadora humana. Sé técnico, específico y detallado. Usa los datos reales proporcionados — nunca inventes cifras. Responde en español.`;
+      const sys = `Eres el coach personal de Bruno. Tu análisis va a ser leído por su entrenadora humana. Sé técnico, específico y detallado. Usa los datos reales de 1RM Epley, tendencias históricas y volumen muscular — nunca inventes cifras. Para ejercicios estancados (mismo peso 3+ sesiones), sugiere una variación concreta con nombre exacto del ejercicio alternativo. Responde en español.`;
       const userMsg = `REPORTE SEMANAL — ${weekStart} al ${weekEnd}
 
 DATOS GENERALES:
 • Días entrenados: ${trainedDays.length}/7
 • Series efectivas totales: ${totalSets}
 • Volumen total: ${totalTons.toFixed(2)} toneladas
-• Peso: ${lm?.weight||'sin dato'}kg${weightChange!==null?` (${parseFloat(weightChange)>=0?'+':''}${weightChange}kg esta semana)`:''}
 ${lm?.musculo?`• Masa muscular: ${lm.musculo}kg | Grasa: ${lm.grasaPct}% | Visceral: ${lm.visceral||'?'}`:''}
 
-ENTRENAMIENTO DÍA A DÍA:
+ENTRENAMIENTO DÍA A DÍA (esta semana):
 ${dayDetails||'Sin datos'}
 
-VOLUMEN POR MÚSCULO (últimas 4 semanas):
+HISTORIAL COMPLETO (8 semanas — 1RM estimado Epley por sesión, tendencias ↑↓, volumen muscular con rangos óptimos):
+${historyStr||'Sin historial'}
+
+VOLUMEN POR MÚSCULO (últimas 4 semanas, rangos hipertrofia):
 ${muscleLines||'Sin datos'}
+
+NOTAS TÉCNICAS POR EJERCICIO:
+${Object.entries(techNotesByEx).length ? Object.entries(techNotesByEx).map(([ex,n])=>`  ${ex}: ${n}`).join('\n') : '  Sin notas técnicas registradas'}
+
+ESTANCAMIENTOS DETECTADOS (mismo peso 3+ sesiones consecutivas):
+${localPlateaus.length ? localPlateaus.map(p=>`  ⚠ ${p.name}: estancado en ${p.weight}kg`).join('\n') : '  Ninguno'}
 
 SOBRECARGA PROGRESIVA DETECTADA:
 ${overloadStr||'Sin sugerencias disponibles'}
-
-ESTANCAMIENTOS DETECTADOS:
-${plateauStr}
 
 NECESIDAD DE DELOAD: ${deload.recommended?`SÍ — urgencia ${deload.urgency} (${deload.reason})`:'No detectada'} · Semanas sin deload: ${deload.weeksSinceDeload}
 
 INSTRUCCIONES PARA EL ANÁLISIS:
 1. "valoracion": puntúa la semana del 1 al 10 con un resumen de una línea.
-2. "analisis": 3 párrafos detallados — (a) análisis global de volumen e intensidad, (b) qué ejercicios evolucionaron bien y cuáles no, (c) balance muscular push/pull/piernas.
-3. "progresion": párrafo específico sobre cómo está progresando en fuerza, si la sobrecarga es correcta, y tendencia de 1RM estimado.
+2. "analisis": 3 párrafos detallados — (a) análisis global de volumen e intensidad, (b) qué ejercicios evolucionaron bien y cuáles no según tendencia 1RM, (c) balance muscular push/pull/piernas con datos de series.
+3. "progresion": párrafo específico sobre tendencia de 1RM estimado por ejercicio clave, si la sobrecarga es correcta según el historial de 8 semanas.
 4. "recuperacion": evaluación del estado de fatiga, si necesita deload, calidad del volumen (demasiado/poco).
-5. "fortalezas": mínimo 4 puntos concretos y específicos con datos reales.
+5. "fortalezas": mínimo 4 puntos concretos con datos reales (cita ejercicios, pesos, 1RM).
 6. "mejorar": mínimo 4 puntos cada uno con una acción concreta y accionable.
-7. "cargas": para CADA ejercicio realizado esta semana, da la carga actual, la sugerencia concreta en kg para la próxima sesión, el esquema recomendado (ej. "4×6" o "3×10-12") y el razonamiento técnico.
-8. "planProximaSemana": lista de 5-7 prioridades concretas para la próxima semana.
-9. "focoProximaSemana": UN párrafo claro de foco principal.`;
+7. "cargas": para CADA ejercicio realizado esta semana, da la carga actual, la sugerencia concreta en kg para la próxima sesión basada en la tendencia de 1RM, el esquema recomendado (ej. "4×6" o "3×10-12") y el razonamiento técnico.
+8. "variaciones": para cada ejercicio en ESTANCAMIENTOS DETECTADOS, propón 1 variación específica (nombre exacto del ejercicio alternativo) y el motivo técnico.
+9. "planProximaSemana": lista de 5-7 prioridades concretas para la próxima semana, ordenadas por impacto.
+10. "focoProximaSemana": UN párrafo claro de foco principal.`;
 
       const raw = await callGemini([{role:"user",content:userMsg}], sys, PDF_SCHEMA);
       const ai = cleanAndParseJSON(raw) || {};
@@ -3904,7 +3977,11 @@ INSTRUCCIONES PARA EL ANÁLISIS:
           const isPR = allTimePRs[exName]&&maxW>=allTimePRs[exName];
           const isImprove = !isPR && prevBestByEx[exName] && maxW > prevBestByEx[exName];
           const badge = isPR?'<span class="pr-badge">★ PR</span>':isImprove?'<span class="imp-badge">↑</span>':'';
-          return `<tr><td><b>${exName}</b> ${badge}</td><td>${sets.length}</td><td style="font-size:10.5px;">${sets.map(s=>`${s.w}kg×${s.reps}`).join(' · ')}</td><td>${est1rm} kg</td><td style="color:#888;">${maxW}kg</td></tr>`;
+          const techNote = techNotesByEx[exName] ? `<div style="font-size:9px;color:#888;font-style:italic;margin-top:2px;">📝 ${techNotesByEx[exName].slice(0,80)}</div>` : '';
+          const hist = exHistorical[exName]; const histLen = hist?.length||0;
+          const rmDelta = histLen>=2 ? hist[0].rm - hist[histLen-1].rm : 0;
+          const trend = rmDelta>3?'<span style="color:#3a7000;font-size:10px;margin-left:3px;">↑</span>':rmDelta<-3?'<span style="color:#b91c1c;font-size:10px;margin-left:3px;">↓</span>':'';
+          return `<tr><td><b>${exName}</b> ${badge}${trend}${techNote}</td><td>${sets.length}</td><td style="font-size:10.5px;">${sets.map(s=>`${s.w}kg×${s.reps}`).join(' · ')}</td><td>${est1rm} kg</td><td style="color:#888;">${maxW}kg</td></tr>`;
         }).join('');
         return `<div class="day-block">
   <div class="day-header"><span>${fmtDate(date)}</span><span class="day-stats">${Object.keys(dayExs).length} ejercicios · ${Object.values(dayExs).reduce((s,sets)=>s+sets.length,0)} series · ${dayTons.toFixed(1)}t</span></div>
@@ -3944,6 +4021,24 @@ INSTRUCCIONES PARA EL ANÁLISIS:
         }).join('');
         muscleGroupsHTML += `<div class="muscle-group"><div class="muscle-group-title">Otros</div>${bars}</div>`;
       }
+
+      // Strength progression table (exercises done this week, last 5 sessions each)
+      const weekExNames = [...new Set(trainedDays.flatMap(d => Object.keys(weekWorkouts[d]||{})))];
+      const progRows = weekExNames.map(exName => {
+        const history = exHistorical[exName];
+        if (!history || history.length < 2) return null;
+        const rmDelta2 = history[0].rm - history[history.length-1].rm;
+        const trendColor2 = rmDelta2 > 2 ? '#3a7000' : rmDelta2 < -2 ? '#b91c1c' : '#888';
+        const trendArrow2 = rmDelta2 > 2 ? '↑' : rmDelta2 < -2 ? '↓' : '→';
+        const cells = history.slice(0,5).map(s => `<td style="font-size:9.5px;text-align:center;padding:5px 6px;">${s.date.slice(5)}<br><b>${s.maxW}kg</b><br><span style="color:#777;">${s.rm}kg</span></td>`).join('');
+        return `<tr><td style="font-size:11px;font-weight:700;padding:6px 8px;white-space:nowrap;">${exName} <span style="color:${trendColor2};font-size:13px;">${trendArrow2}</span></td>${cells}</tr>`;
+      }).filter(Boolean).join('');
+
+      // Plateau visual section
+      const plateauHTML = localPlateaus.length ? localPlateaus.map(p => `<div class="list-item warn-item"><b>⚠ ${p.name}</b> — estancado en <b>${p.weight}kg</b> por 3+ sesiones consecutivas</div>`).join('') : '';
+
+      // AI variations section
+      const variacionesHTML = (ai.variaciones||[]).map(v => `<div class="list-item"><b>${v.ejercicio}</b> &rarr; <span style="color:#3a7000;font-weight:700;">${v.alternativa}</span><div class="action">${v.motivo}</div></div>`).join('');
 
       // Cargas table
       const cargasRows = (ai.cargas||[]).map(c=>`<tr><td><b>${c.ejercicio}</b></td><td>${c.cargaActual||'—'}</td><td class="highlight"><b>${c.sugerencia}</b></td><td style="color:#555;font-weight:700;">${c.esquema||'—'}</td><td style="font-size:10px;color:#666;">${c.razon||''}</td></tr>`).join('');
@@ -4012,12 +4107,16 @@ ${ai.valoracion?`<div class="score-row"><div class="score-circle" style="color:$
 ${deload.recommended&&deload.urgency!=='none'?`<div style="margin-top:10px;" class="deload-alert">⚠️ <b>Deload recomendado</b> (urgencia: ${deload.urgency}) — ${deload.reason}</div>`:''}
 <h2>Entrenamientos por Día</h2>
 ${daysSectionsHTML||'<p style="color:#999;">Sin entrenamientos registrados esta semana.</p>'}
+${progRows?`<h2>Progresión de Fuerza por Ejercicio</h2>
+<p style="font-size:10px;color:#aaa;margin-bottom:8px;">Carga máxima y 1RM estimado (Epley) por sesión — últimas 5 sesiones. ↑ mejorando · ↓ bajando · → estancado</p>
+<div style="overflow-x:auto;"><table style="min-width:500px;"><thead><tr><th style="width:170px;">Ejercicio</th><th colspan="5" style="text-align:center;font-size:9.5px;">Sesiones recientes (fecha / carga / 1RM est.)</th></tr></thead><tbody>${progRows}</tbody></table></div>`:''}
+${plateauHTML?`<h2>⚠ Ejercicios Estancados</h2>${plateauHTML}`:''}
 <h2>Volumen por Grupo Muscular</h2>
 <div class="two-col" style="margin-bottom:4px;">${muscleGroupsHTML}</div>
 <p style="font-size:10px;color:#aaa;margin-top:4px;">Referencia: verde=óptimo (8–20 series/sem) · amarillo=bajo (&lt;8) · rojo=sin trabajo · azul=alto (&gt;20)</p>
 <h2>Análisis Global</h2>
 ${ai.analisis?`<div class="ai-section">${ai.analisis}</div>`:'<p style="color:#999;">Sin análisis disponible.</p>'}
-<h2>Progresión de Fuerza</h2>
+<h2>Progresión de Fuerza — Análisis IA</h2>
 ${ai.progresion?`<div class="ai-section">${ai.progresion}</div>`:''}
 ${ai.recuperacion?`<h2>Recuperación y Fatiga</h2><div class="recovery-box">${ai.recuperacion}</div>`:''}
 ${(ai.fortalezas?.length||ai.mejorar?.length)?`<h2>Balance de la Semana</h2><div class="two-col">
@@ -4025,6 +4124,7 @@ ${ai.fortalezas?.length?`<div><div class="col-title" style="color:#3a7000;">✓ 
 ${ai.mejorar?.length?`<div><div class="col-title" style="color:#c97a00;">↑ A mejorar</div>${ai.mejorar.map(m=>`<div class="list-item warn-item"><b>${m.punto||m}</b>${m.accion?`<div class="action">→ ${m.accion}</div>`:''}</div>`).join('')}</div>`:''}
 </div>`:''}
 ${cargasRows?`<h2>Recomendaciones de Carga — Próxima Semana</h2><table><thead><tr><th>Ejercicio</th><th>Carga actual</th><th>Sugerencia</th><th>Esquema</th><th>Razonamiento</th></tr></thead><tbody>${cargasRows}</tbody></table>`:''}
+${variacionesHTML?`<h2>Variaciones Sugeridas (para estancamientos)</h2>${variacionesHTML}`:''}
 ${ai.planProximaSemana?.length?`<h2>Plan para la Próxima Semana</h2><ol class="plan-list">${ai.planProximaSemana.map(p=>`<li>${p}</li>`).join('')}</ol>`:''}
 ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoProximaSemana}</div>`:''}
 <div class="footer">Reporte generado por Bruno Fit &nbsp;·&nbsp; ${new Date().toLocaleDateString('es-ES',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div>
@@ -9153,8 +9253,9 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
             disabled={pdfBusy || busy}
             style={{width:"100%", padding:"13px 0", borderRadius:12, border:`1px solid ${C.amber}`, cursor:(pdfBusy||busy)?"not-allowed":"pointer", background:"transparent", color:C.amber, fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyContent:"center", gap:8, opacity:(pdfBusy||busy)?0.6:1, transition:"opacity .2s"}}
           >
-            {pdfBusy ? <><Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>Generando reporte…</> : <>📄 PDF para mi coach</>}
+            {pdfBusy ? <><Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>Generando… (30–60 seg)</> : <>📄 PDF para mi coach</>}
           </button>
+          {!pdfBusy && <p style={{fontSize:10.5, color:C.muted, textAlign:"center", marginTop:4}}>Analiza 8 semanas con IA — puede tardar ~1 minuto ☕</p>}
         )}
 
         {/* AI CTA */}
@@ -9956,8 +10057,9 @@ function Entreno({
 
   /* ===== MAPA DE CALOR DE VOLUMEN SEMANAL ===== */
   const vol = useMemo(() => {
+    // Solo añadir al mapa si musculos tiene contenido; si está vacío, dejar que MUSCLES haga fallback
     const exMap = {};
-    Object.values(exercises || {}).flat().forEach(e => { exMap[e.name] = e.musculos || []; });
+    Object.values(exercises || {}).flat().forEach(e => { if (e.musculos?.length) exMap[e.name] = e.musculos; });
     const weekAgo = Date.now() - 7 * 864e5;
     const calculatedVol = { Pectoral: 0, Espalda: 0, Cuádriceps: 0, Isquios: 0, Deltoides: 0, Bíceps: 0, Tríceps: 0, Glúteos: 0, Antebrazo: 0 };
 
@@ -9965,7 +10067,9 @@ function Entreno({
       const ms = exMap[name] || MUSCLES[name] || [];
       (sets || []).forEach(s => {
         if(s && s.date && new Date(s.date).getTime() >= weekAgo && s.type !== "warmup") {
-          ms.forEach(m => {
+          ms.forEach(rawM => {
+            // Normalizar aliases (ej. "Deltoide ant." → "Deltoides", "Isquiotibiales" → "Isquios")
+            const m = MUSCLE_ALIASES[rawM] || rawM;
             if(calculatedVol[m] !== undefined) calculatedVol[m] = calculatedVol[m] + 1;
           });
         }
