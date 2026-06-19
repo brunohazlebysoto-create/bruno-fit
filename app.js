@@ -58,6 +58,31 @@ const MUSCLES = {
   "Flexiones de brazos":["Pectoral","Tríceps","Deltoide ant."],
   "Remo Delfín":["Espalda","Deltoides"],
   "Curl con Auto-Resistencia":["Bíceps"],
+  "Apertura alta en poleas":["Pectoral"],
+  "Aperturas polea alta":["Pectoral"],
+  "Aperturas polea baja":["Pectoral","Deltoide ant."],
+  "Cruce en polea alta":["Pectoral"],
+  "Cruces polea alta":["Pectoral"],
+  "Curl de bíceps supino sentado":["Bíceps"],
+  "Curl de bíceps supino":["Bíceps"],
+  "Curl concentrado":["Bíceps"],
+  "Curl bíceps mancuerna":["Bíceps"],
+  "Curl barra":["Bíceps","Antebrazo"],
+  "Press inclinado barra":["Pectoral","Deltoide ant.","Tríceps"],
+  "Press declinado":["Pectoral","Tríceps"],
+  "Press banca mancuerna":["Pectoral","Tríceps","Deltoide ant."],
+  "Jalón al pecho":["Espalda","Bíceps"],
+  "Jalón polea":["Espalda","Bíceps"],
+  "Remo sentado":["Espalda","Bíceps"],
+  "Remo polea baja":["Espalda","Bíceps"],
+  "Elevaciones laterales":["Deltoides"],
+  "Vuelos laterales mancuerna":["Deltoides"],
+  "Press hombro mancuerna":["Deltoides","Tríceps"],
+  "Press militar":["Deltoides","Tríceps"],
+  "Peso muerto rumano":["Isquios","Glúteos"],
+  "Hip thrust":["Glúteos","Isquios"],
+  "Sentadilla goblet":["Cuádriceps","Glúteos"],
+  "Prensa de pierna":["Cuádriceps","Glúteos"],
 };
 
 // Biblioteca de ejercicios — búsqueda local sin API
@@ -1189,7 +1214,15 @@ function detectDeloadNeed(exlog, notes, _metricslog) {
 
 const MUSCLE_ALIASES = {
   "Deltoide ant.":"Deltoides","Deltoide lat.":"Deltoides","Deltoide post.":"Deltoides",
-  "Core":"Core","Pantorrilla":"Pantorrillas"
+  "Deltoides anterior":"Deltoides","Deltoides lateral":"Deltoides","Deltoides posterior":"Deltoides",
+  "Isquiotibiales":"Isquios","Femoral":"Isquios",
+  "Glúteo":"Glúteos","Glúteo mayor":"Glúteos","Glúteo medio":"Glúteos",
+  "Dorsal ancho":"Espalda","Dorsal":"Espalda","Trapecio":"Espalda","Romboides":"Espalda",
+  "Gemelos":"Pantorrillas","Sóleo":"Pantorrillas","Pantorrilla":"Pantorrillas",
+  "Pecho":"Pectoral","Pectoral mayor":"Pectoral",
+  "Bíceps braquial":"Bíceps","Braquial":"Bíceps",
+  "Tríceps braquial":"Tríceps",
+  "Core":"Core","Abdominales":"Core","Oblicuos":"Core","Lumbares":"Espalda",
 };
 function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
   const primaryMuscles = ["Pectoral","Espalda","Cuádriceps","Isquios","Deltoides","Bíceps","Tríceps","Glúteos","Antebrazo","Core","Pantorrillas"];
@@ -1198,7 +1231,8 @@ function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
   const cutoff = days >= 999 ? 0 : Date.now() - days * 86400000;
   let minDate = Infinity;
   Object.entries(exlog||{}).forEach(([exName, sets])=>{
-    const muscleList = (exercises&&Object.values(exercises).flat().find(e=>e.name===exName)?.musculos) || MUSCLES[exName] || [];
+    const _exMusculos = exercises && Object.values(exercises).flat().find(e=>e.name===exName)?.musculos;
+    const muscleList = (_exMusculos?.length ? _exMusculos : MUSCLES[exName]) || [];
     const filteredSets = (sets||[]).filter(s=>s?.date && (days >= 999 || new Date(s.date).getTime()>cutoff) && s?.type!=="warmup");
     filteredSets.forEach(s => {
       const t = new Date(s.date).getTime();
@@ -10023,8 +10057,9 @@ function Entreno({
 
   /* ===== MAPA DE CALOR DE VOLUMEN SEMANAL ===== */
   const vol = useMemo(() => {
+    // Solo añadir al mapa si musculos tiene contenido; si está vacío, dejar que MUSCLES haga fallback
     const exMap = {};
-    Object.values(exercises || {}).flat().forEach(e => { exMap[e.name] = e.musculos || []; });
+    Object.values(exercises || {}).flat().forEach(e => { if (e.musculos?.length) exMap[e.name] = e.musculos; });
     const weekAgo = Date.now() - 7 * 864e5;
     const calculatedVol = { Pectoral: 0, Espalda: 0, Cuádriceps: 0, Isquios: 0, Deltoides: 0, Bíceps: 0, Tríceps: 0, Glúteos: 0, Antebrazo: 0 };
 
@@ -10032,7 +10067,9 @@ function Entreno({
       const ms = exMap[name] || MUSCLES[name] || [];
       (sets || []).forEach(s => {
         if(s && s.date && new Date(s.date).getTime() >= weekAgo && s.type !== "warmup") {
-          ms.forEach(m => {
+          ms.forEach(rawM => {
+            // Normalizar aliases (ej. "Deltoide ant." → "Deltoides", "Isquiotibiales" → "Isquios")
+            const m = MUSCLE_ALIASES[rawM] || rawM;
             if(calculatedVol[m] !== undefined) calculatedVol[m] = calculatedVol[m] + 1;
           });
         }
