@@ -3572,9 +3572,11 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
       // Get Fitdays body composition data
       const getFitdaysCompositionText = () => {
-        const keys = Object.keys(metricslog || {}).sort().reverse();
+        const keys = Object.keys(metricslog || {});
         if (keys.length === 0) return "Sin registros Fitdays.";
-        const latest = metricslog[keys[0]];
+        // Optimization: O(N) linear search instead of O(N log N) sort to find max date
+        const latestKey = keys.reduce((a, b) => a > b ? a : b);
+        const latest = metricslog[latestKey];
         if (!latest) return "Sin registros Fitdays.";
 
         let comp = "";
@@ -3752,7 +3754,9 @@ No repitas los datos que ya te mandé. No me pidas registrar nada.`;
 
       const wDates = last7.filter(d=>metricslog?.[d]?.weight);
       const weightChange = wDates.length>=2 ? (parseFloat(metricslog[wDates[wDates.length-1]].weight)-parseFloat(metricslog[wDates[0]].weight)).toFixed(1) : null;
-      const latestMetricDate = Object.keys(metricslog||{}).sort().reverse()[0];
+      const mKeys = Object.keys(metricslog || {});
+      // Optimization: O(N) linear search instead of O(N log N) sort to find latest date
+      const latestMetricDate = mKeys.length > 0 ? mKeys.reduce((a, b) => a > b ? a : b) : undefined;
       const lm = latestMetricDate ? metricslog[latestMetricDate] : null;
 
       // Build per-day detail for AI prompt
@@ -14008,7 +14012,9 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
       {/* Radar chart de medidas corporales */}
       {(() => {
         const entry = metricslog[selectedDateStr] || {};
-        const prevDates = Object.keys(metricslog).filter(d => d < selectedDateStr).sort().slice(-1);
+        const prevFiltered = Object.keys(metricslog).filter(d => d < selectedDateStr);
+        // Optimization: O(N) linear search instead of O(N log N) sort
+        const prevDates = prevFiltered.length > 0 ? [prevFiltered.reduce((a, b) => a > b ? a : b)] : [];
         const prevEntry = prevDates.length > 0 ? (metricslog[prevDates[0]] || {}) : null;
 
         const fields = [
@@ -14092,7 +14098,9 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
       {/* Radar chart de medidas corporales */}
       {(() => {
         const entry = metricslog[selectedDateStr] || {};
-        const prevDates = Object.keys(metricslog).filter(d => d < selectedDateStr).sort().slice(-1);
+        const prevFiltered = Object.keys(metricslog).filter(d => d < selectedDateStr);
+        // Optimization: O(N) linear search instead of O(N log N) sort
+        const prevDates = prevFiltered.length > 0 ? [prevFiltered.reduce((a, b) => a > b ? a : b)] : [];
         const prevEntry = prevDates.length > 0 ? (metricslog[prevDates[0]] || {}) : null;
 
         const fields = [
