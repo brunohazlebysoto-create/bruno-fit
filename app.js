@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.18-I";
+const APP_VERSION = "v2025.06.18-J";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -4336,6 +4336,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             splits={splits}
             setSplits={(s) => saveState({ splits: s })}
             notes={notes}
+            setNotes={(n) => { setNotes(n); saveState({ notes: n }); }}
             chat={chat}
           />
         )}
@@ -4360,6 +4361,14 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             analyzeAndReconfigure={analyzeAndReconfigure}
             experiments={experiments}
             setExperiments={(exp) => saveState({ experiments: exp })}
+            dietGuidelines={dietGuidelines}
+            setDietGuidelines={setDietGuidelines}
+            trainingGuidelines={trainingGuidelines}
+            setTrainingGuidelines={setTrainingGuidelines}
+            onSaveGuidelines={(type, value) => {
+              if (type === "diet") saveState({ dietGuidelines: value });
+              else saveState({ trainingGuidelines: value });
+            }}
           />
         )}
         {view === "plan" && (
@@ -9706,7 +9715,7 @@ function Entreno({
   exlog, setExlog, exercises, setExercises, geminiKey, handleAnalyzeWorkout, importWorkoutData,
   activeSplitKey, setActiveSplitKey, selectedDateStr, setSelectedDateStr, calMonth, setCalMonth,
   workoutDurations, setWorkoutDurations, exerciseTechNotes, setExerciseTechNotes, prAlerts, setPrAlerts, checkNewPR, activeMetrics,
-  overloadSuggestions, plateauAlerts, muscleImbalances, splits, setSplits, notes, chat
+  overloadSuggestions, plateauAlerts, muscleImbalances, splits, setSplits, notes, setNotes, chat
 }){
   const sel = activeSplitKey;
   const setSel = setActiveSplitKey;
@@ -10703,6 +10712,23 @@ function Entreno({
               <div style={{fontSize:11, fontWeight:800, color:C.muted, textTransform:"uppercase", marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:4}}>
                 <span>Detalle de Sesión</span>
                 <span style={{color:C.lime}}>{formatSelectedDateLong(selectedDateStr)}</span>
+              </div>
+
+              {/* Quick sensation */}
+              <div style={{display:"flex", gap:5, marginBottom:8}}>
+                {[["😴","Fatigado","rgba(255,61,113,0.1)","rgba(255,61,113,0.3)",C.rose],["💪","Normal","rgba(205,255,74,0.08)","rgba(205,255,74,0.25)",C.lime],["🚀","Óptimo","rgba(74,214,255,0.08)","rgba(74,214,255,0.25)",C.cyan]].map(([emoji,label,bg,border,col]) => {
+                  const todaySensation = (notes||[]).find(n => n.type==="sensacion" && n.date?.slice(0,10)===selectedDateStr);
+                  const isActive = todaySensation?.text?.toLowerCase().includes(label.toLowerCase());
+                  return (
+                    <button key={label} onClick={() => {
+                      const newNote = { id: uid(), type:"sensacion", date: new Date(selectedDateStr+"T"+new Date().toTimeString().slice(0,8)).toISOString(), text: label };
+                      const filtered = (notes||[]).filter(n => !(n.type==="sensacion" && n.date?.slice(0,10)===selectedDateStr));
+                      setNotes && setNotes([newNote, ...filtered]);
+                    }} style={{flex:1, background:isActive?bg:"transparent", border:`1px solid ${isActive?border:C.line}`, borderRadius:8, padding:"5px 4px", color:isActive?col:C.muted, fontSize:11, fontWeight:700, cursor:"pointer"}}>
+                      {emoji} {label}
+                    </button>
+                  );
+                })}
               </div>
 
               {selectedDayWorkouts && (() => {
@@ -13948,6 +13974,34 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         <button onClick={() => { if(type === "peso") savePeso(); else if(type === "composicion") saveComposicion(); }} style={{width:"100%", marginTop:8, padding:"10px", borderRadius:10, border:"none", cursor:"pointer", background:C.lime, color:"#0c0e0b", fontWeight:800, fontSize:14}}>
           {buttonLabels[type] || "Guardar"}
         </button>
+      </div>
+
+      {/* ── Directrices personalizadas ── */}
+      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:14, marginBottom:12}}>
+        <div style={{fontSize:12, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".08em", marginBottom:10}}>Directrices personalizadas</div>
+        <div style={{marginBottom:8}}>
+          <label style={{fontSize:11, color:C.muted, fontWeight:700, display:"block", marginBottom:4}}>🥗 Dieta — mis reglas</label>
+          <textarea
+            value={dietGuidelines||""}
+            onChange={e => setDietGuidelines && setDietGuidelines(e.target.value)}
+            onBlur={e => onSaveGuidelines && onSaveGuidelines("diet", e.target.value)}
+            placeholder="Ej: sin gluten, carbos solo post-entreno, no comer antes de las 9am..."
+            rows={2}
+            style={{width:"100%", resize:"none", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px 10px", color:C.ink, fontSize:12.5, outline:"none"}}
+          />
+        </div>
+        <div>
+          <label style={{fontSize:11, color:C.muted, fontWeight:700, display:"block", marginBottom:4}}>🏋️ Entreno — mis reglas</label>
+          <textarea
+            value={trainingGuidelines||""}
+            onChange={e => setTrainingGuidelines && setTrainingGuidelines(e.target.value)}
+            onBlur={e => onSaveGuidelines && onSaveGuidelines("training", e.target.value)}
+            placeholder="Ej: no entreno lunes, evitar press militar por hombro, descanso mínimo 2 días entre piernas..."
+            rows={2}
+            style={{width:"100%", resize:"none", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px 10px", color:C.ink, fontSize:12.5, outline:"none"}}
+          />
+        </div>
+        <div style={{fontSize:10, color:C.muted, marginTop:6}}>💡 El Coach usará estas reglas en todas sus respuestas</div>
       </div>
 
       {/* ===== INFORME DE COMPOSICIÓN CORPORAL ===== */}
