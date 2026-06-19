@@ -3777,7 +3777,7 @@ No repitas los datos que ya te mandé. No me pidas registrar nada.`;
     if (pdfBusy) return;
     setPdfBusy(true);
     const w = window.open('', '_blank');
-    if (w) w.document.write('<html><body style="background:#0c0e0b;color:#cdff4a;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center"><div><p style="font-size:22px;margin-bottom:8px">⏳ Generando reporte…</p><p style="font-size:13px;color:#9aa088">Analizando tu semana con IA</p></div></body></html>');
+    if (w) w.document.write('<html><body style="background:#0c0e0b;color:#cdff4a;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center"><div><p style="font-size:22px;margin-bottom:8px">⏳ Generando reporte…</p><p style="font-size:13px;color:#9aa088">Analizando 8 semanas de entrenamiento con IA</p><p style="font-size:12px;color:#666;margin-top:10px;">Esto puede tardar 30–60 segundos ☕</p></div></body></html>');
     try {
       const last7 = [...Array(7)].map((_,i)=>{ const d=new Date(); d.setDate(d.getDate()-i); return d.toISOString().slice(0,10); }).reverse();
       const weekStart = last7[0], weekEnd = last7[6];
@@ -9219,8 +9219,9 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
             disabled={pdfBusy || busy}
             style={{width:"100%", padding:"13px 0", borderRadius:12, border:`1px solid ${C.amber}`, cursor:(pdfBusy||busy)?"not-allowed":"pointer", background:"transparent", color:C.amber, fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyContent:"center", gap:8, opacity:(pdfBusy||busy)?0.6:1, transition:"opacity .2s"}}
           >
-            {pdfBusy ? <><Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>Generando reporte…</> : <>📄 PDF para mi coach</>}
+            {pdfBusy ? <><Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>Generando… (30–60 seg)</> : <>📄 PDF para mi coach</>}
           </button>
+          {!pdfBusy && <p style={{fontSize:10.5, color:C.muted, textAlign:"center", marginTop:4}}>Analiza 8 semanas con IA — puede tardar ~1 minuto ☕</p>}
         )}
 
         {/* AI CTA */}
