@@ -7,3 +7,7 @@ self.addEventListener("activate", (e) => {
       .then(() => self.clients.claim())
   );
 });
+// fetch handler requerido por Chrome para habilitar instalación PWA
+self.addEventListener("fetch", (e) => {
+  e.respondWith(fetch(e.request));
+});
