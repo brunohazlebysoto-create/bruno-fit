@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.18-K";
+const APP_VERSION = "v2025.06.18-L";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -13230,14 +13230,43 @@ function Registro({
     if(!file) return;
     setBusyComp(true);
     setErrComp("");
+    const isPdf = file.type === "application/pdf";
+    if (isPdf) setErrComp("📄 PDF detectado — esto puede tardar 20-40 s. Para ir más rápido, usa una captura de pantalla.");
     try{
-      const b64 = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(r.result.split(",")[1]);
-        r.onerror = rej;
-        r.readAsDataURL(file);
-      });
-      const media = ["image/jpeg","image/png","image/webp","application/pdf"].includes(file.type) ? file.type : "image/jpeg";
+      let b64, media;
+      if (isPdf) {
+        // PDFs: enviar tal cual (no podemos renderizar sin PDF.js)
+        b64 = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result.split(",")[1]);
+          r.onerror = rej;
+          r.readAsDataURL(file);
+        });
+        media = "application/pdf";
+      } else {
+        // Imágenes: comprimir a 700px máx, calidad 0.82 → reduce payload 5-10x
+        b64 = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => {
+            const img = new Image();
+            img.onload = () => {
+              const maxW = 700;
+              const scale = Math.min(1, maxW / img.width);
+              const canvas = document.createElement("canvas");
+              canvas.width = Math.round(img.width * scale);
+              canvas.height = Math.round(img.height * scale);
+              canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+              res(canvas.toDataURL("image/jpeg", 0.82).split(",")[1]);
+            };
+            img.onerror = rej;
+            img.src = r.result;
+          };
+          r.onerror = rej;
+          r.readAsDataURL(file);
+        });
+        media = "image/jpeg";
+      }
+      if (!isPdf) setErrComp(""); // limpiar aviso PDF si era imagen
       
       const prompt = "Analiza esta foto o documento (InBody, PDF o foto de balanza/reporte) de composición corporal y extrae de forma precisa: peso total (kg), masa muscular (kg), porcentaje de grasa (%) y opcionalmente nivel de grasa visceral (escala 1-20, aproximado si no sale, pon 9 si no hay datos).";
       const sys = "Eres un analista de datos de salud experto. Extrae los números indicados en el archivo (foto o PDF) y responde estrictamente con el formato JSON.";
@@ -13998,11 +14027,11 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                 }}
               >
                 {busyComp ? <Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/> : <Camera size={16}/>}
-                <span>{busyComp ? "Analizando archivo..." : "Escanear foto o PDF con IA"}</span>
+                <span>{busyComp ? "Analizando… (20-40 s si es PDF)" : "Escanear foto / captura / PDF"}</span>
               </button>
               <input ref={fileCompRef} type="file" accept="image/*,application/pdf" onChange={onPhotoComp} style={{display:"none"}}/>
             </div>
-            {errComp && <div style={{color:C.rose, fontSize:12, marginTop:6}}>{errComp}</div>}
+            {errComp && <div style={{color: errComp.startsWith("📄") ? C.amber : C.rose, fontSize:12, marginTop:6}}>{errComp}</div>}
           </div>
         )}
 
