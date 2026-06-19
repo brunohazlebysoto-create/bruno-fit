@@ -9248,14 +9248,16 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
 
         {/* PDF para coach */}
         {generateWeeklyPDF && (
-          <button
-            onClick={generateWeeklyPDF}
-            disabled={pdfBusy || busy}
-            style={{width:"100%", padding:"13px 0", borderRadius:12, border:`1px solid ${C.amber}`, cursor:(pdfBusy||busy)?"not-allowed":"pointer", background:"transparent", color:C.amber, fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyContent:"center", gap:8, opacity:(pdfBusy||busy)?0.6:1, transition:"opacity .2s"}}
-          >
-            {pdfBusy ? <><Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>Generando… (30–60 seg)</> : <>📄 PDF para mi coach</>}
-          </button>
-          {!pdfBusy && <p style={{fontSize:10.5, color:C.muted, textAlign:"center", marginTop:4}}>Analiza 8 semanas con IA — puede tardar ~1 minuto ☕</p>}
+          <>
+            <button
+              onClick={generateWeeklyPDF}
+              disabled={pdfBusy || busy}
+              style={{width:"100%", padding:"13px 0", borderRadius:12, border:`1px solid ${C.amber}`, cursor:(pdfBusy||busy)?"not-allowed":"pointer", background:"transparent", color:C.amber, fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyContent:"center", gap:8, opacity:(pdfBusy||busy)?0.6:1, transition:"opacity .2s"}}
+            >
+              {pdfBusy ? <><Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>Generando… (30–60 seg)</> : <>📄 PDF para mi coach</>}
+            </button>
+            {!pdfBusy && <p style={{fontSize:10.5, color:C.muted, textAlign:"center", marginTop:4}}>Analiza 8 semanas con IA — puede tardar ~1 minuto ☕</p>}
+          </>
         )}
 
         {/* AI CTA */}
