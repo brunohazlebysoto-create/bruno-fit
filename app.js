@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.18-F";
+const APP_VERSION = "v2025.06.18-G";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -10311,17 +10311,42 @@ function Entreno({
       const repsNum = parseInt(s.reps);
       const rirNum = (s.rir !== undefined && s.rir !== null && !isNaN(parseInt(s.rir))) ? parseInt(s.rir) : 0;
       const rmVal = (!isNaN(s.w) && !isNaN(repsNum) && repsNum > 0) ? Math.round(s.w * (1 + (repsNum + rirNum) / 30)) : null;
-      const rmStr = rmVal ? ` (RM: ${rmVal}kg)` : "";
+      const rmStr = rmVal ? ` (RM est: ${rmVal}kg)` : "";
       return `${fdate(s.date)}: ${s.w}kg x ${s.reps}${rirStr}${rmStr}`;
     }).join(" | ") || "Sin registros previos";
-    try{ 
+
+    // Fatiga acumulada en sesión — ejercicios ya hechos hoy con músculos solapados
+    const exMusculos = ex.musculos || [];
+    const sessionToday = workoutSessions[selectedDateStr] || {};
+    const allExObjects = Object.values(exercises || {}).flat();
+    const priorFatigue = Object.entries(sessionToday)
+      .filter(([name]) => name !== ex.name && name !== findExlogKey(ex.name))
+      .map(([name, sets]) => {
+        const priorEx = allExObjects.find(e => e.name === name);
+        const priorMuscles = priorEx?.musculos || [];
+        const effective = sets.filter(s => s.type !== "warmup");
+        if (!effective.length) return null;
+        const vol = Math.round(effective.reduce((a, s) => a + (parseFloat(s.w)||0) * (parseInt(s.reps)||0), 0));
+        const overlap = priorMuscles.filter((m, i) => i <= 2 && exMusculos.some(em =>
+          em.toLowerCase().includes(m.toLowerCase()) || m.toLowerCase().includes(em.toLowerCase())
+        ));
+        if (!overlap.length && priorMuscles[0] !== exMusculos[0]) return null;
+        return `${name} (${effective.length} series, ${vol}kg vol) → músculos solapados: ${overlap.join(", ") || priorMuscles[0]}`;
+      })
+      .filter(Boolean);
+
+    const fatigueCtx = priorFatigue.length > 0
+      ? `\n\nCONTEXTO DE FATIGA ACUMULADA HOY (ejercicios previos en esta sesión que comparten músculos):\n${priorFatigue.join("\n")}\nESTO ES CLAVE: si el peso de hoy es menor al histórico, puede deberse al orden del ejercicio y la fatiga acumulada — NO necesariamente a una pérdida de fuerza real. Considerar esto al interpretar el rendimiento.`
+      : "";
+
+    try{
       const sensations = getRecentSensationsText();
-      const sys = `Eres el entrenador personal de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Entrega recomendaciones concretas de sobrecarga progresiva y técnica de ejecución. Corto y directo. Si Bruno reporta cansancio, dolor, molestias o fatiga en sus sensaciones o chat reciente, ajusta el entrenamiento proactivamente (bajar carga, deload temporal, o modificar la técnica).`;
-      const out = await callGemini([{role:"user", content:`Ejercicio: ${ex.name}. Músculos: ${(ex.musculos || []).join(", ") || "?"}. Historial reciente (nuevo a viejo): ${hist}.\nSensaciones/Notas recientes de Bruno: ${sensations}.\nAnaliza el rendimiento y da pautas de carga/repeticiones para el próximo entrenamiento.`}], sys);
-      setProg(p => ({...p, [ex.name]: out})); 
-    } catch(e){ 
-      setProg(p => ({...p, [ex.name]: aiErr(e)})); 
-    } 
+      const sys = `Eres el entrenador personal de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Entrega recomendaciones concretas de sobrecarga progresiva y técnica de ejecución. Corto y directo. Si Bruno reporta cansancio, dolor, molestias o fatiga, ajusta proactivamente.`;
+      const out = await callGemini([{role:"user", content:`Ejercicio: ${ex.name}. Músculos: ${exMusculos.join(", ") || "?"}.\nHistorial reciente (nuevo a viejo, con 1RM estimado): ${hist}.\nSensaciones recientes: ${sensations}.${fatigueCtx}\nAnaliza el rendimiento considerando el contexto de fatiga y da pautas de carga para el próximo entrenamiento.`}], sys);
+      setProg(p => ({...p, [ex.name]: out}));
+    } catch(e){
+      setProg(p => ({...p, [ex.name]: aiErr(e)}));
+    }
     setProgBusy("");
   };
 
@@ -10792,7 +10817,13 @@ function Entreno({
                           <div className="pop" style={{padding:"0 14px 14px"}}>
                             {(globalEx.musculos || []).length > 0 && (
                               <div style={{display:"flex", gap:6, flexWrap:"wrap", marginBottom:10}}>
-                                {globalEx.musculos.map(m => (<span key={m} style={tag}>{m}</span>))}
+                                {globalEx.musculos.map((m, idx) => (
+                                  <span key={m} style={{...tag,
+                                    background: idx === 0 ? "rgba(205,255,74,0.15)" : idx <= 2 ? "rgba(74,214,255,0.12)" : "rgba(154,160,136,0.08)",
+                                    color: idx === 0 ? C.lime : idx <= 2 ? C.cyan : C.muted,
+                                    border: `1px solid ${idx === 0 ? "rgba(205,255,74,0.3)" : idx <= 2 ? "rgba(74,214,255,0.2)" : "rgba(154,160,136,0.15)"}`
+                                  }}>{m}</span>
+                                ))}
                               </div>
                             )}
 
@@ -11114,7 +11145,13 @@ function Entreno({
               <div className="pop" style={{padding:"0 14px 14px"}}>
                 {(ex.musculos || []).length > 0 && (
                   <div style={{display:"flex", gap:6, flexWrap:"wrap", marginBottom:10}}>
-                    {ex.musculos.map(m => (<span key={m} style={tag}>{m}</span>))}
+                    {ex.musculos.map((m, idx) => (
+                      <span key={m} style={{...tag,
+                        background: idx === 0 ? "rgba(205,255,74,0.15)" : idx <= 2 ? "rgba(74,214,255,0.12)" : "rgba(154,160,136,0.08)",
+                        color: idx === 0 ? C.lime : idx <= 2 ? C.cyan : C.muted,
+                        border: `1px solid ${idx === 0 ? "rgba(205,255,74,0.3)" : idx <= 2 ? "rgba(74,214,255,0.2)" : "rgba(154,160,136,0.15)"}`
+                      }}>{m}</span>
+                    ))}
                   </div>
                 )}
                 
