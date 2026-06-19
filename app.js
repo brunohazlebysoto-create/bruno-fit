@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.18-G";
+const APP_VERSION = "v2025.06.18-H";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1287,6 +1287,7 @@ export default function App(){
   const [aiModel, setAiModel] = useState("moonshotai/kimi-k2.6:free");
   const [prAlerts, setPrAlerts] = useState([]);
   const [workoutDurations, setWorkoutDurations] = useState({});
+  const [exerciseTechNotes, setExerciseTechNotes] = useState({});
 
   // ── 20 AI Features: New States ──
   const [smartGoals, setSmartGoals] = useState([]); // #10 - Adaptive Goals
@@ -1648,6 +1649,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       }
       let localWorkoutDurations = await loadKey("workout_durations", {});
       if (!localWorkoutDurations || typeof localWorkoutDurations !== 'object') localWorkoutDurations = {};
+      let localExerciseTechNotes = await loadKey("exercise_tech_notes", {});
+      if (!localExerciseTechNotes || typeof localExerciseTechNotes !== 'object') localExerciseTechNotes = {};
 
       let localCustomPresets = await loadKey("custom_presets", DEFAULT_PRESETS);
       if (!localCustomPresets || typeof localCustomPresets !== 'object') {
@@ -1799,6 +1802,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         "Whey Protein": { active: true, servingsLeft: 30, totalServings: 30 }
       });
       setWorkoutDurations(localWorkoutDurations || {});
+      setExerciseTechNotes(localExerciseTechNotes || {});
 
       // Inicializar estados de hoy a partir del foodlog/waterlog/suppslog
       setLog((localFoodlog || {})[selectedDateStr] || []);
@@ -2067,6 +2071,11 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       nextWorkoutDurations = updates.workoutDurations;
     }
 
+    let nextExerciseTechNotes = { ...exerciseTechNotes };
+    if (updates.exerciseTechNotes !== undefined) {
+      nextExerciseTechNotes = updates.exerciseTechNotes;
+    }
+
     let nextCustomPresets = { ...customPresets };
     if (updates.customPresets !== undefined) {
       nextCustomPresets = updates.customPresets;
@@ -2106,6 +2115,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       metricslog: nextMetricslog,
       suppsInventory: nextSuppsInventory,
       workoutDurations: nextWorkoutDurations,
+      exerciseTechNotes: nextExerciseTechNotes,
       experiments: nextExperiments,
       smartGoals: updates.smartGoals !== undefined ? updates.smartGoals : smartGoals,
       challenges: updates.challenges !== undefined ? updates.challenges : challenges,
@@ -2121,6 +2131,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     if (updates.metricslog !== undefined || updates.weight !== undefined || updates.bodyComp !== undefined) setMetricslog(nextMetricslog);
     if (updates.suppsInventory !== undefined) setSuppsInventory(nextSuppsInventory);
     if (updates.workoutDurations !== undefined) setWorkoutDurations(nextWorkoutDurations);
+    if (updates.exerciseTechNotes !== undefined) setExerciseTechNotes(nextExerciseTechNotes);
     if (updates.customPresets !== undefined) setCustomPresets(nextCustomPresets);
     if (updates.presetKey !== undefined) setPresetKey(updates.presetKey);
     if (updates.customSuggestions !== undefined) setCustomSuggestions(nextCustomSuggestions);
@@ -2148,6 +2159,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     writes.push(saveKey("metricslog", nextMetricslog));
     writes.push(saveKey("supps_inventory", nextSuppsInventory));
     writes.push(saveKey("workout_durations", nextWorkoutDurations));
+    if (updates.exerciseTechNotes !== undefined) writes.push(saveKey("exercise_tech_notes", nextExerciseTechNotes));
     writes.push(saveKey("last_local_update", updateTime));
     await Promise.all(writes);
 
@@ -4298,6 +4310,8 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             setCalMonth={setCalMonth}
             workoutDurations={workoutDurations}
             setWorkoutDurations={(wd) => saveState({ workoutDurations: wd })}
+            exerciseTechNotes={exerciseTechNotes}
+            setExerciseTechNotes={(etn) => saveState({ exerciseTechNotes: etn })}
             prAlerts={prAlerts}
             setPrAlerts={setPrAlerts}
             checkNewPR={checkNewPR}
@@ -9677,7 +9691,7 @@ function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions
 function Entreno({
   exlog, setExlog, exercises, setExercises, geminiKey, handleAnalyzeWorkout, importWorkoutData,
   activeSplitKey, setActiveSplitKey, selectedDateStr, setSelectedDateStr, calMonth, setCalMonth,
-  workoutDurations, setWorkoutDurations, prAlerts, setPrAlerts, checkNewPR, activeMetrics,
+  workoutDurations, setWorkoutDurations, exerciseTechNotes, setExerciseTechNotes, prAlerts, setPrAlerts, checkNewPR, activeMetrics,
   overloadSuggestions, plateauAlerts, muscleImbalances, splits, setSplits, notes, chat
 }){
   const sel = activeSplitKey;
@@ -10500,6 +10514,25 @@ function Entreno({
             <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12}}>
               <div style={{display:"flex", alignItems:"center", gap:8, fontSize:12.5, fontWeight:800}}>
                 <CalendarDays size={15} color={C.lime}/> Historial de Entrenamientos
+                {(() => {
+                  let streak = 0;
+                  const todayD = new Date();
+                  for (let i = 0; i < 365; i++) {
+                    const d = new Date(todayD);
+                    d.setDate(d.getDate() - i);
+                    const ds = getLocalDateStr(d);
+                    if (workoutSessions[ds] && Object.keys(workoutSessions[ds]).length > 0) {
+                      streak++;
+                    } else {
+                      break;
+                    }
+                  }
+                  return (
+                    <span style={{fontSize:11, fontWeight:800, padding:"2px 8px", borderRadius:6, background: streak >= 2 ? "rgba(205,255,74,0.1)" : "rgba(154,160,136,0.08)", color: streak >= 2 ? C.lime : C.muted, border:`1px solid ${streak >= 2 ? "rgba(205,255,74,0.25)" : "rgba(154,160,136,0.15)"}`}}>
+                      🔥 {streak} días
+                    </span>
+                  );
+                })()}
               </div>
               <div style={{display:"flex", alignItems:"center", gap:6}}>
                 <button 
@@ -10541,6 +10574,49 @@ function Entreno({
                 </button>
               </div>
             </div>
+
+            {/* Score de rendimiento mensual */}
+            {(() => {
+              const monthSessions = Object.keys(workoutSessions || {}).filter(d => {
+                const dd = new Date(d + "T12:00:00");
+                return dd.getFullYear() === year && dd.getMonth() === month && workoutSessions[d] && Object.keys(workoutSessions[d]).length > 0;
+              });
+              const trainDaysScore = Math.min(4, (monthSessions.length / 20) * 4);
+              const totalSetsMonth = monthSessions.reduce((sum, d) => {
+                return sum + Object.values(workoutSessions[d]).reduce((a, sets) => a + sets.filter(s => s.type !== "warmup").length, 0);
+              }, 0);
+              const volumeScore = Math.min(3, (totalSetsMonth / 100) * 3);
+              const topProgress = Object.keys(exlog || {}).filter(exKey => {
+                const sets = (exlog[exKey] || []).filter(s => {
+                  const dd = new Date(s.date + "T12:00:00");
+                  return dd.getFullYear() === year && dd.getMonth() === month;
+                });
+                if (sets.length < 2) return false;
+                const sorted = [...sets].sort((a,b) => a.date < b.date ? -1 : 1);
+                return parseFloat(sorted[sorted.length-1].w||0) > parseFloat(sorted[0].w||0);
+              });
+              const progressScore = Math.min(3, topProgress.length);
+              const totalScore = Math.round((trainDaysScore + volumeScore + progressScore) * 10) / 10;
+              const filled = Math.round(totalScore);
+              const squares = [...Array(10)].map((_, i) => i < filled ? "⬛" : "⬜").join("");
+              return (
+                <div style={{background:"rgba(205,255,74,0.05)", border:"1px solid rgba(205,255,74,0.12)", borderRadius:8, padding:"6px 10px", fontSize:11, color:C.muted, marginBottom:8, display:"flex", alignItems:"center", gap:6}}>
+                  Rendimiento este mes: <span style={{letterSpacing:1}}>{squares}</span> <span style={{color:C.lime, fontWeight:800}}>{totalScore}/10</span>
+                </div>
+              );
+            })()}
+
+            {/* Alertas: descanso y racha */}
+            {(() => {
+              const last3 = [-2,-1,0].map(i => { const d = new Date(selectedDateStr+"T12:00:00"); d.setDate(d.getDate()+i); return getLocalDateStr(d); });
+              const consecutive3 = last3.every(d => !!(workoutSessions[d] && Object.keys(workoutSessions[d]).length > 0));
+              if (!consecutive3) return null;
+              return (
+                <div style={{fontSize:11, color:C.cyan, background:"rgba(74,214,255,0.06)", border:"1px solid rgba(74,214,255,0.18)", borderRadius:7, padding:"5px 10px", marginBottom:8}}>
+                  💤 3 días seguidos — considera un día de recuperación
+                </div>
+              );
+            })()}
 
             {/* Grid del calendario */}
             <div style={{display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:4, textAlign:"center", marginBottom:8}}>
@@ -10617,11 +10693,28 @@ function Entreno({
 
               {selectedDayWorkouts && (() => {
                 const { totalVol, density, dur } = getSessionStats();
+                const totalSets = Object.values(selectedDayWorkouts||{}).reduce((a,sets)=>a+(sets.filter(s=>s.type!=="warmup").length),0);
+                const setsPerMin = dur > 0 ? Math.round((totalSets/dur)*10)/10 : 0;
+                const otherSessionDates = Object.keys(workoutSessions)
+                  .filter(d => d !== selectedDateStr && workoutSessions[d] && Object.keys(workoutSessions[d]).length > 0)
+                  .sort().slice(-8);
+                const avgHistVol = otherSessionDates.length ? Math.round(
+                  otherSessionDates.reduce((sum, d) => {
+                    const sessVol = Object.values(workoutSessions[d]).flat()
+                      .filter(s => s.type !== "warmup")
+                      .reduce((a, s) => a + (parseFloat(s.w)||0)*(parseInt(s.reps)||0), 0);
+                    return sum + sessVol;
+                  }, 0) / otherSessionDates.length
+                ) : 0;
+                const volDiffPct = avgHistVol > 0 && totalVol > 0 ? Math.round(((totalVol - avgHistVol) / avgHistVol) * 100) : null;
                 return (
                   <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:10, marginBottom:10}}>
-                    <div style={{display:"flex", justifyContent:"space-between", fontSize:12, color:C.ink, marginBottom:8}}>
-                      <span>Volumen Efectivo: <b style={{color:C.lime}}>{totalVol.toLocaleString()} kg</b></span>
-                      {dur > 0 && <span>Densidad: <b style={{color:C.cyan}}>{density} kg/min</b></span>}
+                    <div style={{display:"flex", justifyContent:"space-between", fontSize:12, color:C.ink, marginBottom:8, flexWrap:"wrap", gap:4}}>
+                      <span>Volumen Efectivo: <b style={{color:C.lime}}>{totalVol.toLocaleString()} kg</b>{volDiffPct !== null && <span style={{fontSize:11, color: volDiffPct >= 0 ? C.lime : C.rose, marginLeft:4}}>({volDiffPct >= 0 ? "+" : ""}{volDiffPct}% vs media)</span>}</span>
+                      <span style={{display:"flex", gap:8, alignItems:"center"}}>
+                        {dur > 0 && <span>Densidad: <b style={{color:C.cyan}}>{density} kg/min</b></span>}
+                        {setsPerMin > 0 && <span>Intensidad: <b style={{color:C.amber}}>{setsPerMin} ser/min</b></span>}
+                      </span>
                     </div>
                     <div style={{display:"flex", alignItems:"center", gap:8}}>
                       <span style={{fontSize:11.5, color:C.muted}}>Duración:</span>
@@ -10696,6 +10789,51 @@ function Entreno({
                 );
               })()}
 
+              {/* Semana actual vs anterior */}
+              {(() => {
+                const getWeekStart = (dateStr) => {
+                  const d = new Date(dateStr + "T12:00:00");
+                  const day = d.getDay();
+                  const diff = (day === 0 ? -6 : 1 - day);
+                  d.setDate(d.getDate() + diff);
+                  return getLocalDateStr(d);
+                };
+                const weekStart = getWeekStart(selectedDateStr);
+                const prevWeekStart = (() => { const d = new Date(weekStart + "T12:00:00"); d.setDate(d.getDate()-7); return getLocalDateStr(d); })();
+                const getWeekDates = (start) => [...Array(7)].map((_,i) => { const d = new Date(start+"T12:00:00"); d.setDate(d.getDate()+i); return getLocalDateStr(d); });
+                const curWeekDates = getWeekDates(weekStart);
+                const prevWeekDates = getWeekDates(prevWeekStart);
+                const weekStats = (dates) => {
+                  let sets=0, vol=0, days=0;
+                  dates.forEach(d => {
+                    const sess = workoutSessions[d];
+                    if (!sess || Object.keys(sess).length === 0) return;
+                    days++;
+                    Object.values(sess).forEach(exSets => {
+                      exSets.forEach(s => { if(s.type!=="warmup"){ sets++; vol += (parseFloat(s.w)||0)*(parseInt(s.reps)||0); } });
+                    });
+                  });
+                  return {sets, vol:Math.round(vol), days};
+                };
+                const curStats = weekStats(curWeekDates);
+                const prevStats = weekStats(prevWeekDates);
+                return (
+                  <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", marginBottom:10}}>
+                    <div style={{fontSize:10, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", marginBottom:8}}>Semana actual vs anterior</div>
+                    <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
+                      {[["Esta semana", curStats], ["Sem. anterior", prevStats]].map(([label, stats], i) => (
+                        <div key={label} style={{background:C.bg, borderRadius:8, padding:"8px 10px"}}>
+                          <div style={{fontSize:10, color:C.muted, fontWeight:700, marginBottom:4}}>{label}</div>
+                          <div style={{fontSize:13, fontWeight:800, color: i===0 ? C.lime : C.muted}}>{stats.sets} series</div>
+                          <div style={{fontSize:10.5, color:C.muted}}>{stats.vol.toLocaleString()} kg vol</div>
+                          <div style={{fontSize:10, color:C.muted}}>{stats.days} días</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {selectedDayWorkouts ? (
                 <div style={{display:"flex", flexDirection:"column", gap:8}}>
                   {Object.entries(selectedDayWorkouts).map(([exName, sets]) => {
@@ -10725,14 +10863,25 @@ function Entreno({
                             <div style={{flex:1, paddingRight:32}}>
                               <div style={{display:"flex", alignItems:"center", gap:6, flexWrap:"wrap"}}>
                                 <div style={{fontSize:13.5, fontWeight:600}}>{exName}</div>
+                                {(() => {
+                                  const allSetsForEx = exlog[findExlogKey(exName)] || [];
+                                  const todaySets = (workoutSessions[selectedDateStr]?.[exName] || []).filter(s => s.type !== "warmup");
+                                  const histSets = allSetsForEx.filter(s => {
+                                    try { const d = new Date(s.date); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` !== selectedDateStr && s.type !== "warmup"; } catch(e){ return false; }
+                                  });
+                                  const histMax = histSets.length ? Math.max(...histSets.map(s => parseFloat(s.w)||0)) : 0;
+                                  const todayMax = todaySets.length ? Math.max(...todaySets.map(s => parseFloat(s.w)||0)) : 0;
+                                  const isPR = histMax > 0 && todayMax > histMax;
+                                  return isPR ? <span style={{fontSize:10, fontWeight:800, color:"#ffd700", background:"rgba(255,215,0,0.12)", border:"1px solid rgba(255,215,0,0.3)", borderRadius:4, padding:"1px 5px", marginLeft:4}}>★ PR</span> : null;
+                                })()}
                                 {overloadSuggestions && overloadSuggestions[exName] && (
                                   <span style={{
-                                    fontSize:10, 
-                                    fontWeight:700, 
-                                    background:"rgba(107,78,255,0.12)", 
-                                    color:C.lime, 
-                                    border:`1px solid rgba(107,78,255,0.3)`, 
-                                    borderRadius:6, 
+                                    fontSize:10,
+                                    fontWeight:700,
+                                    background:"rgba(107,78,255,0.12)",
+                                    color:C.lime,
+                                    border:`1px solid rgba(107,78,255,0.3)`,
+                                    borderRadius:6,
                                     padding:"2px 6px",
                                     display:"inline-flex",
                                     alignItems:"center",
@@ -10743,12 +10892,12 @@ function Entreno({
                                 )}
                                 {plateauAlerts && plateauAlerts.some(p => p.exercise === exName) && (
                                   <span style={{
-                                    fontSize:10, 
-                                    fontWeight:700, 
-                                    background:"rgba(255,177,61,0.12)", 
-                                    color:C.amber, 
-                                    border:`1px solid rgba(255,177,61,0.3)`, 
-                                    borderRadius:6, 
+                                    fontSize:10,
+                                    fontWeight:700,
+                                    background:"rgba(255,177,61,0.12)",
+                                    color:C.amber,
+                                    border:`1px solid rgba(255,177,61,0.3)`,
+                                    borderRadius:6,
                                     padding:"2px 6px",
                                     display:"inline-flex",
                                     alignItems:"center",
@@ -11073,14 +11222,21 @@ function Entreno({
                 <div style={{flex:1, paddingRight:32}}>
                   <div style={{display:"flex", alignItems:"center", gap:6, flexWrap:"wrap"}}>
                     <div style={{fontSize:13.5, fontWeight:600}}>{ex.name}</div>
+                    {(() => {
+                      const exKey = Object.keys(exlog || {}).find(k => k === ex.name || k.toLowerCase() === ex.name.toLowerCase());
+                      const lastSet = exKey ? (exlog[exKey] || [])[0] : null;
+                      const daysSince = lastSet ? Math.floor((Date.now() - new Date(lastSet.date).getTime()) / 86400000) : 999;
+                      const isOrphan = daysSince >= 21;
+                      return isOrphan ? <span style={{fontSize:9, fontWeight:800, color:C.amber, border:"1px solid rgba(255,185,64,0.3)", borderRadius:4, padding:"1px 5px", marginLeft:4}}>⚠ {daysSince < 999 ? daysSince+"d" : "nunca"}</span> : null;
+                    })()}
                     {overloadSuggestions && overloadSuggestions[ex.name] && (
                       <span style={{
-                        fontSize:10, 
-                        fontWeight:700, 
-                        background:"rgba(107,78,255,0.12)", 
-                        color:C.lime, 
-                        border:`1px solid rgba(107,78,255,0.3)`, 
-                        borderRadius:6, 
+                        fontSize:10,
+                        fontWeight:700,
+                        background:"rgba(107,78,255,0.12)",
+                        color:C.lime,
+                        border:`1px solid rgba(107,78,255,0.3)`,
+                        borderRadius:6,
                         padding:"2px 6px",
                         display:"inline-flex",
                         alignItems:"center",
@@ -11091,12 +11247,12 @@ function Entreno({
                     )}
                     {plateauAlerts && plateauAlerts.some(p => p.exercise === ex.name) && (
                       <span style={{
-                        fontSize:10, 
-                        fontWeight:700, 
-                        background:"rgba(255,177,61,0.12)", 
-                        color:C.amber, 
-                        border:`1px solid rgba(255,177,61,0.3)`, 
-                        borderRadius:6, 
+                        fontSize:10,
+                        fontWeight:700,
+                        background:"rgba(255,177,61,0.12)",
+                        color:C.amber,
+                        border:`1px solid rgba(255,177,61,0.3)`,
+                        borderRadius:6,
                         padding:"2px 6px",
                         display:"inline-flex",
                         alignItems:"center",
@@ -11107,6 +11263,7 @@ function Entreno({
                     )}
                   </div>
                   {ex.tecnico && <div style={{fontSize:11, color:C.muted, fontStyle:"italic"}}>{ex.tecnico}</div>}
+                  {exerciseTechNotes && exerciseTechNotes[ex.name] && <div style={{fontSize:11, color:C.amber, fontStyle:"italic", marginTop:1}}>💡 {exerciseTechNotes[ex.name]}</div>}
                   {l ? (
                     <div style={{fontSize:11.5, color:C.cyan, marginTop:2}}>última: {l.w} kg × {l.reps} · {fdate(l.date)}</div>
                   ) : (
@@ -11154,7 +11311,41 @@ function Entreno({
                     ))}
                   </div>
                 )}
-                
+
+                {/* 1RM histórico mini chart */}
+                {(() => {
+                  const rmHistory = (chartData(ex.name) || []).slice(-12).map(s => {
+                    const reps = parseInt(s.reps)||0;
+                    const rir = parseInt(s.rir)||0;
+                    const rm = (reps > 0 && s.w) ? Math.round(parseFloat(s.w) * (1 + (reps+rir)/30)) : null;
+                    return rm;
+                  }).filter(Boolean).slice(-8);
+                  if (rmHistory.length < 2) return null;
+                  const min = Math.min(...rmHistory), max = Math.max(...rmHistory);
+                  const range = max - min || 1;
+                  const pts = rmHistory.map((v,i) => {
+                    const x = (i / (rmHistory.length-1)) * 100;
+                    const y = 30 - ((v-min)/range)*24;
+                    return `${x},${y}`;
+                  }).join(" ");
+                  return (
+                    <div style={{marginBottom:8}}>
+                      <div style={{fontSize:10, fontWeight:700, color:C.muted, marginBottom:4}}>1RM estimado histórico (kg)</div>
+                      <svg viewBox="0 0 100 36" style={{width:"100%", height:36, overflow:"visible"}}>
+                        <polyline points={pts} fill="none" stroke={C.lime} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        {rmHistory.map((v,i) => {
+                          const x = (i / (rmHistory.length-1)) * 100;
+                          const y = 30 - ((v-min)/range)*24;
+                          return <circle key={i} cx={x} cy={y} r={i===rmHistory.length-1?2.5:1.5} fill={i===rmHistory.length-1?C.lime:"rgba(205,255,74,0.5)"}/>;
+                        })}
+                      </svg>
+                      <div style={{display:"flex", justifyContent:"space-between", fontSize:9, color:C.muted, marginTop:2}}>
+                        <span>{min} kg</span><span>{max} kg</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Tipo de set */}
                 <div style={{display:"flex", gap:6, marginBottom:8}}>
                   <button 
@@ -11856,15 +12047,36 @@ function Entreno({
                     <input type="text" id="ee-musculos" defaultValue={(editExObj.ex.musculos || []).join(", ")} style={{width:"100%", padding:"8px", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink}} />
                   </div>
                 </div>
-                
+
+                <div>
+                  <label style={{fontSize:11, color:C.muted, fontWeight:700}}>Notas de técnica / cues</label>
+                  <textarea
+                    id="ee-technotes"
+                    defaultValue={(exerciseTechNotes && exerciseTechNotes[editExObj.ex.name]) || ""}
+                    placeholder="Ej: codos a 45°, pecho a barra, pausa abajo..."
+                    rows={2}
+                    style={{width:"100%", padding:"8px", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, color:C.ink, marginTop:4, resize:"none", fontSize:12}}
+                  />
+                </div>
+
                 <button onClick={() => {
                   const newName = document.getElementById("ee-name").value.trim();
                   const newTecnico = document.getElementById("ee-tecnico").value.trim();
                   const newMusculosStr = document.getElementById("ee-musculos").value;
                   const newMusculosList = newMusculosStr.split(",").map(m => m.trim()).filter(Boolean);
-                  
+
                   if(newName) {
                     handleUpdateExercise(editExObj.ex.name, newName, newTecnico, newMusculosList);
+                    const techNote = document.getElementById("ee-technotes")?.value?.trim();
+                    if (techNote !== undefined) {
+                      const oldName = editExObj.ex.name;
+                      setExerciseTechNotes(prev => {
+                        const next = {...prev};
+                        if (oldName !== newName) delete next[oldName];
+                        next[newName] = techNote;
+                        return next;
+                      });
+                    }
                   }
                   setEditExObj(null);
                 }} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
