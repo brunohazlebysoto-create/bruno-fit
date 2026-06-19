@@ -1213,16 +1213,23 @@ function detectDeloadNeed(exlog, notes, _metricslog) {
 }
 
 const MUSCLE_ALIASES = {
+  // Deltoides — variantes de nombre → canónico
   "Deltoide ant.":"Deltoides","Deltoide lat.":"Deltoides","Deltoide post.":"Deltoides",
   "Deltoides anterior":"Deltoides","Deltoides lateral":"Deltoides","Deltoides posterior":"Deltoides",
+  // Isquios
   "Isquiotibiales":"Isquios","Femoral":"Isquios",
+  // Glúteos — singular/plural
   "Glúteo":"Glúteos","Glúteo mayor":"Glúteos","Glúteo medio":"Glúteos",
-  "Dorsal ancho":"Espalda","Dorsal":"Espalda","Trapecio":"Espalda","Romboides":"Espalda",
+  // Pantorrillas
   "Gemelos":"Pantorrillas","Sóleo":"Pantorrillas","Pantorrilla":"Pantorrillas",
+  // Pectoral
   "Pecho":"Pectoral","Pectoral mayor":"Pectoral",
-  "Bíceps braquial":"Bíceps","Braquial":"Bíceps",
-  "Tríceps braquial":"Tríceps",
-  "Core":"Core","Abdominales":"Core","Oblicuos":"Core","Lumbares":"Espalda",
+  // Bíceps / Tríceps
+  "Bíceps braquial":"Bíceps","Braquial":"Bíceps","Tríceps braquial":"Tríceps",
+  // Core
+  "Abdominales":"Core","Oblicuos":"Core",
+  // NOTA: Dorsal/Trapecio/Romboides NO se mapean a "Espalda" para evitar doble conteo
+  // cuando el ejercicio ya tiene "Espalda" en su musculos array
 };
 function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
   const primaryMuscles = ["Pectoral","Espalda","Cuádriceps","Isquios","Deltoides","Bíceps","Tríceps","Glúteos","Antebrazo","Core","Pantorrillas"];
@@ -1238,8 +1245,10 @@ function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
       const t = new Date(s.date).getTime();
       if (t < minDate) minDate = t;
     });
-    muscleList.forEach(rawM=>{
-      const m = MUSCLE_ALIASES[rawM] || rawM;
+    // Deduplicar tras aplicar aliases para evitar doble conteo
+    // (ej. ["Espalda","Dorsal ancho","Trapecio"] → todos → "Espalda" → se conta 1 sola vez)
+    const canonical = [...new Set(muscleList.map(rawM => MUSCLE_ALIASES[rawM] || rawM))];
+    canonical.forEach(m=>{
       if (m in counts) counts[m] += filteredSets.length;
     });
   });
@@ -10069,9 +10078,9 @@ function Entreno({
       const ms = exMap[name] || MUSCLES[name] || [];
       (sets || []).forEach(s => {
         if(s && s.date && new Date(s.date).getTime() >= weekAgo && s.type !== "warmup") {
-          ms.forEach(rawM => {
-            // Normalizar aliases (ej. "Deltoide ant." → "Deltoides", "Isquiotibiales" → "Isquios")
-            const m = MUSCLE_ALIASES[rawM] || rawM;
+          // Deduplicar tras alias para evitar doble conteo
+          const canonical2 = [...new Set(ms.map(rawM => MUSCLE_ALIASES[rawM] || rawM))];
+          canonical2.forEach(m => {
             if(calculatedVol[m] !== undefined) calculatedVol[m] = calculatedVol[m] + 1;
           });
         }
