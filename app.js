@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.18-H";
+const APP_VERSION = "v2025.06.18-I";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1310,6 +1310,8 @@ export default function App(){
   const [trainerAgentBusy, setTrainerAgentBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [coachPersonality, setCoachPersonality] = useState("técnico");
+  const [dietGuidelines, setDietGuidelines] = useState("");
+  const [trainingGuidelines, setTrainingGuidelines] = useState("");
   const [showFocusMode, setShowFocusMode] = useState(false);
   const [backupToast, setBackupToast] = useState(false);
   const nightlyBackupRef = useRef(null); // holds latest state for midnight callback
@@ -1652,6 +1654,9 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       let localExerciseTechNotes = await loadKey("exercise_tech_notes", {});
       if (!localExerciseTechNotes || typeof localExerciseTechNotes !== 'object') localExerciseTechNotes = {};
 
+      let localDietGuidelines = await loadKey("diet_guidelines", "");
+      let localTrainingGuidelines = await loadKey("training_guidelines", "");
+
       let localCustomPresets = await loadKey("custom_presets", DEFAULT_PRESETS);
       if (!localCustomPresets || typeof localCustomPresets !== 'object') {
         localCustomPresets = DEFAULT_PRESETS;
@@ -1803,6 +1808,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       });
       setWorkoutDurations(localWorkoutDurations || {});
       setExerciseTechNotes(localExerciseTechNotes || {});
+      setDietGuidelines(localDietGuidelines || "");
+      setTrainingGuidelines(localTrainingGuidelines || "");
 
       // Inicializar estados de hoy a partir del foodlog/waterlog/suppslog
       setLog((localFoodlog || {})[selectedDateStr] || []);
@@ -2121,6 +2128,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       challenges: updates.challenges !== undefined ? updates.challenges : challenges,
       weeklyInsight: updates.weeklyInsight !== undefined ? updates.weeklyInsight : weeklyInsight,
       upcomingEvent: updates.upcomingEvent !== undefined ? updates.upcomingEvent : upcomingEvent,
+      dietGuidelines: updates.dietGuidelines !== undefined ? updates.dietGuidelines : dietGuidelines,
+      trainingGuidelines: updates.trainingGuidelines !== undefined ? updates.trainingGuidelines : trainingGuidelines,
       updatedAt: updateTime
     };
 
@@ -2137,6 +2146,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     if (updates.customSuggestions !== undefined) setCustomSuggestions(nextCustomSuggestions);
     if (updates.experiments !== undefined) setExperiments(nextExperiments);
     if (updates.splits !== undefined) setSplits(nextSplits);
+    if (updates.dietGuidelines !== undefined) setDietGuidelines(updates.dietGuidelines);
+    if (updates.trainingGuidelines !== undefined) setTrainingGuidelines(updates.trainingGuidelines);
 
     // Guardar local en paralelo (antes era secuencial: ~20 awaits encadenados)
     const writes = [];
@@ -2153,6 +2164,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     if (updates.activeSplitKey !== undefined) writes.push(saveKey("active_split_key", updates.activeSplitKey));
     if (updates.experiments !== undefined) writes.push(saveKey("experiments", updates.experiments));
     if (updates.splits !== undefined) writes.push(saveKey("training_splits", updates.splits));
+    if (updates.dietGuidelines !== undefined) writes.push(saveKey("diet_guidelines", updates.dietGuidelines));
+    if (updates.trainingGuidelines !== undefined) writes.push(saveKey("training_guidelines", updates.trainingGuidelines));
     writes.push(saveKey("foodlog", nextFoodlog));
     writes.push(saveKey("waterlog", nextWaterlog));
     writes.push(saveKey("suppslog", nextSuppslog));
@@ -3615,7 +3628,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       };
       const fitdaysComp = getFitdaysCompositionText();
 
-      const sys = `Eres el coach nutricional y de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)}
+      const sys = `Eres el coach nutricional y de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)}${dietGuidelines ? `\nDIRECTRICES DIETÉTICAS PERSONALIZADAS DE BRUNO (respétalas siempre): ${dietGuidelines}` : ""}${trainingGuidelines ? `\nDIRECTRICES DE ENTRENAMIENTO PERSONALIZADAS DE BRUNO (respétalas siempre): ${trainingGuidelines}` : ""}
 MOMENTO ACTUAL: ${timeBlock}. ADAPTA tu respuesta a este contexto horario — no sugieras desayuno si es de noche, ni cena si es de mañana. ${mealContext}
 Plan nutricional activo: ${target.kcal} kcal (${target.label}), P:${target.p}g / C:${target.c}g / G:${target.f}g.
 Métricas antropométricas y corporales: ${metricsSummary}
@@ -3623,6 +3636,7 @@ Datos de Composición Corporal (Fitdays): ${fitdaysComp}
 Historial nutricional acumulado reciente: ${recentNutrition}
 Día de Split de entrenamiento activo hoy: Día ${activeSplit.key} (${activeSplit.name}), combustible de carbohidratos asignado: ${activeSplit.fuel}.
 Estado de entrenamiento hoy: ${trainedToday ? "✓ YA ENTRENÓ HOY — no preguntes si va a entrenar, asume recuperación activa." : "✗ AÚN NO HA ENTRENADO HOY — puedes orientar pre-entreno, timing y energía si aplica."}
+Datos adicionales del día ${selectedDateStr}: agua: ${water || waterlog[selectedDateStr] || 0}ml, duración sesión: ${workoutDurations[selectedDateStr] ? workoutDurations[selectedDateStr]+" min" : "no registrada"}, suplementos activos: ${Object.entries(supplements||{}).filter(([,v])=>v).map(([k])=>k).join(", ")||"ninguno"}.
 Hoy lleva consumido: ${Math.round(totals.kcal)} kcal, P:${Math.round(totals.p)}g C:${Math.round(totals.c)}g G:${Math.round(totals.f)}g. Restante: ${Math.round(remKcal)} kcal, P:${Math.round(remP)}g C:${Math.round(remC)}g G:${Math.round(remF)}g.
 
 Entrenamiento realizado por Bruno hoy:
@@ -12542,6 +12556,8 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
   const [err, setErr] = React.useState("");
   const [segGrasaOpen, setSegGrasaOpen] = React.useState(false);
   const [segMusculoOpen, setSegMusculoOpen] = React.useState(false);
+  const [fitAnalysis, setFitAnalysis] = React.useState("");
+  const [fitAnalysisBusy, setFitAnalysisBusy] = React.useState(false);
 
   const compressImage = (file) => new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -12814,6 +12830,45 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
           </button>
           {saved && <div style={{color:C.lime, fontSize:12, fontWeight:700, textAlign:"center", marginTop:6}}>✓ Medición guardada correctamente</div>}
           {err && <div style={{color:C.rose, fontSize:11, marginTop:5}}>{err}</div>}
+          {saved && !fitAnalysis && (
+            <button
+              onClick={async () => {
+                if (!geminiKey) { setFitAnalysis("Configura tu API Key para analizar."); return; }
+                setFitAnalysisBusy(true);
+                try {
+                  const allDates = Object.keys(metricslog||{}).sort();
+                  const prevDate = allDates.filter(d => d < date).pop();
+                  const prev = prevDate ? metricslog[prevDate] : null;
+                  const curr = metricslog[date] || {};
+
+                  const currStr = `Peso: ${curr.weight||"?"}kg, Grasa: ${curr.grasaPct||"?"}%, Músculo: ${curr.masaMuscular||curr.musculo||"?"}kg, Visceral: ${curr.visceral||"?"}, Score: ${curr.puntuacion||"?"}`;
+                  const prevStr = prev ? `Peso: ${prev.weight||"?"}kg, Grasa: ${prev.grasaPct||"?"}%, Músculo: ${prev.masaMuscular||prev.musculo||"?"}kg, Visceral: ${prev.visceral||"?"}, Score: ${prev.puntuacion||"?"}` : "No hay scan anterior";
+
+                  const segStr = (curr.musculoBrazoDer || curr.musculoPiernaDer) ?
+                    `Segmental músculo: BrazoDer ${curr.musculoBrazoDer||"?"}kg, BrazoIzq ${curr.musculoBrazoIzq||"?"}kg, PiernaDer ${curr.musculoPiernaDer||"?"}kg, PiernaIzq ${curr.musculoPiernaIzq||"?"}kg` : "";
+
+                  const sys = "Eres el coach de composición corporal de Bruno. Analiza los datos de la báscula Fitdays. Responde en español, formato chat móvil: párrafos cortos, bullets con •, negrita para datos clave. SIN encabezados markdown (#). Máximo 200 palabras.";
+                  const msg = `Scan ${date}:\n${currStr}\n${segStr}\n\nAnterior (${prevDate||"ninguno"}):\n${prevStr}\n\nDa: 1) qué cambió desde el scan anterior, 2) puntos positivos y preocupantes, 3) una acción concreta para las próximas 2 semanas.`;
+
+                  const out = await callGemini([{role:"user", content:msg}], sys);
+                  setFitAnalysis(out);
+                } catch(e) {
+                  setFitAnalysis("Error: " + (e.message||e));
+                }
+                setFitAnalysisBusy(false);
+              }}
+              disabled={fitAnalysisBusy}
+              style={{width:"100%", height:40, borderRadius:10, border:`1px solid ${C.cyan}`, background:`${C.cyan}12`, color:fitAnalysisBusy?C.muted:C.cyan, fontSize:12.5, fontWeight:800, cursor:fitAnalysisBusy?"default":"pointer", marginTop:8, display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
+            >
+              {fitAnalysisBusy ? <><span style={{animation:"spin 1s linear infinite", display:"inline-block"}}>⟳</span> Analizando…</> : "✦ Analizar composición con IA"}
+            </button>
+          )}
+          {fitAnalysis && (
+            <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:10, marginTop:8, fontSize:12, color:C.ink, lineHeight:1.6, whiteSpace:"pre-wrap"}}>
+              {fitAnalysis}
+              <button onClick={() => setFitAnalysis("")} style={{display:"block", width:"100%", marginTop:8, background:"none", border:`1px solid ${C.line}`, borderRadius:6, color:C.muted, fontSize:11, padding:"4px", cursor:"pointer"}}>Cerrar análisis</button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -12825,7 +12880,8 @@ function Registro({
   notes, setNotes, target, bodyComp, setBodyComp, geminiKey,
   metricslog, setMetricslog, selectedDateStr, saveWeight, activeMetrics,
   foodlog, waterlog, exlog,
-  projections, tdeeEstimate, analyzeAndReconfigure, experiments, setExperiments
+  projections, tdeeEstimate, analyzeAndReconfigure, experiments, setExperiments,
+  dietGuidelines, setDietGuidelines, trainingGuidelines, setTrainingGuidelines, onSaveGuidelines
 }){
   const [type, setType] = useState("peso");
   const [statsPeriod, setStatsPeriod] = useState(7); // 7 or 30 days
@@ -13193,13 +13249,9 @@ function Registro({
     e.target.value = "";
   };
   
-  const TYPES = { 
-    peso: ["Peso", C.cyan], 
+  const TYPES = {
+    peso: ["Peso", C.cyan],
     composicion: ["Composición", C.lime],
-    perimetros: ["Perímetros", C.cyan],
-    entreno: ["Entreno", C.lime], 
-    sensacion: ["Estado", C.amber], 
-    nota: ["Nota", C.muted] 
   };
 
   const savePeso = () => {
@@ -13747,10 +13799,6 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
   const buttonLabels = {
     peso: "Guardar Peso",
     composicion: "Guardar Composición",
-    perimetros: "Guardar Perímetros",
-    entreno: "Guardar Entreno",
-    sensacion: "Guardar Estado",
-    nota: "Guardar Nota"
   };
 
   return (
@@ -13897,131 +13945,8 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           </div>
         )}
 
-        {type === "perimetros" && (
-          <div style={{display:"flex", flexDirection:"column", gap:8}}>
-            <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
-              <div>
-                <span style={{fontSize:11.5, color:C.muted}}>Brazo Der (cm):</span>
-                <input 
-                  value={brazoDer} 
-                  onChange={e => setBrazoDer(e.target.value)} 
-                  type="number" 
-                  inputMode="decimal" 
-                  className="ph" 
-                  placeholder="38" 
-                  style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 10px", color:C.ink, fontSize:13, outline:"none"}}
-                />
-              </div>
-              <div>
-                <span style={{fontSize:11.5, color:C.muted}}>Brazo Izq (cm):</span>
-                <input 
-                  value={brazoIzq} 
-                  onChange={e => setBrazoIzq(e.target.value)} 
-                  type="number" 
-                  inputMode="decimal" 
-                  className="ph" 
-                  placeholder="38" 
-                  style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 10px", color:C.ink, fontSize:13, outline:"none"}}
-                />
-              </div>
-            </div>
-            
-            <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
-              <div>
-                <span style={{fontSize:11.5, color:C.muted}}>Muslo Der (cm):</span>
-                <input 
-                  value={musloDer} 
-                  onChange={e => setMusloDer(e.target.value)} 
-                  type="number" 
-                  inputMode="decimal" 
-                  className="ph" 
-                  placeholder="60" 
-                  style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 10px", color:C.ink, fontSize:13, outline:"none"}}
-                />
-              </div>
-              <div>
-                <span style={{fontSize:11.5, color:C.muted}}>Muslo Izq (cm):</span>
-                <input 
-                  value={musloIzq} 
-                  onChange={e => setMusloIzq(e.target.value)} 
-                  type="number" 
-                  inputMode="decimal" 
-                  className="ph" 
-                  placeholder="60" 
-                  style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 10px", color:C.ink, fontSize:13, outline:"none"}}
-                />
-              </div>
-            </div>
-
-            <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
-              <div>
-                <span style={{fontSize:11.5, color:C.muted}}>Pantorrilla Der (cm):</span>
-                <input 
-                  value={pantorrillaDer} 
-                  onChange={e => setPantorrillaDer(e.target.value)} 
-                  type="number" 
-                  inputMode="decimal" 
-                  className="ph" 
-                  placeholder="40" 
-                  style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 10px", color:C.ink, fontSize:13, outline:"none"}}
-                />
-              </div>
-              <div>
-                <span style={{fontSize:11.5, color:C.muted}}>Pantorrilla Izq (cm):</span>
-                <input 
-                  value={pantorrillaIzq} 
-                  onChange={e => setPantorrillaIzq(e.target.value)} 
-                  type="number" 
-                  inputMode="decimal" 
-                  className="ph" 
-                  placeholder="40" 
-                  style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 10px", color:C.ink, fontSize:13, outline:"none"}}
-                />
-              </div>
-            </div>
-
-            <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
-              <div>
-                <span style={{fontSize:11.5, color:C.muted}}>Cintura (cm):</span>
-                <input 
-                  value={cintura} 
-                  onChange={e => setCintura(e.target.value)} 
-                  type="number" 
-                  inputMode="decimal" 
-                  className="ph" 
-                  placeholder="92" 
-                  style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 10px", color:C.ink, fontSize:13, outline:"none"}}
-                />
-              </div>
-              <div>
-                <span style={{fontSize:11.5, color:C.muted}}>Pecho (cm):</span>
-                <input 
-                  value={pecho} 
-                  onChange={e => setPecho(e.target.value)} 
-                  type="number" 
-                  inputMode="decimal" 
-                  className="ph" 
-                  placeholder="108" 
-                  style={{width:"100%", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 10px", color:C.ink, fontSize:13, outline:"none"}}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {type !== "peso" && type !== "composicion" && type !== "perimetros" && (
-          <textarea 
-            value={text} 
-            onChange={e => setText(e.target.value)} 
-            rows={2} 
-            className="ph" 
-            placeholder={type === "entreno" ? "Subí press militar en polea..." : type === "sensacion" ? "Fatigado hoy pero bien alimentado..." : "Nota general..."} 
-            style={{width:"100%", resize:"none", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:13.5, outline:"none"}}
-          />
-        )}
-
-        <button onClick={add} style={{width:"100%", marginTop:8, padding:"10px", borderRadius:10, border:"none", cursor:"pointer", background:C.lime, color:"#0c0e0b", fontWeight:800, fontSize:14}}>
-          {buttonLabels[type] || "Guardar Registro"}
+        <button onClick={() => { if(type === "peso") savePeso(); else if(type === "composicion") saveComposicion(); }} style={{width:"100%", marginTop:8, padding:"10px", borderRadius:10, border:"none", cursor:"pointer", background:C.lime, color:"#0c0e0b", fontWeight:800, fontSize:14}}>
+          {buttonLabels[type] || "Guardar"}
         </button>
       </div>
 
