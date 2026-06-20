@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.20-V";
+const APP_VERSION = "v2025.06.20-W";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -522,6 +522,58 @@ async function parseDailyCloudData(cloudData, today) {
 }
 
 let _rrIdx = 0; // round-robin global para Gemini keys
+
+// ── Helpers consolidados de fecha e imágenes (antes duplicados en varios scopes) ──
+function getLocalDateStr(d) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+// Compat fotos: soporta photos[] (nuevo) y photo string (legacy)
+function getEntryPhotos(entry) {
+  if (!entry) return [];
+  if (Array.isArray(entry.photos) && entry.photos.length > 0) return entry.photos;
+  if (entry.photo) return [entry.photo];
+  return [];
+}
+
+const stripDataUrl = (url) => url.split(",")[1] || url;
+const mimeFromDataUrl = (url) => url.startsWith("data:image/png") ? "image/png" : "image/jpeg";
+const pickImageMedia = (file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type) ? file.type : "image/jpeg";
+
+// FileReader → base64 puro (sin el prefijo data:)
+function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(",")[1]);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+
+// Comprime imagen vía canvas → dataURL JPEG. Rechaza la promesa si falla la lectura/carga.
+function compressImageToDataUrl(file, maxW = 800, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxW / img.width);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 async function callGemini(messages, systemInstruction, responseSchema = null, options = {}) {
   let apiKeysStr = await loadKey("gemini_api_key", "");
@@ -1395,13 +1447,6 @@ export default function App(){
   // Elevated Calendar States & Helpers
   const [calMonth, setCalMonth] = useState(() => new Date());
   
-  const getLocalDateStr = (d) => {
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-
   const [selectedDateStr, setSelectedDateStr] = useState(() => getLocalDateStr(new Date()));
 
   const getLocalDateFromISO = (isoString) => {
@@ -5545,13 +5590,8 @@ function AddFood({
     setBusy(true);
     setErr("");
     try {
-      const b64 = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(r.result.split(",")[1]);
-        r.onerror = rej;
-        r.readAsDataURL(file);
-      });
-      const media = ["image/jpeg", "image/png", "image/webp"].includes(file.type) ? file.type : "image/jpeg";
+      const b64 = await fileToBase64(file);
+      const media = pickImageMedia(file);
       const out = await callGemini([
         {
           role: "user",
@@ -6400,25 +6440,7 @@ function Hoy({
   const suggFileRef = useRef(null);
 
   // Lee y reduce la foto de la sugerencia a un dataURL liviano (max 400px)
-  const readSuggestionImage = (file) => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const maxW = 400;
-        const scale = Math.min(1, maxW / img.width);
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.72));
-      };
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+  const readSuggestionImage = (file) => compressImageToDataUrl(file, 400, 0.72);
 
   const onSuggPhoto = async (e) => {
     const file = e.target.files && e.target.files[0];
@@ -6593,13 +6615,6 @@ function Hoy({
     });
   }, [foodlog]);
 
-  const getLocalDateStr = (d) => {
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-
   const formatSelectedDate = (dStr) => {
     try {
       const parts = dStr.split("-");
@@ -6689,13 +6704,8 @@ function Hoy({
     setBusy(true); 
     setErr("");
     try{ 
-      const b64 = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(r.result.split(",")[1]);
-        r.onerror = rej;
-        r.readAsDataURL(file);
-      });
-      const media = ["image/jpeg","image/png","image/webp"].includes(file.type) ? file.type : "image/jpeg";
+      const b64 = await fileToBase64(file);
+      const media = pickImageMedia(file);
       const out = await callGemini([
         {
           role: "user",
@@ -10011,13 +10021,6 @@ function Entreno({
   const [wkBusy, setWkBusy] = useState(false); 
   const [wk, setWk] = useState("");
 
-  const getLocalDateStr = (d) => {
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-
   const getLocalDateFromISO = (isoString) => {
     try {
       const d = new Date(isoString);
@@ -12820,25 +12823,7 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
   const [fitAnalysis, setFitAnalysis] = React.useState("");
   const [fitAnalysisBusy, setFitAnalysisBusy] = React.useState(false);
 
-  const compressImage = (file) => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const maxW = 600;
-        const scale = Math.min(1, maxW / img.width);
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.8));
-      };
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+  const compressImage = (file) => compressImageToDataUrl(file, 600, 0.8);
 
   const onFiles = async (e) => {
     const files = Array.from(e.target.files || []); // copia a array ANTES de limpiar el input
@@ -13516,34 +13501,11 @@ function Registro({
       let b64, media;
       if (isPdf) {
         // PDFs: enviar tal cual (no podemos renderizar sin PDF.js)
-        b64 = await new Promise((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => res(r.result.split(",")[1]);
-          r.onerror = rej;
-          r.readAsDataURL(file);
-        });
+        b64 = await fileToBase64(file);
         media = "application/pdf";
       } else {
         // Imágenes: comprimir a 700px máx, calidad 0.82 → reduce payload 5-10x
-        b64 = await new Promise((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => {
-            const img = new Image();
-            img.onload = () => {
-              const maxW = 700;
-              const scale = Math.min(1, maxW / img.width);
-              const canvas = document.createElement("canvas");
-              canvas.width = Math.round(img.width * scale);
-              canvas.height = Math.round(img.height * scale);
-              canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-              res(canvas.toDataURL("image/jpeg", 0.82).split(",")[1]);
-            };
-            img.onerror = rej;
-            img.src = r.result;
-          };
-          r.onerror = rej;
-          r.readAsDataURL(file);
-        });
+        b64 = stripDataUrl(await compressImageToDataUrl(file, 700, 0.82));
         media = "image/jpeg";
       }
       if (!isPdf) setErrComp(""); // limpiar aviso PDF si era imagen
@@ -14934,13 +14896,8 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
 
       {/* Galería de fotos de progreso */}
       {(() => {
-        // Helpers: soporte para photos[] (nuevo) y photo string (legacy)
-        const getPhotos = (entry) => {
-          if (!entry) return [];
-          if (Array.isArray(entry.photos) && entry.photos.length > 0) return entry.photos;
-          if (entry.photo) return [entry.photo];
-          return [];
-        };
+        // Soporte para photos[] (nuevo) y photo string (legacy) → helper de módulo getEntryPhotos
+        const getPhotos = getEntryPhotos;
         const datesWithPhotos = Object.keys(metricslog).filter(d => getPhotos(metricslog[d]).length > 0).sort().reverse();
         const todayPhotos = getPhotos(metricslog[selectedDateStr]);
 
@@ -15015,8 +14972,8 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           setProgressPhotoBusy(true);
           setProgressPhotoAnalysis("");
           try {
-            const strip = url => url.split(",")[1] || url;
-            const mime = url => url.startsWith("data:image/png") ? "image/png" : "image/jpeg";
+            const strip = stripDataUrl;
+            const mime = mimeFromDataUrl;
             const imagesParts = todayPhotos.map(url => ({
               type: "image",
               source: { type: "base64", media_type: mime(url), data: strip(url) }
@@ -15150,12 +15107,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
 
       {/* Comparador de fotos corporales con IA */}
       {(() => {
-        const getPhotos2 = (entry) => {
-          if (!entry) return [];
-          if (Array.isArray(entry.photos) && entry.photos.length > 0) return entry.photos;
-          if (entry.photo) return [entry.photo];
-          return [];
-        };
+        const getPhotos2 = getEntryPhotos;
         const datesWithPhotos = Object.keys(metricslog).filter(d => getPhotos2(metricslog[d]).length > 0).sort().reverse();
         if (datesWithPhotos.length < 2) return null;
 
@@ -15170,8 +15122,8 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           setCmpPhotoBusy(true);
           setCmpPhotoAnalysis("");
           try {
-            const strip = url => url.split(",")[1] || url;
-            const mime = url => url.startsWith("data:image/png") ? "image/png" : "image/jpeg";
+            const strip = stripDataUrl;
+            const mime = mimeFromDataUrl;
             const msg = {
               role: "user",
               content: [
