@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.20-R";
+const APP_VERSION = "v2025.06.20-S";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -12813,9 +12813,9 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
   });
 
   const onFiles = async (e) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    e.target.value = "";
+    const files = Array.from(e.target.files || []); // copia a array ANTES de limpiar el input
+    if (files.length === 0) return;
+    e.target.value = ""; // seguro limpiar ahora que tenemos copia
     setSaved(false);
     setExtracted(null);
     setForm({});
@@ -13411,7 +13411,6 @@ function Registro({
   const [cmpDateB, setCmpDateB] = useState("");
   const [cmpPhotoAnalysis, setCmpPhotoAnalysis] = useState("");
   const [cmpPhotoBusy, setCmpPhotoBusy] = useState(false);
-  const photoFileRef = useRef(null);
 
   const [muscInput, setMuscInput] = useState("");
   const [fatInput, setFatInput] = useState("");
@@ -14893,7 +14892,8 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         const datesWithPhotos = Object.keys(metricslog).filter(d => metricslog[d]?.photo).sort().reverse();
         const currentPhoto = metricslog[selectedDateStr]?.photo;
         const handlePhotoUpload = (e) => {
-          const file = e.target.files && e.target.files[0];
+          const file = Array.from(e.target.files || [])[0]; // copia antes de limpiar
+          e.target.value = "";
           if (!file) return;
           const reader = new FileReader();
           reader.onload = () => {
@@ -14907,22 +14907,22 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
               const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
               const updated = { ...(metricslog[selectedDateStr] || {}), photo: dataUrl };
-              setMetricslog({ ...metricslog, [selectedDateStr]: updated });
-              saveWeight(selectedDateStr, updated);
+              const newMetricslog = { ...metricslog, [selectedDateStr]: updated };
+              setMetricslog(newMetricslog);
+              saveKey("metricslog", newMetricslog);
             };
             img.src = reader.result;
           };
           reader.readAsDataURL(file);
-          e.target.value = "";
         };
         return (
           <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
             <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
               <span style={{display:"flex", alignItems:"center", gap:6}}><Camera size={14} color={C.lime}/> Fotos de Progreso</span>
-              <button onClick={() => photoFileRef.current?.click()} style={{background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, padding:"4px 10px", fontSize:11, fontWeight:800, cursor:"pointer"}}>
+              <label style={{background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, padding:"4px 10px", fontSize:11, fontWeight:800, cursor:"pointer", display:"inline-block"}}>
                 + Foto hoy
-              </button>
-              <input ref={photoFileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handlePhotoUpload}/>
+                <input type="file" accept="image/*" style={{display:"none"}} onChange={handlePhotoUpload}/>
+              </label>
             </div>
             {currentPhoto && (
               <div style={{marginBottom:8}}>
