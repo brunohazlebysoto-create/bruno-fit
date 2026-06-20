@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.20-P";
+const APP_VERSION = "v2025.06.20-Q";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -12745,7 +12745,6 @@ function FitdaysTrends({ metricslog }) {
 
 /* ===== FITDAYS IMPORT COMPONENT ===== */
 function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
-  const fileRef = React.useRef(null);
   const [previews, setPreviews] = React.useState([]);
   const [imagesData, setImagesData] = React.useState([]);
   const [busy, setBusy] = React.useState(false);
@@ -12798,13 +12797,15 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
         const mime = ["image/jpeg","image/png","image/webp"].includes(file.type) ? file.type : "image/jpeg";
         newImagesData.push({ b64, mime });
       }
-      setPreviews(newPreviews);
-      setImagesData(newImagesData);
       if (newImagesData.length === 0) {
         setErr("No se cargó ninguna imagen.");
+        return;
       }
+      // Acumula: si ya hay fotos cargadas, las agrega en vez de reemplazar
+      setPreviews(prev => [...prev, ...newPreviews]);
+      setImagesData(prev => [...prev, ...newImagesData]);
     } catch(ex) {
-      setErr("No se pudieron leer las imágenes.");
+      setErr("No se pudieron leer las imágenes: " + (ex.message || ex));
     }
   };
 
@@ -12897,13 +12898,12 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
     <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
       <div style={{fontSize:12.5, fontWeight:800, marginBottom:10}}>📊 Importar Fitdays</div>
 
-      <input ref={fileRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={onFiles}/>
-      <button
-        onClick={() => { fileRef.current?.click(); }}
-        style={{width:"100%", height:38, borderRadius:10, border:`1px solid ${C.cyan}`, background:`${C.cyan}18`, color:C.cyan, fontSize:12.5, fontWeight:800, cursor:"pointer", marginBottom:8}}
+      <label
+        style={{display:"flex", alignItems:"center", justifyContent:"center", gap:6, width:"100%", height:38, borderRadius:10, border:`1px solid ${C.cyan}`, background:`${C.cyan}18`, color:C.cyan, fontSize:12.5, fontWeight:800, cursor:"pointer", marginBottom:8, boxSizing:"border-box"}}
       >
-        📷 Cargar capturas (múltiples)
-      </button>
+        📷 {previews.length > 0 ? `Agregar más fotos (+${previews.length} ya cargada${previews.length !== 1 ? 's' : ''})` : "Cargar capturas (múltiples)"}
+        <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={onFiles}/>
+      </label>
 
       {previews.length > 0 && (
         <div style={{marginBottom:10}}>
@@ -13448,7 +13448,8 @@ function Registro({
         [selectedDateStr]: nextMetricObj
       };
       setMetricslog(newMetricslog);
-      
+      saveKey("metricslog", newMetricslog);
+
       const noteDate = new Date(selectedDateStr + "T" + new Date().toTimeString().slice(0, 8)).toISOString();
       const eWeight = {
         id: uid(),
@@ -13500,7 +13501,8 @@ function Registro({
       [selectedDateStr]: nextMetric
     };
     setMetricslog(newMetricslog);
-    
+    saveKey("metricslog", newMetricslog);
+
     setBodyComp({
       musculo: nextMetric.musculo,
       grasaPct: nextMetric.grasaPct,
@@ -13543,7 +13545,8 @@ function Registro({
       [selectedDateStr]: nextMetric
     };
     setMetricslog(newMetricslog);
-    
+    saveKey("metricslog", newMetricslog);
+
     setBodyComp({ musculo: parsedM, grasaPct: parsedF, visceral: parsedV });
     
     const noteDate = new Date(selectedDateStr + "T" + new Date().toTimeString().slice(0, 8)).toISOString();
