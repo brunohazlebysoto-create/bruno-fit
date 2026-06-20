@@ -1221,32 +1221,25 @@ function detectDeloadNeed(exlog, notes, _metricslog) {
   return { recommended: urgency !== 'none', urgency, reason: reasons.join(' + ') || 'Carga moderada', weeksSinceDeload };
 }
 
-// Normaliza cualquier nombre de músculo (incluso anatómico detallado generado por IA,
-// ej. "Pectoral mayor (fibras claviculares)", "Tríceps braquial (cabeza larga)",
-// "Deltoides Posterior", "Braquiorradial") a una de las 11 categorías canónicas.
-// Ignora mayúsculas, acentos y paréntesis. Devuelve null si no se reconoce.
-function normalizeMuscle(raw) {
-  if (!raw || typeof raw !== "string") return null;
-  const s = raw.toLowerCase()
-    .normalize("NFD").replace(/[̀-ͯ]/g, "") // quitar acentos
-    .replace(/\([^)]*\)/g, " ")                        // quitar (cabeza larga) etc.
-    .replace(/\s+/g, " ").trim();
-  // El orden importa: casos específicos antes que genéricos
-  if (/recto femoral|vasto|cuadricep/.test(s)) return "Cuádriceps";
-  if (/isquio|biceps femoral|semitendinoso|semimembranoso|femoral posterior/.test(s)) return "Isquios";
-  if (/\bfemoral\b/.test(s)) return "Isquios"; // femoral genérico (recto femoral ya resuelto arriba)
-  if (/gluteo/.test(s)) return "Glúteos";
-  if (/gemelo|soleo|pantorrilla|triceps sural/.test(s)) return "Pantorrillas";
-  if (/braquiorradial|antebrazo|flexor|extensor|muneca|supinador|pronador/.test(s)) return "Antebrazo";
-  if (/triceps/.test(s)) return "Tríceps";
-  if (/biceps|braquial/.test(s)) return "Bíceps"; // braquial anterior cuenta como bíceps
-  if (/deltoid|manguito|rotador|supraespinoso|infraespinoso|redondo menor/.test(s)) return "Deltoides";
-  if (/pectoral|pecho|serrato/.test(s)) return "Pectoral";
-  if (/dorsal|trapecio|romboides|redondo mayor|erector|lumbar|espalda|elevador de la esc/.test(s)) return "Espalda";
-  if (/core|abdominal|oblicuo|transverso|recto del abdomen/.test(s)) return "Core";
-  return null; // no reconocido — no se cuenta en el balance agregado
-}
-
+const MUSCLE_ALIASES = {
+  // Deltoides — variantes de nombre → canónico
+  "Deltoide ant.":"Deltoides","Deltoide lat.":"Deltoides","Deltoide post.":"Deltoides",
+  "Deltoides anterior":"Deltoides","Deltoides lateral":"Deltoides","Deltoides posterior":"Deltoides",
+  // Isquios
+  "Isquiotibiales":"Isquios","Femoral":"Isquios",
+  // Glúteos — singular/plural
+  "Glúteo":"Glúteos","Glúteo mayor":"Glúteos","Glúteo medio":"Glúteos",
+  // Pantorrillas
+  "Gemelos":"Pantorrillas","Sóleo":"Pantorrillas","Pantorrilla":"Pantorrillas",
+  // Pectoral
+  "Pecho":"Pectoral","Pectoral mayor":"Pectoral",
+  // Bíceps / Tríceps
+  "Bíceps braquial":"Bíceps","Braquial":"Bíceps","Tríceps braquial":"Tríceps",
+  // Core
+  "Abdominales":"Core","Oblicuos":"Core",
+  // NOTA: Dorsal/Trapecio/Romboides NO se mapean a "Espalda" para evitar doble conteo
+  // cuando el ejercicio ya tiene "Espalda" en su musculos array
+};
 function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
   const primaryMuscles = ["Pectoral","Espalda","Cuádriceps","Isquios","Deltoides","Bíceps","Tríceps","Glúteos","Antebrazo","Core","Pantorrillas"];
   const counts = {};
@@ -1261,19 +1254,11 @@ function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
       const t = new Date(s.date).getTime();
       if (t < minDate) minDate = t;
     });
-    if (!filteredSets.length) return;
-    // Ponderar por posición de activación: primario=1.0, secundario=0.6, terciario=0.35...
-    // Un press cuenta como serie completa de Pectoral pero solo fracción para Tríceps/Deltoides.
-    // Tras normalizar, si dos posiciones colapsan al mismo músculo se queda el peso mayor (el más primario).
-    const weightByMuscle = {};
-    muscleList.forEach((rawM, idx) => {
-      const m = normalizeMuscle(rawM);
-      if (!m) return;
-      const w = MUSCLE_ACTIVATION_WEIGHTS[idx] ?? 0.1;
-      if (weightByMuscle[m] === undefined || w > weightByMuscle[m]) weightByMuscle[m] = w;
-    });
-    Object.entries(weightByMuscle).forEach(([m, w])=>{
-      if (m in counts) counts[m] += filteredSets.length * w;
+    // Deduplicar tras aplicar aliases para evitar doble conteo
+    // (ej. ["Espalda","Dorsal ancho","Trapecio"] → todos → "Espalda" → se conta 1 sola vez)
+    const canonical = [...new Set(muscleList.map(rawM => MUSCLE_ALIASES[rawM] || rawM))];
+    canonical.forEach(m=>{
+      if (m in counts) counts[m] += filteredSets.length;
     });
   });
   // Weeks divisor: for "Todo" use full history span, else use days/7
@@ -10118,8 +10103,10 @@ function Entreno({
       });
       (sets || []).forEach(s => {
         if(s && s.date && new Date(s.date).getTime() >= weekAgo && s.type !== "warmup") {
-          Object.entries(weightByMuscle).forEach(([m, w]) => {
-            if(calculatedVol[m] !== undefined) calculatedVol[m] += w;
+          // Deduplicar tras alias para evitar doble conteo
+          const canonical2 = [...new Set(ms.map(rawM => MUSCLE_ALIASES[rawM] || rawM))];
+          canonical2.forEach(m => {
+            if(calculatedVol[m] !== undefined) calculatedVol[m] = calculatedVol[m] + 1;
           });
         }
       });
