@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.20-R";
+const APP_VERSION = "v2025.06.20-S";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -13411,11 +13411,6 @@ function Registro({
   const [cmpDateB, setCmpDateB] = useState("");
   const [cmpPhotoAnalysis, setCmpPhotoAnalysis] = useState("");
   const [cmpPhotoBusy, setCmpPhotoBusy] = useState(false);
-<<<<<<< HEAD
-  const [progressPhotoAnalysis, setProgressPhotoAnalysis] = useState("");
-  const [progressPhotoBusy, setProgressPhotoBusy] = useState(false);
-=======
->>>>>>> origin/main
 
   const [muscInput, setMuscInput] = useState("");
   const [fatInput, setFatInput] = useState("");
@@ -14934,35 +14929,11 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               const newMetricslog = { ...metricslog, [selectedDateStr]: updated };
               setMetricslog(newMetricslog);
               saveKey("metricslog", newMetricslog);
->>>>>>> origin/main
             };
             img.onerror = rej;
             img.src = r.result;
           };
-<<<<<<< HEAD
-          r.onerror = rej;
-          r.readAsDataURL(file);
-        });
-
-        const handlePhotoUpload = async (e) => {
-          const files = Array.from(e.target.files || []);
-          e.target.value = "";
-          if (!files.length) return;
-          setProgressPhotoAnalysis("");
-          try {
-            const newUrls = await Promise.all(files.map(compressFile));
-            const existing = getPhotos(metricslog[selectedDateStr]);
-            const merged = [...existing, ...newUrls].slice(0, 6); // máx 6 por fecha
-            const updated = { ...(metricslog[selectedDateStr] || {}), photos: merged };
-            const newMetricslog = { ...metricslog, [selectedDateStr]: updated };
-            setMetricslog(newMetricslog);
-            saveKey("metricslog", newMetricslog);
-          } catch(ex) {
-            console.error("Error cargando fotos:", ex);
-          }
-=======
           reader.readAsDataURL(file);
->>>>>>> origin/main
         };
 
         const deletePhoto = (idx) => {
@@ -15016,13 +14987,8 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
             <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
               <span style={{display:"flex", alignItems:"center", gap:6}}><Camera size={14} color={C.lime}/> Fotos de Progreso</span>
               <label style={{background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, padding:"4px 10px", fontSize:11, fontWeight:800, cursor:"pointer", display:"inline-block"}}>
-<<<<<<< HEAD
-                + Fotos
-                <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={handlePhotoUpload}/>
-=======
                 + Foto hoy
                 <input type="file" accept="image/*" style={{display:"none"}} onChange={handlePhotoUpload}/>
->>>>>>> origin/main
               </label>
             </div>
 
