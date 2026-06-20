@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.20-N";
+const APP_VERSION = "v2025.06.20-O";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1237,8 +1237,11 @@ const MUSCLE_ALIASES = {
   "Bíceps braquial":"Bíceps","Braquial":"Bíceps","Tríceps braquial":"Tríceps",
   // Core
   "Abdominales":"Core","Oblicuos":"Core",
-  // NOTA: Dorsal/Trapecio/Romboides NO se mapean a "Espalda" para evitar doble conteo
-  // cuando el ejercicio ya tiene "Espalda" en su musculos array
+  // Espalda — variantes (seguro: la ponderación se queda con el peso mayor si colisionan,
+  // así ["Espalda","Dorsal ancho","Trapecio"] → "Espalda" cuenta 1 sola vez con peso 1.0)
+  "Dorsal ancho":"Espalda","Dorsal":"Espalda","Dorsales":"Espalda",
+  "Trapecio":"Espalda","Trapecios":"Espalda","Romboides":"Espalda",
+  "Lumbares":"Espalda","Espalda alta":"Espalda","Espalda baja":"Espalda",
 };
 function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
   const primaryMuscles = ["Pectoral","Espalda","Cuádriceps","Isquios","Deltoides","Bíceps","Tríceps","Glúteos","Antebrazo","Core","Pantorrillas"];
