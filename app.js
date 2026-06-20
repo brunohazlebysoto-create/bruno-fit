@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.19-M";
+const APP_VERSION = "v2025.06.20-N";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1245,11 +1245,18 @@ function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
       const t = new Date(s.date).getTime();
       if (t < minDate) minDate = t;
     });
-    // Deduplicar tras aplicar aliases para evitar doble conteo
-    // (ej. ["Espalda","Dorsal ancho","Trapecio"] → todos → "Espalda" → se conta 1 sola vez)
-    const canonical = [...new Set(muscleList.map(rawM => MUSCLE_ALIASES[rawM] || rawM))];
-    canonical.forEach(m=>{
-      if (m in counts) counts[m] += filteredSets.length;
+    if (!filteredSets.length) return;
+    // Ponderar por posición de activación: primario=1.0, secundario=0.6, terciario=0.35...
+    // Un press cuenta como serie completa de Pectoral pero solo fracción para Tríceps/Deltoides.
+    // Tras alias, si dos posiciones colapsan al mismo músculo se queda el peso mayor (el más primario).
+    const weightByMuscle = {};
+    muscleList.forEach((rawM, idx) => {
+      const m = MUSCLE_ALIASES[rawM] || rawM;
+      const w = MUSCLE_ACTIVATION_WEIGHTS[idx] ?? 0.1;
+      if (weightByMuscle[m] === undefined || w > weightByMuscle[m]) weightByMuscle[m] = w;
+    });
+    Object.entries(weightByMuscle).forEach(([m, w])=>{
+      if (m in counts) counts[m] += filteredSets.length * w;
     });
   });
   // Weeks divisor: for "Todo" use full history span, else use days/7
@@ -10076,16 +10083,24 @@ function Entreno({
 
     Object.entries(exlog || {}).forEach(([name, sets]) => {
       const ms = exMap[name] || MUSCLES[name] || [];
+      if (!ms.length) return;
+      // Peso por activación: primario 1.0, secundario 0.6, terciario 0.35… (tras alias, se queda el mayor)
+      const weightByMuscle = {};
+      ms.forEach((rawM, idx) => {
+        const m = MUSCLE_ALIASES[rawM] || rawM;
+        const w = MUSCLE_ACTIVATION_WEIGHTS[idx] ?? 0.1;
+        if (weightByMuscle[m] === undefined || w > weightByMuscle[m]) weightByMuscle[m] = w;
+      });
       (sets || []).forEach(s => {
         if(s && s.date && new Date(s.date).getTime() >= weekAgo && s.type !== "warmup") {
-          // Deduplicar tras alias para evitar doble conteo
-          const canonical2 = [...new Set(ms.map(rawM => MUSCLE_ALIASES[rawM] || rawM))];
-          canonical2.forEach(m => {
-            if(calculatedVol[m] !== undefined) calculatedVol[m] = calculatedVol[m] + 1;
+          Object.entries(weightByMuscle).forEach(([m, w]) => {
+            if(calculatedVol[m] !== undefined) calculatedVol[m] += w;
           });
         }
       });
     });
+    // Redondear a 1 decimal
+    Object.keys(calculatedVol).forEach(m => { calculatedVol[m] = Math.round(calculatedVol[m]*10)/10; });
     return calculatedVol;
   }, [exercises, exlog]);
 
