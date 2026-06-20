@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.20-T";
+const APP_VERSION = "v2025.06.20-U";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -13413,6 +13413,8 @@ function Registro({
   const [cmpPhotoBusy, setCmpPhotoBusy] = useState(false);
   const [progressPhotoAnalysis, setProgressPhotoAnalysis] = useState("");
   const [progressPhotoBusy, setProgressPhotoBusy] = useState(false);
+  const [progressPhotoErr, setProgressPhotoErr] = useState("");
+  const [progressPhotoLoading, setProgressPhotoLoading] = useState(false);
 
   const [muscInput, setMuscInput] = useState("");
   const [fatInput, setFatInput] = useState("");
@@ -14901,23 +14903,31 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         const datesWithPhotos = Object.keys(metricslog).filter(d => getPhotos(metricslog[d]).length > 0).sort().reverse();
         const todayPhotos = getPhotos(metricslog[selectedDateStr]);
 
-        const compressFile = (file) => new Promise((res, rej) => {
+        // Comprime a máx 800px; si falla por cualquier razón devuelve el dataURL crudo
+        const compressFile = (file) => new Promise((res) => {
           const r = new FileReader();
           r.onload = () => {
-            const img = new Image();
-            img.onload = () => {
-              const maxW = 700;
-              const scale = Math.min(1, maxW / img.width);
-              const canvas = document.createElement("canvas");
-              canvas.width = Math.round(img.width * scale);
-              canvas.height = Math.round(img.height * scale);
-              canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-              res(canvas.toDataURL("image/jpeg", 0.8));
-            };
-            img.onerror = rej;
-            img.src = r.result;
+            const rawUrl = r.result;
+            if (!rawUrl) { res(null); return; }
+            try {
+              const img = new Image();
+              img.onload = () => {
+                try {
+                  const maxW = 800;
+                  const scale = Math.min(1, maxW / img.width);
+                  const canvas = document.createElement("canvas");
+                  canvas.width = Math.round(img.width * scale);
+                  canvas.height = Math.round(img.height * scale);
+                  canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+                  const compressed = canvas.toDataURL("image/jpeg", 0.82);
+                  res(compressed && compressed.length > 100 ? compressed : rawUrl);
+                } catch(_) { res(rawUrl); }
+              };
+              img.onerror = () => res(rawUrl); // fallback al URL crudo si la imagen no carga
+              img.src = rawUrl;
+            } catch(_) { res(rawUrl); }
           };
-          r.onerror = rej;
+          r.onerror = () => res(null); // null = archivo ilegible
           r.readAsDataURL(file);
         });
 
@@ -14926,17 +14936,26 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           e.target.value = "";
           if (!files.length) return;
           setProgressPhotoAnalysis("");
+          setProgressPhotoErr("");
+          setProgressPhotoLoading(true);
           try {
-            const newUrls = await Promise.all(files.map(compressFile));
+            const results = await Promise.all(files.map(compressFile));
+            const newUrls = results.filter(Boolean); // filtra nulls (archivos fallidos)
+            if (!newUrls.length) {
+              setProgressPhotoErr("No se pudieron leer las fotos. Intenta con otras imágenes.");
+              setProgressPhotoLoading(false);
+              return;
+            }
             const existing = getPhotos(metricslog[selectedDateStr]);
-            const merged = [...existing, ...newUrls].slice(0, 6); // máx 6 por fecha
+            const merged = [...existing, ...newUrls].slice(0, 6);
             const updated = { ...(metricslog[selectedDateStr] || {}), photos: merged };
             const newMetricslog = { ...metricslog, [selectedDateStr]: updated };
             setMetricslog(newMetricslog);
             saveKey("metricslog", newMetricslog);
           } catch(ex) {
-            console.error("Error cargando fotos:", ex);
+            setProgressPhotoErr("Error: " + (ex.message || String(ex)));
           }
+          setProgressPhotoLoading(false);
         };
 
         const deletePhoto = (idx) => {
@@ -14989,11 +15008,18 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
             <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
               <span style={{display:"flex", alignItems:"center", gap:6}}><Camera size={14} color={C.lime}/> Fotos de Progreso</span>
-              <label style={{background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, padding:"4px 10px", fontSize:11, fontWeight:800, cursor:"pointer", display:"inline-block"}}>
-                + Fotos
-                <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={handlePhotoUpload}/>
+              <label style={{background: progressPhotoLoading ? C.panel2 : C.lime, color: progressPhotoLoading ? C.muted : "#0c0e0b", border:"none", borderRadius:8, padding:"4px 10px", fontSize:11, fontWeight:800, cursor: progressPhotoLoading ? "default" : "pointer", display:"inline-flex", alignItems:"center", gap:4, pointerEvents: progressPhotoLoading ? "none" : "auto"}}>
+                {progressPhotoLoading ? <><span style={{animation:"spin 1s linear infinite", display:"inline-block"}}>⟳</span> Cargando…</> : "+ Fotos"}
+                <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={handlePhotoUpload} disabled={progressPhotoLoading}/>
               </label>
             </div>
+
+            {progressPhotoErr && (
+              <div style={{background:"rgba(244,63,94,0.12)", border:"1px solid rgba(244,63,94,0.4)", borderRadius:8, padding:"7px 10px", marginBottom:8, fontSize:12, color:"#f43f5e"}}>
+                ⚠️ {progressPhotoErr}
+                <button onClick={() => setProgressPhotoErr("")} style={{float:"right", background:"none", border:"none", color:"#f43f5e", cursor:"pointer", fontSize:14, lineHeight:1, padding:0}}>✕</button>
+              </div>
+            )}
 
             {todayPhotos.length > 0 ? (
               <div style={{marginBottom:10}}>
