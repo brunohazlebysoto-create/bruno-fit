@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.20-S";
+const APP_VERSION = "v2025.06.20-T";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -13411,6 +13411,8 @@ function Registro({
   const [cmpDateB, setCmpDateB] = useState("");
   const [cmpPhotoAnalysis, setCmpPhotoAnalysis] = useState("");
   const [cmpPhotoBusy, setCmpPhotoBusy] = useState(false);
+  const [progressPhotoAnalysis, setProgressPhotoAnalysis] = useState("");
+  const [progressPhotoBusy, setProgressPhotoBusy] = useState(false);
 
   const [muscInput, setMuscInput] = useState("");
   const [fatInput, setFatInput] = useState("");
@@ -14889,7 +14891,6 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
 
       {/* Galería de fotos de progreso */}
       {(() => {
-<<<<<<< HEAD
         // Helpers: soporte para photos[] (nuevo) y photo string (legacy)
         const getPhotos = (entry) => {
           if (!entry) return [];
@@ -14903,16 +14904,6 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         const compressFile = (file) => new Promise((res, rej) => {
           const r = new FileReader();
           r.onload = () => {
-=======
-        const datesWithPhotos = Object.keys(metricslog).filter(d => metricslog[d]?.photo).sort().reverse();
-        const currentPhoto = metricslog[selectedDateStr]?.photo;
-        const handlePhotoUpload = (e) => {
-          const file = Array.from(e.target.files || [])[0]; // copia antes de limpiar
-          e.target.value = "";
-          if (!file) return;
-          const reader = new FileReader();
-          reader.onload = () => {
->>>>>>> origin/main
             const img = new Image();
             img.onload = () => {
               const maxW = 700;
@@ -14921,19 +14912,31 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               canvas.width = Math.round(img.width * scale);
               canvas.height = Math.round(img.height * scale);
               canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-<<<<<<< HEAD
               res(canvas.toDataURL("image/jpeg", 0.8));
-=======
-              const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
-              const updated = { ...(metricslog[selectedDateStr] || {}), photo: dataUrl };
-              const newMetricslog = { ...metricslog, [selectedDateStr]: updated };
-              setMetricslog(newMetricslog);
-              saveKey("metricslog", newMetricslog);
             };
             img.onerror = rej;
             img.src = r.result;
           };
-          reader.readAsDataURL(file);
+          r.onerror = rej;
+          r.readAsDataURL(file);
+        });
+
+        const handlePhotoUpload = async (e) => {
+          const files = Array.from(e.target.files || []);
+          e.target.value = "";
+          if (!files.length) return;
+          setProgressPhotoAnalysis("");
+          try {
+            const newUrls = await Promise.all(files.map(compressFile));
+            const existing = getPhotos(metricslog[selectedDateStr]);
+            const merged = [...existing, ...newUrls].slice(0, 6); // máx 6 por fecha
+            const updated = { ...(metricslog[selectedDateStr] || {}), photos: merged };
+            const newMetricslog = { ...metricslog, [selectedDateStr]: updated };
+            setMetricslog(newMetricslog);
+            saveKey("metricslog", newMetricslog);
+          } catch(ex) {
+            console.error("Error cargando fotos:", ex);
+          }
         };
 
         const deletePhoto = (idx) => {
@@ -14987,8 +14990,8 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
             <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
               <span style={{display:"flex", alignItems:"center", gap:6}}><Camera size={14} color={C.lime}/> Fotos de Progreso</span>
               <label style={{background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, padding:"4px 10px", fontSize:11, fontWeight:800, cursor:"pointer", display:"inline-block"}}>
-                + Foto hoy
-                <input type="file" accept="image/*" style={{display:"none"}} onChange={handlePhotoUpload}/>
+                + Fotos
+                <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={handlePhotoUpload}/>
               </label>
             </div>
 
