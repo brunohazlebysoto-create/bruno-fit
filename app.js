@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.20-S";
+const APP_VERSION = "v2025.06.20-T";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -13411,6 +13411,8 @@ function Registro({
   const [cmpDateB, setCmpDateB] = useState("");
   const [cmpPhotoAnalysis, setCmpPhotoAnalysis] = useState("");
   const [cmpPhotoBusy, setCmpPhotoBusy] = useState(false);
+  const [progressPhotoAnalysis, setProgressPhotoAnalysis] = useState("");
+  const [progressPhotoBusy, setProgressPhotoBusy] = useState(false);
 
   const [muscInput, setMuscInput] = useState("");
   const [fatInput, setFatInput] = useState("");
@@ -14889,60 +14891,160 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
 
       {/* Galería de fotos de progreso */}
       {(() => {
-        const datesWithPhotos = Object.keys(metricslog).filter(d => metricslog[d]?.photo).sort().reverse();
-        const currentPhoto = metricslog[selectedDateStr]?.photo;
-        const handlePhotoUpload = (e) => {
-          const file = Array.from(e.target.files || [])[0]; // copia antes de limpiar
-          e.target.value = "";
-          if (!file) return;
-          const reader = new FileReader();
-          reader.onload = () => {
+        // Helpers: soporte para photos[] (nuevo) y photo string (legacy)
+        const getPhotos = (entry) => {
+          if (!entry) return [];
+          if (Array.isArray(entry.photos) && entry.photos.length > 0) return entry.photos;
+          if (entry.photo) return [entry.photo];
+          return [];
+        };
+        const datesWithPhotos = Object.keys(metricslog).filter(d => getPhotos(metricslog[d]).length > 0).sort().reverse();
+        const todayPhotos = getPhotos(metricslog[selectedDateStr]);
+
+        const compressFile = (file) => new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => {
             const img = new Image();
             img.onload = () => {
-              const maxW = 600;
+              const maxW = 700;
               const scale = Math.min(1, maxW / img.width);
               const canvas = document.createElement("canvas");
               canvas.width = Math.round(img.width * scale);
               canvas.height = Math.round(img.height * scale);
               canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-              const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
-              const updated = { ...(metricslog[selectedDateStr] || {}), photo: dataUrl };
-              const newMetricslog = { ...metricslog, [selectedDateStr]: updated };
-              setMetricslog(newMetricslog);
-              saveKey("metricslog", newMetricslog);
+              res(canvas.toDataURL("image/jpeg", 0.8));
             };
-            img.src = reader.result;
+            img.onerror = rej;
+            img.src = r.result;
           };
-          reader.readAsDataURL(file);
+          r.onerror = rej;
+          r.readAsDataURL(file);
+        });
+
+        const handlePhotoUpload = async (e) => {
+          const files = Array.from(e.target.files || []);
+          e.target.value = "";
+          if (!files.length) return;
+          setProgressPhotoAnalysis("");
+          try {
+            const newUrls = await Promise.all(files.map(compressFile));
+            const existing = getPhotos(metricslog[selectedDateStr]);
+            const merged = [...existing, ...newUrls].slice(0, 6); // máx 6 por fecha
+            const updated = { ...(metricslog[selectedDateStr] || {}), photos: merged };
+            const newMetricslog = { ...metricslog, [selectedDateStr]: updated };
+            setMetricslog(newMetricslog);
+            saveKey("metricslog", newMetricslog);
+          } catch(ex) {
+            console.error("Error cargando fotos:", ex);
+          }
         };
+
+        const deletePhoto = (idx) => {
+          const updated = { ...(metricslog[selectedDateStr] || {}) };
+          const current = getPhotos(metricslog[selectedDateStr]);
+          updated.photos = current.filter((_, i) => i !== idx);
+          delete updated.photo; // limpia legacy
+          const newMetricslog = { ...metricslog, [selectedDateStr]: updated };
+          setMetricslog(newMetricslog);
+          saveKey("metricslog", newMetricslog);
+          setProgressPhotoAnalysis("");
+        };
+
+        const analyzeProgressPhotos = async () => {
+          if (!todayPhotos.length || progressPhotoBusy) return;
+          setProgressPhotoBusy(true);
+          setProgressPhotoAnalysis("");
+          try {
+            const strip = url => url.split(",")[1] || url;
+            const mime = url => url.startsWith("data:image/png") ? "image/png" : "image/jpeg";
+            const imagesParts = todayPhotos.map(url => ({
+              type: "image",
+              source: { type: "base64", media_type: mime(url), data: strip(url) }
+            }));
+            const prevPhotoDates = datesWithPhotos.filter(d => d < selectedDateStr).slice(0, 1);
+            const hasPrev = prevPhotoDates.length > 0;
+            const prevPhotos = hasPrev ? getPhotos(metricslog[prevPhotoDates[0]]) : [];
+            const prevParts = prevPhotos.slice(0, 2).map(url => ({
+              type: "image",
+              source: { type: "base64", media_type: mime(url), data: strip(url) }
+            }));
+            const allParts = [
+              ...(hasPrev ? prevParts : []),
+              ...imagesParts,
+              { type: "text", text: hasPrev
+                ? `Estas son fotos corporales de Bruno. Las PRIMERAS ${prevParts.length} imagen(es) son del ${prevPhotoDates[0]} (ANTERIOR). Las ÚLTIMAS ${imagesParts.length} imagen(es) son del ${selectedDateStr} (ACTUAL). Compara la composición corporal: grasa visible, masa muscular, definición, postura. Da: 1) qué cambió entre fechas, 2) puntos positivos, 3) áreas a mejorar, 4) una acción concreta. Máx 200 palabras en español.`
+                : `Fotos corporales de Bruno del ${selectedDateStr} (${imagesParts.length} vista(s)). Analiza la composición corporal visible: distribución de grasa, masa muscular, definición, postura. Da observaciones objetivas y constructivas + 2 recomendaciones. Máx 150 palabras en español.`
+              }
+            ];
+            const result = await callGemini([{ role:"user", content: allParts }],
+              "Eres un coach experto en composición corporal. Analiza con criterio profesional, honesto y motivador. Sin encabezados markdown.");
+            setProgressPhotoAnalysis(result?.trim() || "Sin análisis.");
+          } catch(ex) {
+            setProgressPhotoAnalysis("⚠️ " + (ex.message || "Error al analizar"));
+          }
+          setProgressPhotoBusy(false);
+        };
+
         return (
           <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
             <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
               <span style={{display:"flex", alignItems:"center", gap:6}}><Camera size={14} color={C.lime}/> Fotos de Progreso</span>
               <label style={{background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, padding:"4px 10px", fontSize:11, fontWeight:800, cursor:"pointer", display:"inline-block"}}>
-                + Foto hoy
-                <input type="file" accept="image/*" style={{display:"none"}} onChange={handlePhotoUpload}/>
+                + Fotos
+                <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={handlePhotoUpload}/>
               </label>
             </div>
-            {currentPhoto && (
-              <div style={{marginBottom:8}}>
-                <div style={{fontSize:10, color:C.lime, fontWeight:700, marginBottom:4}}>HOY — {selectedDateStr}</div>
-                <img src={currentPhoto} alt="Progreso hoy" style={{width:"100%", maxHeight:220, objectFit:"cover", borderRadius:10, border:`1px solid ${C.line}`}}/>
-              </div>
-            )}
-            {datesWithPhotos.length > 0 && (
-              <div style={{display:"flex", gap:8, overflowX:"auto", paddingBottom:4, scrollbarWidth:"none"}}>
-                {datesWithPhotos.filter(d => d !== selectedDateStr).slice(0, 8).map(d => (
-                  <div key={d} style={{flexShrink:0, textAlign:"center"}}>
-                    <img src={metricslog[d].photo} alt={d} style={{width:72, height:72, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`, display:"block"}}/>
-                    <div style={{fontSize:9, color:C.muted, marginTop:2}}>{d.slice(5)}</div>
+
+            {todayPhotos.length > 0 ? (
+              <div style={{marginBottom:10}}>
+                <div style={{fontSize:10, color:C.lime, fontWeight:700, marginBottom:6}}>{selectedDateStr} — {todayPhotos.length} foto{todayPhotos.length !== 1 ? "s" : ""}</div>
+                <div style={{display:"flex", gap:6, overflowX:"auto", paddingBottom:4}}>
+                  {todayPhotos.map((url, idx) => (
+                    <div key={idx} style={{position:"relative", flexShrink:0}}>
+                      <img src={url} alt={`foto-${idx}`} style={{height:100, width:75, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`, display:"block"}}/>
+                      <button onClick={() => deletePhoto(idx)} style={{position:"absolute", top:2, right:2, background:"rgba(0,0,0,0.6)", border:"none", borderRadius:"50%", width:18, height:18, color:"#fff", fontSize:10, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0}}>✕</button>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={analyzeProgressPhotos}
+                  disabled={progressPhotoBusy}
+                  style={{width:"100%", marginTop:8, height:36, borderRadius:10, border:"none",
+                    background: progressPhotoBusy ? C.panel2 : `linear-gradient(135deg,${C.lime},${C.cyan})`,
+                    color: progressPhotoBusy ? C.muted : "#0c0e0b",
+                    fontSize:12.5, fontWeight:800, cursor: progressPhotoBusy ? "default" : "pointer",
+                    display:"flex", alignItems:"center", justifyContent:"center", gap:6
+                  }}
+                >
+                  {progressPhotoBusy
+                    ? <><span style={{animation:"spin 1s linear infinite", display:"inline-block"}}>⟳</span> Analizando…</>
+                    : "✦ Analizar con IA"}
+                </button>
+                {progressPhotoAnalysis && (
+                  <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:10, marginTop:8, fontSize:12, color:C.ink, lineHeight:1.65, whiteSpace:"pre-wrap"}}>
+                    {progressPhotoAnalysis}
+                    <button onClick={() => setProgressPhotoAnalysis("")} style={{display:"block", width:"100%", marginTop:6, background:"none", border:`1px solid ${C.line}`, borderRadius:6, color:C.muted, fontSize:11, padding:"3px", cursor:"pointer"}}>Cerrar</button>
                   </div>
-                ))}
+                )}
+              </div>
+            ) : (
+              <div style={{textAlign:"center", color:C.muted, fontSize:12, padding:"12px 0"}}>
+                Sube fotos de hoy para analizar con IA 📸
               </div>
             )}
-            {datesWithPhotos.length === 0 && !currentPhoto && (
-              <div style={{textAlign:"center", color:C.muted, fontSize:12, padding:"12px 0"}}>
-                Sube tu primera foto de progreso hoy 📸
+
+            {datesWithPhotos.filter(d => d !== selectedDateStr).length > 0 && (
+              <div>
+                <div style={{fontSize:10, color:C.muted, fontWeight:700, marginBottom:5}}>HISTORIAL</div>
+                <div style={{display:"flex", gap:8, overflowX:"auto", paddingBottom:4, scrollbarWidth:"none"}}>
+                  {datesWithPhotos.filter(d => d !== selectedDateStr).slice(0, 8).map(d => (
+                    <div key={d} style={{flexShrink:0, textAlign:"center"}}>
+                      <img src={getPhotos(metricslog[d])[0]} alt={d} style={{width:64, height:80, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`, display:"block"}}/>
+                      <div style={{fontSize:9, color:C.muted, marginTop:2}}>{d.slice(5)}</div>
+                      {getPhotos(metricslog[d]).length > 1 && <div style={{fontSize:8, color:C.cyan}}>+{getPhotos(metricslog[d]).length - 1}</div>}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -14951,11 +15053,17 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
 
       {/* Comparador de fotos corporales con IA */}
       {(() => {
-        const datesWithPhotos = Object.keys(metricslog).filter(d => metricslog[d]?.photo).sort().reverse();
+        const getPhotos2 = (entry) => {
+          if (!entry) return [];
+          if (Array.isArray(entry.photos) && entry.photos.length > 0) return entry.photos;
+          if (entry.photo) return [entry.photo];
+          return [];
+        };
+        const datesWithPhotos = Object.keys(metricslog).filter(d => getPhotos2(metricslog[d]).length > 0).sort().reverse();
         if (datesWithPhotos.length < 2) return null;
 
-        const photoA = cmpDateA && metricslog[cmpDateA]?.photo;
-        const photoB = cmpDateB && metricslog[cmpDateB]?.photo;
+        const photoA = cmpDateA ? getPhotos2(metricslog[cmpDateA])[0] : null;
+        const photoB = cmpDateB ? getPhotos2(metricslog[cmpDateB])[0] : null;
 
         const analyzePhotos = async () => {
           if (!photoA || !photoB || cmpPhotoBusy) return;
