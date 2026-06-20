@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.20-Q";
+const APP_VERSION = "v2025.06.20-R";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -880,8 +880,12 @@ const FITDAYS_SCHEMA = {
     masaGrasa:{ type:"NUMBER" },
     grasaSubc:{ type:"NUMBER" },
     masaMuscular:{ type:"NUMBER" },
-    musculoEsq:{ type:"NUMBER" },
-    masaEsqueletica:{ type:"NUMBER" },
+    smmKg:{ type:"NUMBER" },        // Músculo esquelético en kg (SMM)
+    musculoEsq:{ type:"NUMBER" },   // Músculo esquelético en % (si aparece)
+    masaOsea:{ type:"NUMBER" },     // Masa Esquelética (huesos) en kg — NO músculo
+    masaEsqueletica:{ type:"NUMBER" }, // alias legacy de masaOsea
+    pesoSinGrasa:{ type:"NUMBER" }, // Peso sin grasa / LBM en kg
+    smi:{ type:"NUMBER" },          // SMI en kg/m²
     aguaKg:{ type:"NUMBER" },
     pctAgua:{ type:"NUMBER" },
     proteinaKg:{ type:"NUMBER" },
@@ -889,8 +893,11 @@ const FITDAYS_SCHEMA = {
     visceral:{ type:"NUMBER" },
     bmr:{ type:"NUMBER" },
     edadCorporal:{ type:"NUMBER" },
+    zinE:{ type:"NUMBER" },         // zINE
     whr:{ type:"NUMBER" },
     puntuacion:{ type:"NUMBER" },
+    pesoObjetivo:{ type:"NUMBER" }, // Peso objetivo recomendado en kg
+    tipoCuerpo:{ type:"STRING" },   // Tipo de cuerpo: "Obesidad", "Normal", etc.
     grasaTronco:{ type:"NUMBER" },
     grasaBrazoDer:{ type:"NUMBER" },
     grasaBrazoIzq:{ type:"NUMBER" },
@@ -903,6 +910,8 @@ const FITDAYS_SCHEMA = {
     musculoPiernaIzq:{ type:"NUMBER" },
   }, required:["peso","grasaPct"]
 };
+// Campos de FITDAYS_SCHEMA que son strings (no numéricos)
+const FITDAYS_STRING_FIELDS = new Set(["tipoCuerpo"]);
 
 /* ===== COMPONENTE PRINCIPAL APP ===== */
 
@@ -3695,11 +3704,18 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
         let comp = "";
         if (latest.puntuacion) comp += `Score Fitdays: ${latest.puntuacion}/100. `;
+        if (latest.tipoCuerpo) comp += `Tipo de cuerpo: ${latest.tipoCuerpo}. `;
         if (latest.edadCorporal) comp += `Edad corporal: ${latest.edadCorporal} años. `;
-        if (latest.musculoEsq) comp += `Músculo esquelético: ${latest.musculoEsq}%. `;
-        if (latest.masaMuscular) comp += `Masa muscular: ${latest.masaMuscular}kg. `;
+        const smm = latest.smmKg || latest.masaMuscular || latest.musculo;
+        if (smm) comp += `Masa muscular/SMM: ${smm}kg. `;
+        if (latest.pesoSinGrasa) comp += `LBM: ${latest.pesoSinGrasa}kg. `;
+        if (latest.smi) comp += `SMI: ${latest.smi} kg/m². `;
+        if (latest.masaOsea || latest.masaEsqueletica) comp += `Masa ósea: ${latest.masaOsea || latest.masaEsqueletica}kg. `;
         if (latest.grasaSubc) comp += `Grasa subcutánea: ${latest.grasaSubc}%. `;
-        if (latest.whr) comp += `WHR (cintura/cadera): ${latest.whr}. `;
+        if (latest.bmr) comp += `BMR: ${latest.bmr}kcal. `;
+        if (latest.pesoObjetivo) comp += `Objetivo peso: ${latest.pesoObjetivo}kg. `;
+        if (latest.zinE) comp += `zINE: ${latest.zinE}. `;
+        if (latest.whr) comp += `WHR: ${latest.whr}. `;
 
         // Segmental analysis
         if (latest.musculoBrazoDer || latest.musculoBrazoIzq) {
@@ -12677,7 +12693,15 @@ function FitdaysTrends({ metricslog }) {
     return Object.entries(metricslog || {})
       .filter(([, v]) => v && (v.peso !== undefined || v.weight !== undefined))
       .sort(([a], [b]) => a < b ? -1 : (a > b ? 1 : 0))
-      .map(([date, v]) => ({ date, peso: v.peso ?? v.weight, grasaPct: v.grasaPct, puntuacion: v.puntuacion, bmr: v.bmr }));
+      .map(([date, v]) => ({
+        date,
+        peso: v.peso ?? v.weight,
+        grasaPct: v.grasaPct,
+        smmKg: v.smmKg ?? v.masaMuscular ?? v.musculo,
+        puntuacion: v.puntuacion,
+        bmr: v.bmr,
+        smi: v.smi,
+      }));
   }, [metricslog]);
 
   if (entries.length < 2) return null;
@@ -12692,15 +12716,19 @@ function FitdaysTrends({ metricslog }) {
 
   const pesoVals = entries.map(e => e.peso).filter(v => v != null);
   const grasaVals = entries.map(e => e.grasaPct).filter(v => v != null);
+  const smmVals = entries.map(e => e.smmKg).filter(v => v != null);
   const puntuacionVals = entries.map(e => e.puntuacion).filter(v => v != null);
   const bmrVals = entries.map(e => e.bmr).filter(v => v != null);
+  const smiVals = entries.map(e => e.smi).filter(v => v != null);
 
   const hasPeso = pesoVals.length >= 2;
   const hasGrasa = grasaVals.length >= 2;
+  const hasSMM = smmVals.length >= 2;
   const hasPuntuacion = puntuacionVals.length >= 2;
   const hasBmr = bmrVals.length >= 2;
+  const hasSMI = smiVals.length >= 2;
 
-  if (!hasPeso && !hasGrasa && !hasBmr) return null;
+  if (!hasPeso && !hasGrasa && !hasSMM) return null;
 
   const miniChart = (vals, color, label, unit) => {
     if (vals.length < 2) return null;
@@ -12735,9 +12763,15 @@ function FitdaysTrends({ metricslog }) {
         {hasPeso && miniChart(entries.filter(e => e.peso != null).map(e => e.peso), C.cyan, "Peso", " kg")}
         <div style={{flex:1, minWidth:0, display:"flex", flexDirection:"column", gap:8}}>
           {hasGrasa && miniChart(entries.filter(e => e.grasaPct != null).map(e => e.grasaPct), C.amber, "% Grasa", "%")}
-          {hasPuntuacion && miniChart(entries.filter(e => e.puntuacion != null).map(e => e.puntuacion), C.lime, "Score", "")}
+          {hasSMM && miniChart(entries.filter(e => e.smmKg != null).map(e => e.smmKg), C.lime, "SMM", " kg")}
+          {hasPuntuacion && miniChart(entries.filter(e => e.puntuacion != null).map(e => e.puntuacion), "#a78bfa", "Score", "")}
         </div>
-        {hasBmr && miniChart(entries.filter(e => e.bmr != null).map(e => e.bmr), C.rose, "BMR", " kcal")}
+        {(hasBmr || hasSMI) && (
+          <div style={{flex:1, minWidth:0, display:"flex", flexDirection:"column", gap:8}}>
+            {hasBmr && miniChart(entries.filter(e => e.bmr != null).map(e => e.bmr), C.rose, "BMR", " kcal")}
+            {hasSMI && miniChart(entries.filter(e => e.smi != null).map(e => e.smi), "#22d3ee", "SMI", " kg/m²")}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -12814,7 +12848,35 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
     setBusy(true);
     setErr("");
     try {
-      const sys = "Eres un extractor de datos de composición corporal. Analiza estas capturas de pantalla de la app Fitdays y extrae TODOS los valores numéricos visibles. Si un valor aparece en múltiples imágenes, usa el más reciente o calcula un promedio para músculos (ambos lados). Si un valor no aparece claramente, omítelo (no inventes). Devuelve JSON.";
+      const sys = `Eres un extractor de datos de composición corporal especializado en informes Fitdays/InBody.
+Extrae SOLO los valores que aparecen visibles. No inventes ni estimes valores ausentes.
+
+MAPA EXACTO DE CAMPOS (usa estas claves JSON precisas):
+• peso → "Peso" total en kg
+• imc → "IMC" en kg/m²
+• puntuacion → "Puntuación corporal" /100
+• pesoObjetivo → "Peso objetivo recomendado" en kg (sección "Control de peso")
+• tipoCuerpo → tipo de cuerpo como texto, p.ej. "Obesidad"
+• grasaPct → "Grasa corporal %" (sección composición corporal)
+• masaGrasa → masa grasa total en kg
+• grasaSubc → "Grasa subcutánea" en %
+• visceral → "Grado de grasa visceral" número entero 1-20
+• masaMuscular → "Masa muscular" en kg (TOTAL — incluye todo tipo de músculo, ~64 kg)
+• smmKg → "Músculo esquelético" en kg (SMM — solo músculo esquelético, ~40-45 kg)
+• musculoEsq → "Músculo esquelético" en % si aparece como porcentaje
+• masaOsea → "Masa Esquelética" en kg (tejido ÓSEO, ~4-5 kg) ← ¡ATENCIÓN: es hueso, NOT músculo!
+• pesoSinGrasa → "Peso corporal sin grasa" / LBM en kg
+• smi → "SMI" en kg/m²
+• aguaKg → "Contenido de agua" en kg
+• proteinaKg → "Cantidad de proteína" en kg
+• bmr → "Tasa metabólica basal" en kcal (número solo, sin "kcal")
+• edadCorporal → "Edad corporal" en años
+• zinE → "zINE" valor decimal
+• whr → "WHR" o "Índice cintura-cadera"
+• grasaTronco/grasaBrazoDer/grasaBrazoIzq/grasaPiernaDer/grasaPiernaIzq → kg de grasa segmental
+• musculoTronco/musculoBrazoDer/musculoBrazoIzq/musculoPiernaDer/musculoPiernaIzq → kg de músculo segmental
+
+CRÍTICO: "Masa Esquelética" ≠ "Músculo esquelético". Masa Esquelética = huesos (~4.9 kg) → masaOsea. Músculo esquelético = SMM (~42 kg) → smmKg.`;
 
       // Build message with all images
       const content = [
@@ -12822,7 +12884,7 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
           type: "image",
           source: { type: "base64", media_type: img.mime, data: img.b64 }
         })),
-        { type: "text", text: `Extrae todos los datos de composición corporal visibles en estas ${imagesData.length} captura(s) de Fitdays. Si hay datos duplicados/conflictivos en múltiples imágenes, fusiona inteligentemente: prefiere valores no-null, promedia valores de músculos si aparecen en distintas imágenes.` }
+        { type: "text", text: `Extrae todos los valores del informe Fitdays en estas ${imagesData.length} imagen(es). Sigue el mapa de campos del sistema EXACTAMENTE. Si hay múltiples imágenes con datos del mismo campo, usa el valor más legible. No inventes datos ausentes.` }
       ];
 
       const out = await callGemini([{
@@ -12864,13 +12926,29 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
     </div>
   );
 
+  const fieldInputText = (k, label) => (
+    <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:5}}>
+      <span style={{fontSize:11.5, color:C.muted, flex:"0 0 140px"}}>{label}:</span>
+      <input
+        value={fv(k)}
+        onChange={e => sv(k)(e.target.value)}
+        type="text"
+        style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"5px 8px", color:C.ink, fontSize:12, outline:"none", minWidth:0}}
+      />
+    </div>
+  );
+
   const doSave = () => {
     if (!date) return;
     const entry = {};
     Object.keys(FITDAYS_SCHEMA.properties).forEach(k => {
       if (form[k] !== undefined && form[k] !== "") {
-        const n = parseFloat(form[k]);
-        if (!isNaN(n)) entry[k] = n;
+        if (FITDAYS_STRING_FIELDS.has(k)) {
+          entry[k] = form[k];
+        } else {
+          const n = parseFloat(form[k]);
+          if (!isNaN(n)) entry[k] = n;
+        }
       }
     });
     if (entry.peso == null && entry.weight == null) {
@@ -12959,28 +13037,34 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
           </div>
 
           {sectionTitle("Básico", C.cyan)}
-          {fieldInput("peso", "Peso", "kg")}
-          {fieldInput("imc", "IMC", "")}
+          {fieldInput("peso", "Peso total", "kg")}
+          {fieldInput("imc", "IMC", "kg/m²")}
           {fieldInput("puntuacion", "Puntuación", "/100")}
+          {fieldInput("pesoObjetivo", "Peso objetivo", "kg")}
+          {fieldInputText("tipoCuerpo", "Tipo de cuerpo")}
 
           {sectionTitle("Grasa", C.amber)}
           {fieldInput("grasaPct", "% Grasa corporal", "%")}
-          {fieldInput("masaGrasa", "Masa grasa", "kg")}
+          {fieldInput("masaGrasa", "Masa grasa total", "kg")}
           {fieldInput("grasaSubc", "Grasa subcutánea", "%")}
-          {fieldInput("visceral", "Grasa visceral", "")}
+          {fieldInput("visceral", "Grasa visceral grado", "")}
 
-          {sectionTitle("Músculo", C.lime)}
-          {fieldInput("masaMuscular", "Masa muscular", "kg")}
+          {sectionTitle("Músculo & LBM", C.lime)}
+          {fieldInput("masaMuscular", "Masa muscular total", "kg")}
+          {fieldInput("smmKg", "Músculo esquelético", "kg")}
           {fieldInput("musculoEsq", "Músculo esquelético", "%")}
-          {fieldInput("masaEsqueletica", "Masa esquelética", "kg")}
+          {fieldInput("masaOsea", "Masa ósea (huesos)", "kg")}
+          {fieldInput("pesoSinGrasa", "Peso sin grasa (LBM)", "kg")}
+          {fieldInput("smi", "SMI", "kg/m²")}
 
-          {sectionTitle("Otros", C.muted)}
+          {sectionTitle("Agua, Proteína & Metab.", C.muted)}
           {fieldInput("aguaKg", "Agua corporal", "kg")}
           {fieldInput("pctAgua", "% Agua", "%")}
           {fieldInput("proteinaKg", "Proteína", "kg")}
           {fieldInput("pctProteina", "% Proteína", "%")}
           {fieldInput("bmr", "BMR", "kcal")}
-          {fieldInput("edadCorporal", "Edad corporal", "")}
+          {fieldInput("edadCorporal", "Edad corporal", "años")}
+          {fieldInput("zinE", "zINE", "")}
           {fieldInput("whr", "WHR", "")}
 
           {/* Segmental grasa collapsible */}
@@ -13033,7 +13117,6 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
           {saved && !fitAnalysis && (
             <button
               onClick={async () => {
-                if (!geminiKey) { setFitAnalysis("Configura tu API Key para analizar."); return; }
                 setFitAnalysisBusy(true);
                 try {
                   const allDates = Object.keys(metricslog||{}).sort();
@@ -13041,14 +13124,28 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
                   const prev = prevDate ? metricslog[prevDate] : null;
                   const curr = metricslog[date] || {};
 
-                  const currStr = `Peso: ${curr.weight||"?"}kg, Grasa: ${curr.grasaPct||"?"}%, Músculo: ${curr.masaMuscular||curr.musculo||"?"}kg, Visceral: ${curr.visceral||"?"}, Score: ${curr.puntuacion||"?"}`;
-                  const prevStr = prev ? `Peso: ${prev.weight||"?"}kg, Grasa: ${prev.grasaPct||"?"}%, Músculo: ${prev.masaMuscular||prev.musculo||"?"}kg, Visceral: ${prev.visceral||"?"}, Score: ${prev.puntuacion||"?"}` : "No hay scan anterior";
+                  // Historial completo (últimos 6 scans) para ver tendencia
+                  const histDates = allDates.filter(d => d <= date).slice(-6);
+                  const histStr = histDates.map(d => {
+                    const m = metricslog[d] || {};
+                    const smm = m.smmKg || m.masaMuscular || m.musculo;
+                    return `${d}: ${m.weight||"?"}kg, Grasa ${m.grasaPct||"?"}%, SMM ${smm||"?"}kg, Visceral ${m.visceral||"?"}, Score ${m.puntuacion||"?"}`;
+                  }).join("\n");
 
-                  const segStr = (curr.musculoBrazoDer || curr.musculoPiernaDer) ?
-                    `Segmental músculo: BrazoDer ${curr.musculoBrazoDer||"?"}kg, BrazoIzq ${curr.musculoBrazoIzq||"?"}kg, PiernaDer ${curr.musculoPiernaDer||"?"}kg, PiernaIzq ${curr.musculoPiernaIzq||"?"}kg` : "";
+                  const compFn = (m) => {
+                    const smm = m.smmKg || m.masaMuscular || m.musculo;
+                    return `Peso: ${m.weight||"?"}kg | Grasa: ${m.grasaPct||"?"}% | SMM: ${smm||"?"}kg | LBM: ${m.pesoSinGrasa||"?"}kg | SMI: ${m.smi||"?"} | Visceral grado: ${m.visceral||"?"} | Score: ${m.puntuacion||"?"}/100 | Tipo: ${m.tipoCuerpo||"?"} | Objetivo: ${m.pesoObjetivo||"?"}kg | BMR: ${m.bmr||"?"}kcal | EdadCorp: ${m.edadCorporal||"?"}`;
+                  };
+                  const currStr = compFn(curr);
+                  const prevStr = prev ? compFn(prev) : "Sin scan anterior";
 
-                  const sys = "Eres el coach de composición corporal de Bruno. Analiza los datos de la báscula Fitdays. Responde en español, formato chat móvil: párrafos cortos, bullets con •, negrita para datos clave. SIN encabezados markdown (#). Máximo 200 palabras.";
-                  const msg = `Scan ${date}:\n${currStr}\n${segStr}\n\nAnterior (${prevDate||"ninguno"}):\n${prevStr}\n\nDa: 1) qué cambió desde el scan anterior, 2) puntos positivos y preocupantes, 3) una acción concreta para las próximas 2 semanas.`;
+                  const segCurr = [curr.musculoBrazoDer, curr.musculoBrazoIzq, curr.musculoPiernaDer, curr.musculoPiernaIzq].some(v => v);
+                  const segStr = segCurr ?
+                    `Segmental MÚSCULO: Tronco ${curr.musculoTronco||"?"}kg, BrazoDer ${curr.musculoBrazoDer||"?"}kg, BrazoIzq ${curr.musculoBrazoIzq||"?"}kg, PiernaDer ${curr.musculoPiernaDer||"?"}kg, PiernaIzq ${curr.musculoPiernaIzq||"?"}kg\nSegmental GRASA: Tronco ${curr.grasaTronco||"?"}kg, BrazoDer ${curr.grasaBrazoDer||"?"}kg, BrazoIzq ${curr.grasaBrazoIzq||"?"}kg, PiernaDer ${curr.grasaPiernaDer||"?"}kg, PiernaIzq ${curr.grasaPiernaIzq||"?"}kg` : "";
+
+                  const sys = `Eres el coach de composición corporal de Bruno Hazleby. Tienes acceso a todos sus scans Fitdays históricos.
+Analiza la evolución y da retroalimentación concreta. Formato: párrafos cortos + bullets con •, negrita para datos clave. Sin encabezados markdown (#). Máx 250 palabras.`;
+                  const msg = `SCAN ACTUAL (${date}):\n${currStr}\n\nSCAN ANTERIOR (${prevDate||"ninguno"}):\n${prevStr}\n\n${segStr ? "SEGMENTAL ACTUAL:\n" + segStr + "\n\n" : ""}HISTORIAL ÚLTIMOS SCANS:\n${histStr}\n\nAnaliza:\n1) Cambios desde el scan anterior (avance o retroceso en cada métrica)\n2) Tendencia general del historial\n3) Puntos positivos + señales de alerta\n4) Una acción específica para las próximas 2 semanas\n5) Si el objetivo de ${curr.pesoObjetivo||"?"}kg es realista y en qué plazo`;
 
                   const out = await callGemini([{role:"user", content:msg}], sys);
                   setFitAnalysis(out);
