@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.20-U";
+const APP_VERSION = "v2025.06.20-V";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -523,7 +523,7 @@ async function parseDailyCloudData(cloudData, today) {
 
 let _rrIdx = 0; // round-robin global para Gemini keys
 
-async function callGemini(messages, systemInstruction, responseSchema = null) {
+async function callGemini(messages, systemInstruction, responseSchema = null, options = {}) {
   let apiKeysStr = await loadKey("gemini_api_key", "");
   
   let apiKeys = [];
@@ -688,6 +688,9 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
           },
           generationConfig
         };
+        if (options.safetySettings) {
+          body.safetySettings = options.safetySettings;
+        }
 
         const res = await fetch(url, {
           method: "POST",
@@ -703,7 +706,13 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
         }
 
         const data = await res.json();
-        const parts = data.candidates?.[0]?.content?.parts || [];
+        const candidate = data.candidates?.[0];
+        const finishReason = candidate?.finishReason;
+        if (finishReason === "SAFETY" || (!candidate && data.promptFeedback?.blockReason)) {
+          const reason = data.promptFeedback?.blockReason || "SAFETY";
+          throw new Error(`Bloqueado por filtros de seguridad (${reason}). Si estás analizando fotos corporales, intenta con imágenes de diferente ángulo.`);
+        }
+        const parts = candidate?.content?.parts || [];
         // gemini-2.5-flash thinking models prepend a {thought:true} part before the actual response
         const textPart = parts.find(p => !p.thought && p.text != null) || parts[parts.length - 1];
         const textOut = textPart?.text || "";
@@ -3731,15 +3740,25 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           if (torsoRatio > 3) comp += `Concentración de grasa en tronco (mayor que miembros). Prioriza: dominadas, remos, press. `;
         }
 
-        return comp || "Sin datos segmentales en Fitdays.";
+        // Incluir análisis IA de Fitdays si existe (guardado al hacer el análisis)
+        const latestFitdaysAnalysis = keys.slice(0, 3).map(k => metricslog[k]?.fitdaysAIAnalysis).find(Boolean);
+        if (latestFitdaysAnalysis) comp += `\nÚltimo análisis IA Fitdays: "${latestFitdaysAnalysis.slice(0, 300)}..."`;
+
+        return comp || "Sin datos Fitdays.";
+      };
+      const getFotoAnalysisContext = () => {
+        const keys = Object.keys(metricslog || {}).sort().reverse();
+        const recentAnalyses = keys.slice(0, 5).map(k => metricslog[k]?.photoAnalysis ? `${k}: "${metricslog[k].photoAnalysis.slice(0, 200)}"` : null).filter(Boolean);
+        return recentAnalyses.length ? recentAnalyses.join("\n") : null;
       };
       const fitdaysComp = getFitdaysCompositionText();
+      const fotoAnalysisCtx = getFotoAnalysisContext();
 
       const sys = `Eres el coach nutricional y de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)}${dietGuidelines ? `\nDIRECTRICES DIETÉTICAS PERSONALIZADAS DE BRUNO (respétalas siempre): ${dietGuidelines}` : ""}${trainingGuidelines ? `\nDIRECTRICES DE ENTRENAMIENTO PERSONALIZADAS DE BRUNO (respétalas siempre): ${trainingGuidelines}` : ""}
 MOMENTO ACTUAL: ${timeBlock}. ADAPTA tu respuesta a este contexto horario — no sugieras desayuno si es de noche, ni cena si es de mañana. ${mealContext}
 Plan nutricional activo: ${target.kcal} kcal (${target.label}), P:${target.p}g / C:${target.c}g / G:${target.f}g.
 Métricas antropométricas y corporales: ${metricsSummary}
-Datos de Composición Corporal (Fitdays): ${fitdaysComp}
+Datos de Composición Corporal (Fitdays): ${fitdaysComp}${fotoAnalysisCtx ? `\nAnálisis de fotos de progreso recientes:\n${fotoAnalysisCtx}` : ""}
 Historial nutricional acumulado reciente: ${recentNutrition}
 Día de Split de entrenamiento activo hoy: Día ${activeSplit.key} (${activeSplit.name}), combustible de carbohidratos asignado: ${activeSplit.fuel}.
 Estado de entrenamiento hoy: ${trainedToday ? "✓ YA ENTRENÓ HOY — no preguntes si va a entrenar, asume recuperación activa." : "✗ AÚN NO HA ENTRENADO HOY — puedes orientar pre-entreno, timing y energía si aplica."}
@@ -4516,11 +4535,11 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
           />
         )}
         {view === "reg" && (
-          <Registro 
-            notes={notes} 
-            setNotes={(n) => { setNotes(n); saveState({ notes: n }); }} 
-            target={target} 
-            bodyComp={bodyComp} 
+          <Registro
+            notes={notes}
+            setNotes={(n) => { setNotes(n); saveState({ notes: n }); }}
+            target={target}
+            bodyComp={bodyComp}
             setBodyComp={(bc) => { setBodyComp(bc); saveState({ bodyComp: bc }); }}
             geminiKey={geminiKey}
             metricslog={metricslog}
@@ -4544,6 +4563,8 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
               if (type === "diet") saveState({ dietGuidelines: value });
               else saveState({ trainingGuidelines: value });
             }}
+            sendCoachMessage={sendCoachMessage}
+            setView={setView}
           />
         )}
         {view === "plan" && (
@@ -8115,14 +8136,21 @@ function Coach({
         <div ref={endRef}/>
       </div>
       <div style={{display:"flex", gap:6, paddingBottom:4, flexWrap:"wrap"}}>
-        <button 
+        <button
+          onClick={() => sendCoachMessage('Analiza TODOS mis datos actuales en conjunto: composición corporal Fitdays (peso, grasa, SMM, Score), análisis de fotos de progreso, historial de entrenamiento y nutrición de las últimas semanas. Con base en todo esto: 1) ¿Son óptimos mis objetivos actuales de calorías y macros? Si no, actualízalos con UPDATE_TARGET. 2) ¿Mi split es el adecuado para mi objetivo actual? Si no, ajústalo con UPDATE_SPLITS. 3) Dame 3 acciones concretas prioritarias para las próximas 4 semanas.')}
+          disabled={chatBusy}
+          style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid #cdff4a`, background:"rgba(205,255,74,0.08)", color:"#cdff4a", cursor:"pointer", opacity: chatBusy ? 0.5 : 1, fontWeight:800}}
+        >
+          ✦ Análisis Global + Actualizar Objetivos
+        </button>
+        <button
           onClick={() => sendCoachMessage('Haceme un análisis completo de mi semana de entrenamiento: PRs actuales, progresión de fuerza, volumen total, si estoy progresando en cada ejercicio y qué debo mejorar la semana que viene.')}
           disabled={chatBusy}
           style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.cyan}`, background:"transparent", color:C.cyan, cursor:"pointer", opacity: chatBusy ? 0.5 : 1}}
         >
           📊 Analizar mi semana
         </button>
-        <button 
+        <button
           onClick={() => sendCoachMessage('¿Qué músculo me conviene entrenar hoy según mi split y mi historial reciente? ¿Estoy descansando suficiente?')}
           disabled={chatBusy}
           style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.lime}`, background:"transparent", color:C.lime, cursor:"pointer", opacity: chatBusy ? 0.5 : 1}}
@@ -13149,6 +13177,13 @@ Analiza la evolución y da retroalimentación concreta. Formato: párrafos corto
 
                   const out = await callGemini([{role:"user", content:msg}], sys);
                   setFitAnalysis(out);
+                  // Guardar análisis en metricslog para que el Coach lo use como memoria global
+                  if (out && !out.startsWith("Error")) {
+                    const updEntry = { ...(metricslog[date]||{}), fitdaysAIAnalysis: out.slice(0, 500) };
+                    const updMetrics = { ...metricslog, [date]: updEntry };
+                    saveKey("metricslog", updMetrics);
+                    setMetricslog(updMetrics);
+                  }
                 } catch(e) {
                   setFitAnalysis("Error: " + (e.message||e));
                 }
@@ -13178,7 +13213,8 @@ function Registro({
   metricslog, setMetricslog, selectedDateStr, saveWeight, activeMetrics,
   foodlog, waterlog, exlog,
   projections, tdeeEstimate, analyzeAndReconfigure, experiments, setExperiments,
-  dietGuidelines, setDietGuidelines, trainingGuidelines, setTrainingGuidelines, onSaveGuidelines
+  dietGuidelines, setDietGuidelines, trainingGuidelines, setTrainingGuidelines, onSaveGuidelines,
+  sendCoachMessage, setView
 }){
   const [type, setType] = useState("peso");
   const [statsPeriod, setStatsPeriod] = useState(7); // 7 or 30 days
@@ -13411,10 +13447,15 @@ function Registro({
   const [cmpDateB, setCmpDateB] = useState("");
   const [cmpPhotoAnalysis, setCmpPhotoAnalysis] = useState("");
   const [cmpPhotoBusy, setCmpPhotoBusy] = useState(false);
-  const [progressPhotoAnalysis, setProgressPhotoAnalysis] = useState("");
+  const [progressPhotoAnalysis, setProgressPhotoAnalysis] = useState(() => metricslog[new Date().toISOString().slice(0,10)]?.photoAnalysis || "");
   const [progressPhotoBusy, setProgressPhotoBusy] = useState(false);
   const [progressPhotoErr, setProgressPhotoErr] = useState("");
   const [progressPhotoLoading, setProgressPhotoLoading] = useState(false);
+
+  // Cargar análisis guardado cuando cambia la fecha seleccionada
+  useEffect(() => {
+    setProgressPhotoAnalysis(metricslog[selectedDateStr]?.photoAnalysis || "");
+  }, [selectedDateStr]);
 
   const [muscInput, setMuscInput] = useState("");
   const [fatInput, setFatInput] = useState("");
@@ -14991,13 +15032,30 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               ...(hasPrev ? prevParts : []),
               ...imagesParts,
               { type: "text", text: hasPrev
-                ? `Estas son fotos corporales de Bruno. Las PRIMERAS ${prevParts.length} imagen(es) son del ${prevPhotoDates[0]} (ANTERIOR). Las ÚLTIMAS ${imagesParts.length} imagen(es) son del ${selectedDateStr} (ACTUAL). Compara la composición corporal: grasa visible, masa muscular, definición, postura. Da: 1) qué cambió entre fechas, 2) puntos positivos, 3) áreas a mejorar, 4) una acción concreta. Máx 200 palabras en español.`
-                : `Fotos corporales de Bruno del ${selectedDateStr} (${imagesParts.length} vista(s)). Analiza la composición corporal visible: distribución de grasa, masa muscular, definición, postura. Da observaciones objetivas y constructivas + 2 recomendaciones. Máx 150 palabras en español.`
+                ? `Imágenes de seguimiento de composición corporal para evaluación profesional. FECHA ANTERIOR (${prevPhotoDates[0]}): primeras ${prevParts.length} imagen(es). FECHA ACTUAL (${selectedDateStr}): últimas ${imagesParts.length} imagen(es). Compara: cambios en % grasa visible, masa muscular, definición y postura entre ambas fechas. Incluye: 1) qué mejoró, 2) qué empeoró o estancó, 3) una acción concreta para las próximas 2 semanas. Máx 200 palabras en español. Sin encabezados.`
+                : `Imágenes de seguimiento de composición corporal (${selectedDateStr}, ${imagesParts.length} ángulo(s)). Evaluación profesional: distribución de grasa corporal, desarrollo muscular visible por grupo muscular, simetría y postura. 2 observaciones objetivas + 2 recomendaciones concretas para el entrenamiento. Máx 150 palabras en español. Sin encabezados.`
               }
             ];
-            const result = await callGemini([{ role:"user", content: allParts }],
-              "Eres un coach experto en composición corporal. Analiza con criterio profesional, honesto y motivador. Sin encabezados markdown.");
-            setProgressPhotoAnalysis(result?.trim() || "Sin análisis.");
+            const RELAXED_SAFETY = [
+              { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+              { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+            ];
+            const result = await callGemini(
+              [{ role:"user", content: allParts }],
+              "Eres un especialista en medicina del deporte y evaluación de composición corporal. Analizas imágenes de seguimiento físico con criterio científico y profesional. Tus reportes son técnicos, objetivos y constructivos. Responde siempre en español sin encabezados markdown.",
+              null,
+              { safetySettings: RELAXED_SAFETY }
+            );
+            if (!result?.trim()) throw new Error("El modelo no generó respuesta. Intenta con otras fotos o ángulos.");
+            // Persistir análisis en metricslog para que el Coach lo use como memoria
+            const prevEntry = metricslog[selectedDateStr] || {};
+            const updatedEntry = { ...prevEntry, photoAnalysis: result.trim(), photoAnalysisDate: selectedDateStr };
+            const updatedMetrics = { ...metricslog, [selectedDateStr]: updatedEntry };
+            setMetricslog(updatedMetrics);
+            saveKey("metricslog", updatedMetrics);
+            setProgressPhotoAnalysis(result.trim());
           } catch(ex) {
             setProgressPhotoAnalysis("⚠️ " + (ex.message || "Error al analizar"));
           }
@@ -15049,7 +15107,20 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                 {progressPhotoAnalysis && (
                   <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:10, marginTop:8, fontSize:12, color:C.ink, lineHeight:1.65, whiteSpace:"pre-wrap"}}>
                     {progressPhotoAnalysis}
-                    <button onClick={() => setProgressPhotoAnalysis("")} style={{display:"block", width:"100%", marginTop:6, background:"none", border:`1px solid ${C.line}`, borderRadius:6, color:C.muted, fontSize:11, padding:"3px", cursor:"pointer"}}>Cerrar</button>
+                    <div style={{display:"flex", gap:6, marginTop:8}}>
+                      {sendCoachMessage && setView && (
+                        <button
+                          onClick={() => {
+                            sendCoachMessage(`Acabo de analizar mis fotos de progreso del ${selectedDateStr}. El análisis dice:\n"${progressPhotoAnalysis}"\n\nCon base en este análisis de fotos + todos mis datos de Fitdays, entreno y nutrición: ¿debo ajustar mis objetivos de calorías o macros? Si corresponde, actualízalos con UPDATE_TARGET. ¿Qué debo priorizar en las próximas 2 semanas?`);
+                            setView("coach");
+                          }}
+                          style={{flex:1, background:"rgba(205,255,74,0.08)", border:"1px solid rgba(205,255,74,0.35)", borderRadius:6, color:"#cdff4a", fontSize:11, fontWeight:800, padding:"5px", cursor:"pointer"}}
+                        >
+                          ✦ Enviar al Coach → Actualizar Objetivos
+                        </button>
+                      )}
+                      <button onClick={() => setProgressPhotoAnalysis("")} style={{flex:1, background:"none", border:`1px solid ${C.line}`, borderRadius:6, color:C.muted, fontSize:11, padding:"5px", cursor:"pointer"}}>Cerrar</button>
+                    </div>
                   </div>
                 )}
               </div>
