@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.20-T";
+const APP_VERSION = "v2025.06.20-W";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -523,7 +523,59 @@ async function parseDailyCloudData(cloudData, today) {
 
 let _rrIdx = 0; // round-robin global para Gemini keys
 
-async function callGemini(messages, systemInstruction, responseSchema = null) {
+// ── Helpers consolidados de fecha e imágenes (antes duplicados en varios scopes) ──
+function getLocalDateStr(d) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+// Compat fotos: soporta photos[] (nuevo) y photo string (legacy)
+function getEntryPhotos(entry) {
+  if (!entry) return [];
+  if (Array.isArray(entry.photos) && entry.photos.length > 0) return entry.photos;
+  if (entry.photo) return [entry.photo];
+  return [];
+}
+
+const stripDataUrl = (url) => url.split(",")[1] || url;
+const mimeFromDataUrl = (url) => url.startsWith("data:image/png") ? "image/png" : "image/jpeg";
+const pickImageMedia = (file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type) ? file.type : "image/jpeg";
+
+// FileReader → base64 puro (sin el prefijo data:)
+function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(",")[1]);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+
+// Comprime imagen vía canvas → dataURL JPEG. Rechaza la promesa si falla la lectura/carga.
+function compressImageToDataUrl(file, maxW = 800, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxW / img.width);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function callGemini(messages, systemInstruction, responseSchema = null, options = {}) {
   let apiKeysStr = await loadKey("gemini_api_key", "");
   
   let apiKeys = [];
@@ -688,6 +740,9 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
           },
           generationConfig
         };
+        if (options.safetySettings) {
+          body.safetySettings = options.safetySettings;
+        }
 
         const res = await fetch(url, {
           method: "POST",
@@ -703,7 +758,13 @@ async function callGemini(messages, systemInstruction, responseSchema = null) {
         }
 
         const data = await res.json();
-        const parts = data.candidates?.[0]?.content?.parts || [];
+        const candidate = data.candidates?.[0];
+        const finishReason = candidate?.finishReason;
+        if (finishReason === "SAFETY" || (!candidate && data.promptFeedback?.blockReason)) {
+          const reason = data.promptFeedback?.blockReason || "SAFETY";
+          throw new Error(`Bloqueado por filtros de seguridad (${reason}). Si estás analizando fotos corporales, intenta con imágenes de diferente ángulo.`);
+        }
+        const parts = candidate?.content?.parts || [];
         // gemini-2.5-flash thinking models prepend a {thought:true} part before the actual response
         const textPart = parts.find(p => !p.thought && p.text != null) || parts[parts.length - 1];
         const textOut = textPart?.text || "";
@@ -1386,13 +1447,6 @@ export default function App(){
   // Elevated Calendar States & Helpers
   const [calMonth, setCalMonth] = useState(() => new Date());
   
-  const getLocalDateStr = (d) => {
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-
   const [selectedDateStr, setSelectedDateStr] = useState(() => getLocalDateStr(new Date()));
 
   const getLocalDateFromISO = (isoString) => {
@@ -2233,12 +2287,12 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     if (updates.splits !== undefined) writes.push(saveKey("training_splits", updates.splits));
     if (updates.dietGuidelines !== undefined) writes.push(saveKey("diet_guidelines", updates.dietGuidelines));
     if (updates.trainingGuidelines !== undefined) writes.push(saveKey("training_guidelines", updates.trainingGuidelines));
-    writes.push(saveKey("foodlog", nextFoodlog));
-    writes.push(saveKey("waterlog", nextWaterlog));
-    writes.push(saveKey("suppslog", nextSuppslog));
-    writes.push(saveKey("metricslog", nextMetricslog));
-    writes.push(saveKey("supps_inventory", nextSuppsInventory));
-    writes.push(saveKey("workout_durations", nextWorkoutDurations));
+    if (updates.log !== undefined) writes.push(saveKey("foodlog", nextFoodlog));
+    if (updates.water !== undefined) writes.push(saveKey("waterlog", nextWaterlog));
+    if (updates.supplements !== undefined) writes.push(saveKey("suppslog", nextSuppslog));
+    if (updates.metricslog !== undefined || updates.bodyComp !== undefined || updates.weight !== undefined) writes.push(saveKey("metricslog", nextMetricslog));
+    if (updates.suppsInventory !== undefined) writes.push(saveKey("supps_inventory", nextSuppsInventory));
+    if (updates.workoutDurations !== undefined) writes.push(saveKey("workout_durations", nextWorkoutDurations));
     if (updates.exerciseTechNotes !== undefined) writes.push(saveKey("exercise_tech_notes", nextExerciseTechNotes));
     writes.push(saveKey("last_local_update", updateTime));
     await Promise.all(writes);
@@ -3731,15 +3785,25 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           if (torsoRatio > 3) comp += `Concentración de grasa en tronco (mayor que miembros). Prioriza: dominadas, remos, press. `;
         }
 
-        return comp || "Sin datos segmentales en Fitdays.";
+        // Incluir análisis IA de Fitdays si existe (guardado al hacer el análisis)
+        const latestFitdaysAnalysis = keys.slice(0, 3).map(k => metricslog[k]?.fitdaysAIAnalysis).find(Boolean);
+        if (latestFitdaysAnalysis) comp += `\nÚltimo análisis IA Fitdays: "${latestFitdaysAnalysis.slice(0, 300)}..."`;
+
+        return comp || "Sin datos Fitdays.";
+      };
+      const getFotoAnalysisContext = () => {
+        const keys = Object.keys(metricslog || {}).sort().reverse();
+        const recentAnalyses = keys.slice(0, 5).map(k => metricslog[k]?.photoAnalysis ? `${k}: "${metricslog[k].photoAnalysis.slice(0, 200)}"` : null).filter(Boolean);
+        return recentAnalyses.length ? recentAnalyses.join("\n") : null;
       };
       const fitdaysComp = getFitdaysCompositionText();
+      const fotoAnalysisCtx = getFotoAnalysisContext();
 
       const sys = `Eres el coach nutricional y de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)}${dietGuidelines ? `\nDIRECTRICES DIETÉTICAS PERSONALIZADAS DE BRUNO (respétalas siempre): ${dietGuidelines}` : ""}${trainingGuidelines ? `\nDIRECTRICES DE ENTRENAMIENTO PERSONALIZADAS DE BRUNO (respétalas siempre): ${trainingGuidelines}` : ""}
 MOMENTO ACTUAL: ${timeBlock}. ADAPTA tu respuesta a este contexto horario — no sugieras desayuno si es de noche, ni cena si es de mañana. ${mealContext}
 Plan nutricional activo: ${target.kcal} kcal (${target.label}), P:${target.p}g / C:${target.c}g / G:${target.f}g.
 Métricas antropométricas y corporales: ${metricsSummary}
-Datos de Composición Corporal (Fitdays): ${fitdaysComp}
+Datos de Composición Corporal (Fitdays): ${fitdaysComp}${fotoAnalysisCtx ? `\nAnálisis de fotos de progreso recientes:\n${fotoAnalysisCtx}` : ""}
 Historial nutricional acumulado reciente: ${recentNutrition}
 Día de Split de entrenamiento activo hoy: Día ${activeSplit.key} (${activeSplit.name}), combustible de carbohidratos asignado: ${activeSplit.fuel}.
 Estado de entrenamiento hoy: ${trainedToday ? "✓ YA ENTRENÓ HOY — no preguntes si va a entrenar, asume recuperación activa." : "✗ AÚN NO HA ENTRENADO HOY — puedes orientar pre-entreno, timing y energía si aplica."}
@@ -4516,11 +4580,11 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
           />
         )}
         {view === "reg" && (
-          <Registro 
-            notes={notes} 
-            setNotes={(n) => { setNotes(n); saveState({ notes: n }); }} 
-            target={target} 
-            bodyComp={bodyComp} 
+          <Registro
+            notes={notes}
+            setNotes={(n) => { setNotes(n); saveState({ notes: n }); }}
+            target={target}
+            bodyComp={bodyComp}
             setBodyComp={(bc) => { setBodyComp(bc); saveState({ bodyComp: bc }); }}
             geminiKey={geminiKey}
             metricslog={metricslog}
@@ -4544,6 +4608,8 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
               if (type === "diet") saveState({ dietGuidelines: value });
               else saveState({ trainingGuidelines: value });
             }}
+            sendCoachMessage={sendCoachMessage}
+            setView={setView}
           />
         )}
         {view === "plan" && (
@@ -5524,13 +5590,8 @@ function AddFood({
     setBusy(true);
     setErr("");
     try {
-      const b64 = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(r.result.split(",")[1]);
-        r.onerror = rej;
-        r.readAsDataURL(file);
-      });
-      const media = ["image/jpeg", "image/png", "image/webp"].includes(file.type) ? file.type : "image/jpeg";
+      const b64 = await fileToBase64(file);
+      const media = pickImageMedia(file);
       const out = await callGemini([
         {
           role: "user",
@@ -6379,25 +6440,7 @@ function Hoy({
   const suggFileRef = useRef(null);
 
   // Lee y reduce la foto de la sugerencia a un dataURL liviano (max 400px)
-  const readSuggestionImage = (file) => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const maxW = 400;
-        const scale = Math.min(1, maxW / img.width);
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.72));
-      };
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+  const readSuggestionImage = (file) => compressImageToDataUrl(file, 400, 0.72);
 
   const onSuggPhoto = async (e) => {
     const file = e.target.files && e.target.files[0];
@@ -6572,13 +6615,6 @@ function Hoy({
     });
   }, [foodlog]);
 
-  const getLocalDateStr = (d) => {
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-
   const formatSelectedDate = (dStr) => {
     try {
       const parts = dStr.split("-");
@@ -6668,13 +6704,8 @@ function Hoy({
     setBusy(true); 
     setErr("");
     try{ 
-      const b64 = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(r.result.split(",")[1]);
-        r.onerror = rej;
-        r.readAsDataURL(file);
-      });
-      const media = ["image/jpeg","image/png","image/webp"].includes(file.type) ? file.type : "image/jpeg";
+      const b64 = await fileToBase64(file);
+      const media = pickImageMedia(file);
       const out = await callGemini([
         {
           role: "user",
@@ -8115,14 +8146,21 @@ function Coach({
         <div ref={endRef}/>
       </div>
       <div style={{display:"flex", gap:6, paddingBottom:4, flexWrap:"wrap"}}>
-        <button 
+        <button
+          onClick={() => sendCoachMessage('Analiza TODOS mis datos actuales en conjunto: composición corporal Fitdays (peso, grasa, SMM, Score), análisis de fotos de progreso, historial de entrenamiento y nutrición de las últimas semanas. Con base en todo esto: 1) ¿Son óptimos mis objetivos actuales de calorías y macros? Si no, actualízalos con UPDATE_TARGET. 2) ¿Mi split es el adecuado para mi objetivo actual? Si no, ajústalo con UPDATE_SPLITS. 3) Dame 3 acciones concretas prioritarias para las próximas 4 semanas.')}
+          disabled={chatBusy}
+          style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid #cdff4a`, background:"rgba(205,255,74,0.08)", color:"#cdff4a", cursor:"pointer", opacity: chatBusy ? 0.5 : 1, fontWeight:800}}
+        >
+          ✦ Análisis Global + Actualizar Objetivos
+        </button>
+        <button
           onClick={() => sendCoachMessage('Haceme un análisis completo de mi semana de entrenamiento: PRs actuales, progresión de fuerza, volumen total, si estoy progresando en cada ejercicio y qué debo mejorar la semana que viene.')}
           disabled={chatBusy}
           style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.cyan}`, background:"transparent", color:C.cyan, cursor:"pointer", opacity: chatBusy ? 0.5 : 1}}
         >
           📊 Analizar mi semana
         </button>
-        <button 
+        <button
           onClick={() => sendCoachMessage('¿Qué músculo me conviene entrenar hoy según mi split y mi historial reciente? ¿Estoy descansando suficiente?')}
           disabled={chatBusy}
           style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.lime}`, background:"transparent", color:C.lime, cursor:"pointer", opacity: chatBusy ? 0.5 : 1}}
@@ -9982,13 +10020,6 @@ function Entreno({
   
   const [wkBusy, setWkBusy] = useState(false); 
   const [wk, setWk] = useState("");
-
-  const getLocalDateStr = (d) => {
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
 
   const getLocalDateFromISO = (isoString) => {
     try {
@@ -12792,25 +12823,7 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
   const [fitAnalysis, setFitAnalysis] = React.useState("");
   const [fitAnalysisBusy, setFitAnalysisBusy] = React.useState(false);
 
-  const compressImage = (file) => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const maxW = 600;
-        const scale = Math.min(1, maxW / img.width);
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.8));
-      };
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+  const compressImage = (file) => compressImageToDataUrl(file, 600, 0.8);
 
   const onFiles = async (e) => {
     const files = Array.from(e.target.files || []); // copia a array ANTES de limpiar el input
@@ -13149,6 +13162,13 @@ Analiza la evolución y da retroalimentación concreta. Formato: párrafos corto
 
                   const out = await callGemini([{role:"user", content:msg}], sys);
                   setFitAnalysis(out);
+                  // Guardar análisis en metricslog para que el Coach lo use como memoria global
+                  if (out && !out.startsWith("Error")) {
+                    const updEntry = { ...(metricslog[date]||{}), fitdaysAIAnalysis: out.slice(0, 500) };
+                    const updMetrics = { ...metricslog, [date]: updEntry };
+                    saveKey("metricslog", updMetrics);
+                    setMetricslog(updMetrics);
+                  }
                 } catch(e) {
                   setFitAnalysis("Error: " + (e.message||e));
                 }
@@ -13178,7 +13198,8 @@ function Registro({
   metricslog, setMetricslog, selectedDateStr, saveWeight, activeMetrics,
   foodlog, waterlog, exlog,
   projections, tdeeEstimate, analyzeAndReconfigure, experiments, setExperiments,
-  dietGuidelines, setDietGuidelines, trainingGuidelines, setTrainingGuidelines, onSaveGuidelines
+  dietGuidelines, setDietGuidelines, trainingGuidelines, setTrainingGuidelines, onSaveGuidelines,
+  sendCoachMessage, setView
 }){
   const [type, setType] = useState("peso");
   const [statsPeriod, setStatsPeriod] = useState(7); // 7 or 30 days
@@ -13411,8 +13432,19 @@ function Registro({
   const [cmpDateB, setCmpDateB] = useState("");
   const [cmpPhotoAnalysis, setCmpPhotoAnalysis] = useState("");
   const [cmpPhotoBusy, setCmpPhotoBusy] = useState(false);
-  const [progressPhotoAnalysis, setProgressPhotoAnalysis] = useState("");
+  const [progressPhotoAnalysis, setProgressPhotoAnalysis] = useState(() => metricslog[new Date().toISOString().slice(0,10)]?.photoAnalysis || "");
   const [progressPhotoBusy, setProgressPhotoBusy] = useState(false);
+  const [progressPhotoErr, setProgressPhotoErr] = useState("");
+  const [progressPhotoLoading, setProgressPhotoLoading] = useState(false);
+  const [photosUnlocked, setPhotosUnlocked] = useState(false);
+  const [photoPinInput, setPhotoPinInput] = useState("");
+  const [photoPinError, setPhotoPinError] = useState(false);
+  const [showPinInput, setShowPinInput] = useState(false);
+
+  // Cargar análisis guardado cuando cambia la fecha seleccionada
+  useEffect(() => {
+    setProgressPhotoAnalysis(metricslog[selectedDateStr]?.photoAnalysis || "");
+  }, [selectedDateStr]);
 
   const [muscInput, setMuscInput] = useState("");
   const [fatInput, setFatInput] = useState("");
@@ -13473,34 +13505,11 @@ function Registro({
       let b64, media;
       if (isPdf) {
         // PDFs: enviar tal cual (no podemos renderizar sin PDF.js)
-        b64 = await new Promise((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => res(r.result.split(",")[1]);
-          r.onerror = rej;
-          r.readAsDataURL(file);
-        });
+        b64 = await fileToBase64(file);
         media = "application/pdf";
       } else {
         // Imágenes: comprimir a 700px máx, calidad 0.82 → reduce payload 5-10x
-        b64 = await new Promise((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => {
-            const img = new Image();
-            img.onload = () => {
-              const maxW = 700;
-              const scale = Math.min(1, maxW / img.width);
-              const canvas = document.createElement("canvas");
-              canvas.width = Math.round(img.width * scale);
-              canvas.height = Math.round(img.height * scale);
-              canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-              res(canvas.toDataURL("image/jpeg", 0.82).split(",")[1]);
-            };
-            img.onerror = rej;
-            img.src = r.result;
-          };
-          r.onerror = rej;
-          r.readAsDataURL(file);
-        });
+        b64 = stripDataUrl(await compressImageToDataUrl(file, 700, 0.82));
         media = "image/jpeg";
       }
       if (!isPdf) setErrComp(""); // limpiar aviso PDF si era imagen
@@ -13690,7 +13699,8 @@ function Registro({
     });
     
     setMetricslog(newMetricslog);
-    
+    saveKey("metricslog", newMetricslog);
+
     const noteDate = new Date(selectedDateStr + "T" + new Date().toTimeString().slice(0, 8)).toISOString();
     let pText = "Medidas: ";
     if (brazoDer) pText += `Brazos D:${brazoDer} I:${brazoIzq}cm | `;
@@ -14891,33 +14901,36 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
 
       {/* Galería de fotos de progreso */}
       {(() => {
-        // Helpers: soporte para photos[] (nuevo) y photo string (legacy)
-        const getPhotos = (entry) => {
-          if (!entry) return [];
-          if (Array.isArray(entry.photos) && entry.photos.length > 0) return entry.photos;
-          if (entry.photo) return [entry.photo];
-          return [];
-        };
+        // Soporte para photos[] (nuevo) y photo string (legacy) → helper de módulo getEntryPhotos
+        const getPhotos = getEntryPhotos;
         const datesWithPhotos = Object.keys(metricslog).filter(d => getPhotos(metricslog[d]).length > 0).sort().reverse();
         const todayPhotos = getPhotos(metricslog[selectedDateStr]);
 
-        const compressFile = (file) => new Promise((res, rej) => {
+        // Comprime a máx 800px; si falla por cualquier razón devuelve el dataURL crudo
+        const compressFile = (file) => new Promise((res) => {
           const r = new FileReader();
           r.onload = () => {
-            const img = new Image();
-            img.onload = () => {
-              const maxW = 700;
-              const scale = Math.min(1, maxW / img.width);
-              const canvas = document.createElement("canvas");
-              canvas.width = Math.round(img.width * scale);
-              canvas.height = Math.round(img.height * scale);
-              canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-              res(canvas.toDataURL("image/jpeg", 0.8));
-            };
-            img.onerror = rej;
-            img.src = r.result;
+            const rawUrl = r.result;
+            if (!rawUrl) { res(null); return; }
+            try {
+              const img = new Image();
+              img.onload = () => {
+                try {
+                  const maxW = 800;
+                  const scale = Math.min(1, maxW / img.width);
+                  const canvas = document.createElement("canvas");
+                  canvas.width = Math.round(img.width * scale);
+                  canvas.height = Math.round(img.height * scale);
+                  canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+                  const compressed = canvas.toDataURL("image/jpeg", 0.82);
+                  res(compressed && compressed.length > 100 ? compressed : rawUrl);
+                } catch(_) { res(rawUrl); }
+              };
+              img.onerror = () => res(rawUrl); // fallback al URL crudo si la imagen no carga
+              img.src = rawUrl;
+            } catch(_) { res(rawUrl); }
           };
-          r.onerror = rej;
+          r.onerror = () => res(null); // null = archivo ilegible
           r.readAsDataURL(file);
         });
 
@@ -14926,17 +14939,26 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           e.target.value = "";
           if (!files.length) return;
           setProgressPhotoAnalysis("");
+          setProgressPhotoErr("");
+          setProgressPhotoLoading(true);
           try {
-            const newUrls = await Promise.all(files.map(compressFile));
+            const results = await Promise.all(files.map(compressFile));
+            const newUrls = results.filter(Boolean); // filtra nulls (archivos fallidos)
+            if (!newUrls.length) {
+              setProgressPhotoErr("No se pudieron leer las fotos. Intenta con otras imágenes.");
+              setProgressPhotoLoading(false);
+              return;
+            }
             const existing = getPhotos(metricslog[selectedDateStr]);
-            const merged = [...existing, ...newUrls].slice(0, 6); // máx 6 por fecha
+            const merged = [...existing, ...newUrls].slice(0, 6);
             const updated = { ...(metricslog[selectedDateStr] || {}), photos: merged };
             const newMetricslog = { ...metricslog, [selectedDateStr]: updated };
             setMetricslog(newMetricslog);
             saveKey("metricslog", newMetricslog);
           } catch(ex) {
-            console.error("Error cargando fotos:", ex);
+            setProgressPhotoErr("Error: " + (ex.message || String(ex)));
           }
+          setProgressPhotoLoading(false);
         };
 
         const deletePhoto = (idx) => {
@@ -14955,8 +14977,8 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           setProgressPhotoBusy(true);
           setProgressPhotoAnalysis("");
           try {
-            const strip = url => url.split(",")[1] || url;
-            const mime = url => url.startsWith("data:image/png") ? "image/png" : "image/jpeg";
+            const strip = stripDataUrl;
+            const mime = mimeFromDataUrl;
             const imagesParts = todayPhotos.map(url => ({
               type: "image",
               source: { type: "base64", media_type: mime(url), data: strip(url) }
@@ -14972,93 +14994,177 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               ...(hasPrev ? prevParts : []),
               ...imagesParts,
               { type: "text", text: hasPrev
-                ? `Estas son fotos corporales de Bruno. Las PRIMERAS ${prevParts.length} imagen(es) son del ${prevPhotoDates[0]} (ANTERIOR). Las ÚLTIMAS ${imagesParts.length} imagen(es) son del ${selectedDateStr} (ACTUAL). Compara la composición corporal: grasa visible, masa muscular, definición, postura. Da: 1) qué cambió entre fechas, 2) puntos positivos, 3) áreas a mejorar, 4) una acción concreta. Máx 200 palabras en español.`
-                : `Fotos corporales de Bruno del ${selectedDateStr} (${imagesParts.length} vista(s)). Analiza la composición corporal visible: distribución de grasa, masa muscular, definición, postura. Da observaciones objetivas y constructivas + 2 recomendaciones. Máx 150 palabras en español.`
+                ? `Imágenes de seguimiento de composición corporal para evaluación profesional. FECHA ANTERIOR (${prevPhotoDates[0]}): primeras ${prevParts.length} imagen(es). FECHA ACTUAL (${selectedDateStr}): últimas ${imagesParts.length} imagen(es). Compara: cambios en % grasa visible, masa muscular, definición y postura entre ambas fechas. Incluye: 1) qué mejoró, 2) qué empeoró o estancó, 3) una acción concreta para las próximas 2 semanas. Máx 200 palabras en español. Sin encabezados.`
+                : `Imágenes de seguimiento de composición corporal (${selectedDateStr}, ${imagesParts.length} ángulo(s)). Evaluación profesional: distribución de grasa corporal, desarrollo muscular visible por grupo muscular, simetría y postura. 2 observaciones objetivas + 2 recomendaciones concretas para el entrenamiento. Máx 150 palabras en español. Sin encabezados.`
               }
             ];
-            const result = await callGemini([{ role:"user", content: allParts }],
-              "Eres un coach experto en composición corporal. Analiza con criterio profesional, honesto y motivador. Sin encabezados markdown.");
-            setProgressPhotoAnalysis(result?.trim() || "Sin análisis.");
+            const RELAXED_SAFETY = [
+              { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+              { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+            ];
+            const result = await callGemini(
+              [{ role:"user", content: allParts }],
+              "Eres un especialista en medicina del deporte y evaluación de composición corporal. Analizas imágenes de seguimiento físico con criterio científico y profesional. Tus reportes son técnicos, objetivos y constructivos. Responde siempre en español sin encabezados markdown.",
+              null,
+              { safetySettings: RELAXED_SAFETY }
+            );
+            if (!result?.trim()) throw new Error("El modelo no generó respuesta. Intenta con otras fotos o ángulos.");
+            // Persistir análisis en metricslog para que el Coach lo use como memoria
+            const prevEntry = metricslog[selectedDateStr] || {};
+            const updatedEntry = { ...prevEntry, photoAnalysis: result.trim(), photoAnalysisDate: selectedDateStr };
+            const updatedMetrics = { ...metricslog, [selectedDateStr]: updatedEntry };
+            setMetricslog(updatedMetrics);
+            saveKey("metricslog", updatedMetrics);
+            setProgressPhotoAnalysis(result.trim());
           } catch(ex) {
             setProgressPhotoAnalysis("⚠️ " + (ex.message || "Error al analizar"));
           }
           setProgressPhotoBusy(false);
         };
 
+        const checkPin = () => {
+          if (photoPinInput === "1234") {
+            setPhotosUnlocked(true);
+            setShowPinInput(false);
+            setPhotoPinInput("");
+            setPhotoPinError(false);
+          } else {
+            setPhotoPinError(true);
+            setPhotoPinInput("");
+          }
+        };
+
         return (
           <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
             <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
               <span style={{display:"flex", alignItems:"center", gap:6}}><Camera size={14} color={C.lime}/> Fotos de Progreso</span>
-              <label style={{background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, padding:"4px 10px", fontSize:11, fontWeight:800, cursor:"pointer", display:"inline-block"}}>
-                + Fotos
-                <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={handlePhotoUpload}/>
-              </label>
+              {photosUnlocked ? (
+                <div style={{display:"flex", alignItems:"center", gap:6}}>
+                  <label style={{background: progressPhotoLoading ? C.panel2 : C.lime, color: progressPhotoLoading ? C.muted : "#0c0e0b", border:"none", borderRadius:8, padding:"4px 10px", fontSize:11, fontWeight:800, cursor: progressPhotoLoading ? "default" : "pointer", display:"inline-flex", alignItems:"center", gap:4, pointerEvents: progressPhotoLoading ? "none" : "auto"}}>
+                    {progressPhotoLoading ? <><span style={{animation:"spin 1s linear infinite", display:"inline-block"}}>⟳</span> Cargando…</> : "+ Fotos"}
+                    <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={handlePhotoUpload} disabled={progressPhotoLoading}/>
+                  </label>
+                  <button onClick={() => { setPhotosUnlocked(false); setShowPinInput(false); setPhotoPinInput(""); setPhotoPinError(false); }} style={{background:"none", border:`1px solid ${C.line}`, borderRadius:8, padding:"4px 8px", fontSize:11, color:C.muted, cursor:"pointer"}}>🔒</button>
+                </div>
+              ) : (
+                <span style={{fontSize:11, color:C.muted}}>🔒</span>
+              )}
             </div>
 
-            {todayPhotos.length > 0 ? (
-              <div style={{marginBottom:10}}>
-                <div style={{fontSize:10, color:C.lime, fontWeight:700, marginBottom:6}}>{selectedDateStr} — {todayPhotos.length} foto{todayPhotos.length !== 1 ? "s" : ""}</div>
-                <div style={{display:"flex", gap:6, overflowX:"auto", paddingBottom:4}}>
-                  {todayPhotos.map((url, idx) => (
-                    <div key={idx} style={{position:"relative", flexShrink:0}}>
-                      <img src={url} alt={`foto-${idx}`} style={{height:100, width:75, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`, display:"block"}}/>
-                      <button onClick={() => deletePhoto(idx)} style={{position:"absolute", top:2, right:2, background:"rgba(0,0,0,0.6)", border:"none", borderRadius:"50%", width:18, height:18, color:"#fff", fontSize:10, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0}}>✕</button>
+            {!photosUnlocked ? (
+              <div style={{textAlign:"center", padding:"16px 0 10px"}}>
+                <div style={{fontSize:26, marginBottom:6}}>🔒</div>
+                <div style={{fontSize:12, color:C.muted, marginBottom:12}}>Sección protegida con contraseña</div>
+                {!showPinInput ? (
+                  <button onClick={() => setShowPinInput(true)} style={{background:"transparent", border:`1px solid ${C.lime}`, borderRadius:10, padding:"7px 22px", color:C.lime, fontSize:12.5, fontWeight:800, cursor:"pointer"}}>
+                    Ver fotos
+                  </button>
+                ) : (
+                  <div style={{display:"flex", flexDirection:"column", alignItems:"center", gap:8}}>
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={6}
+                      placeholder="PIN"
+                      value={photoPinInput}
+                      onChange={e => { setPhotoPinInput(e.target.value); setPhotoPinError(false); }}
+                      onKeyDown={e => { if (e.key === "Enter") checkPin(); }}
+                      style={{width:100, textAlign:"center", fontSize:18, letterSpacing:6, borderRadius:8, border:`1px solid ${photoPinError ? "#f43f5e" : C.line}`, background:C.panel2, color:C.ink, padding:"6px 10px", outline:"none"}}
+                      autoFocus
+                    />
+                    {photoPinError && <div style={{fontSize:11, color:"#f43f5e"}}>PIN incorrecto</div>}
+                    <div style={{display:"flex", gap:8}}>
+                      <button onClick={checkPin} style={{background:C.lime, border:"none", borderRadius:8, padding:"6px 18px", color:"#0c0e0b", fontSize:12, fontWeight:800, cursor:"pointer"}}>Entrar</button>
+                      <button onClick={() => { setShowPinInput(false); setPhotoPinInput(""); setPhotoPinError(false); }} style={{background:"none", border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 12px", color:C.muted, fontSize:12, cursor:"pointer"}}>Cancelar</button>
                     </div>
-                  ))}
-                </div>
-                <button
-                  onClick={analyzeProgressPhotos}
-                  disabled={progressPhotoBusy}
-                  style={{width:"100%", marginTop:8, height:36, borderRadius:10, border:"none",
-                    background: progressPhotoBusy ? C.panel2 : `linear-gradient(135deg,${C.lime},${C.cyan})`,
-                    color: progressPhotoBusy ? C.muted : "#0c0e0b",
-                    fontSize:12.5, fontWeight:800, cursor: progressPhotoBusy ? "default" : "pointer",
-                    display:"flex", alignItems:"center", justifyContent:"center", gap:6
-                  }}
-                >
-                  {progressPhotoBusy
-                    ? <><span style={{animation:"spin 1s linear infinite", display:"inline-block"}}>⟳</span> Analizando…</>
-                    : "✦ Analizar con IA"}
-                </button>
-                {progressPhotoAnalysis && (
-                  <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:10, marginTop:8, fontSize:12, color:C.ink, lineHeight:1.65, whiteSpace:"pre-wrap"}}>
-                    {progressPhotoAnalysis}
-                    <button onClick={() => setProgressPhotoAnalysis("")} style={{display:"block", width:"100%", marginTop:6, background:"none", border:`1px solid ${C.line}`, borderRadius:6, color:C.muted, fontSize:11, padding:"3px", cursor:"pointer"}}>Cerrar</button>
                   </div>
                 )}
               </div>
             ) : (
-              <div style={{textAlign:"center", color:C.muted, fontSize:12, padding:"12px 0"}}>
-                Sube fotos de hoy para analizar con IA 📸
-              </div>
-            )}
+              <>
+                {progressPhotoErr && (
+                  <div style={{background:"rgba(244,63,94,0.12)", border:"1px solid rgba(244,63,94,0.4)", borderRadius:8, padding:"7px 10px", marginBottom:8, fontSize:12, color:"#f43f5e"}}>
+                    ⚠️ {progressPhotoErr}
+                    <button onClick={() => setProgressPhotoErr("")} style={{float:"right", background:"none", border:"none", color:"#f43f5e", cursor:"pointer", fontSize:14, lineHeight:1, padding:0}}>✕</button>
+                  </div>
+                )}
 
-            {datesWithPhotos.filter(d => d !== selectedDateStr).length > 0 && (
-              <div>
-                <div style={{fontSize:10, color:C.muted, fontWeight:700, marginBottom:5}}>HISTORIAL</div>
-                <div style={{display:"flex", gap:8, overflowX:"auto", paddingBottom:4, scrollbarWidth:"none"}}>
-                  {datesWithPhotos.filter(d => d !== selectedDateStr).slice(0, 8).map(d => (
-                    <div key={d} style={{flexShrink:0, textAlign:"center"}}>
-                      <img src={getPhotos(metricslog[d])[0]} alt={d} style={{width:64, height:80, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`, display:"block"}}/>
-                      <div style={{fontSize:9, color:C.muted, marginTop:2}}>{d.slice(5)}</div>
-                      {getPhotos(metricslog[d]).length > 1 && <div style={{fontSize:8, color:C.cyan}}>+{getPhotos(metricslog[d]).length - 1}</div>}
+                {todayPhotos.length > 0 ? (
+                  <div style={{marginBottom:10}}>
+                    <div style={{fontSize:10, color:C.lime, fontWeight:700, marginBottom:6}}>{selectedDateStr} — {todayPhotos.length} foto{todayPhotos.length !== 1 ? "s" : ""}</div>
+                    <div style={{display:"flex", gap:6, overflowX:"auto", paddingBottom:4}}>
+                      {todayPhotos.map((url, idx) => (
+                        <div key={idx} style={{position:"relative", flexShrink:0}}>
+                          <img src={url} alt={`foto-${idx}`} style={{height:100, width:75, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`, display:"block"}}/>
+                          <button onClick={() => deletePhoto(idx)} style={{position:"absolute", top:2, right:2, background:"rgba(0,0,0,0.6)", border:"none", borderRadius:"50%", width:18, height:18, color:"#fff", fontSize:10, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0}}>✕</button>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </div>
+                    <button
+                      onClick={analyzeProgressPhotos}
+                      disabled={progressPhotoBusy}
+                      style={{width:"100%", marginTop:8, height:36, borderRadius:10, border:"none",
+                        background: progressPhotoBusy ? C.panel2 : `linear-gradient(135deg,${C.lime},${C.cyan})`,
+                        color: progressPhotoBusy ? C.muted : "#0c0e0b",
+                        fontSize:12.5, fontWeight:800, cursor: progressPhotoBusy ? "default" : "pointer",
+                        display:"flex", alignItems:"center", justifyContent:"center", gap:6
+                      }}
+                    >
+                      {progressPhotoBusy
+                        ? <><span style={{animation:"spin 1s linear infinite", display:"inline-block"}}>⟳</span> Analizando…</>
+                        : "✦ Analizar con IA"}
+                    </button>
+                    {progressPhotoAnalysis && (
+                      <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:10, marginTop:8, fontSize:12, color:C.ink, lineHeight:1.65, whiteSpace:"pre-wrap"}}>
+                        {progressPhotoAnalysis}
+                        <div style={{display:"flex", gap:6, marginTop:8}}>
+                          {sendCoachMessage && setView && (
+                            <button
+                              onClick={() => {
+                                sendCoachMessage(`Acabo de analizar mis fotos de progreso del ${selectedDateStr}. El análisis dice:\n"${progressPhotoAnalysis}"\n\nCon base en este análisis de fotos + todos mis datos de Fitdays, entreno y nutrición: ¿debo ajustar mis objetivos de calorías o macros? Si corresponde, actualízalos con UPDATE_TARGET. ¿Qué debo priorizar en las próximas 2 semanas?`);
+                                setView("coach");
+                              }}
+                              style={{flex:1, background:"rgba(205,255,74,0.08)", border:"1px solid rgba(205,255,74,0.35)", borderRadius:6, color:"#cdff4a", fontSize:11, fontWeight:800, padding:"5px", cursor:"pointer"}}
+                            >
+                              ✦ Enviar al Coach → Actualizar Objetivos
+                            </button>
+                          )}
+                          <button onClick={() => setProgressPhotoAnalysis("")} style={{flex:1, background:"none", border:`1px solid ${C.line}`, borderRadius:6, color:C.muted, fontSize:11, padding:"5px", cursor:"pointer"}}>Cerrar</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{textAlign:"center", color:C.muted, fontSize:12, padding:"12px 0"}}>
+                    Sube fotos de hoy para analizar con IA 📸
+                  </div>
+                )}
+
+                {datesWithPhotos.filter(d => d !== selectedDateStr).length > 0 && (
+                  <div>
+                    <div style={{fontSize:10, color:C.muted, fontWeight:700, marginBottom:5}}>HISTORIAL</div>
+                    <div style={{display:"flex", gap:8, overflowX:"auto", paddingBottom:4, scrollbarWidth:"none"}}>
+                      {datesWithPhotos.filter(d => d !== selectedDateStr).slice(0, 8).map(d => (
+                        <div key={d} style={{flexShrink:0, textAlign:"center"}}>
+                          <img src={getPhotos(metricslog[d])[0]} alt={d} style={{width:64, height:80, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`, display:"block"}}/>
+                          <div style={{fontSize:9, color:C.muted, marginTop:2}}>{d.slice(5)}</div>
+                          {getPhotos(metricslog[d]).length > 1 && <div style={{fontSize:8, color:C.cyan}}>+{getPhotos(metricslog[d]).length - 1}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         );
       })()}
 
       {/* Comparador de fotos corporales con IA */}
-      {(() => {
-        const getPhotos2 = (entry) => {
-          if (!entry) return [];
-          if (Array.isArray(entry.photos) && entry.photos.length > 0) return entry.photos;
-          if (entry.photo) return [entry.photo];
-          return [];
-        };
+      {photosUnlocked && (() => {
+        const getPhotos2 = getEntryPhotos;
         const datesWithPhotos = Object.keys(metricslog).filter(d => getPhotos2(metricslog[d]).length > 0).sort().reverse();
         if (datesWithPhotos.length < 2) return null;
 
@@ -15073,8 +15179,8 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           setCmpPhotoBusy(true);
           setCmpPhotoAnalysis("");
           try {
-            const strip = url => url.split(",")[1] || url;
-            const mime = url => url.startsWith("data:image/png") ? "image/png" : "image/jpeg";
+            const strip = stripDataUrl;
+            const mime = mimeFromDataUrl;
             const msg = {
               role: "user",
               content: [
@@ -15087,6 +15193,9 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
             const text = result?.trim() || "Sin análisis disponible.";
             setAICache("photo_cmp", cacheKey, text);
             setCmpPhotoAnalysis(text);
+            const updMetrics = { ...metricslog, [cmpDateB]: { ...(metricslog[cmpDateB] || {}), cmpPhotoAnalysis: text } };
+            saveKey("metricslog", updMetrics);
+            setMetricslog(updMetrics);
           } catch(e) {
             setCmpPhotoAnalysis("⚠️ " + aiErr(e));
           }
@@ -15166,6 +15275,9 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                 {cmpPhotoAnalysis && (
                   <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:11, padding:"11px 13px", color:C.ink}}>
                     <MarkdownText text={cmpPhotoAnalysis} style={{fontSize:12.5}}/>
+                    <button onClick={() => { sendCoachMessage(`[Comparativa fotos ${cmpDateA} → ${cmpDateB}]\n${cmpPhotoAnalysis}`); setView("coach"); }} style={{marginTop:10, width:"100%", height:36, borderRadius:9, border:`1px solid ${C.lime}`, background:"transparent", color:C.lime, fontSize:12, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6}}>
+                      <Sparkles size={13}/> Enviar al Coach
+                    </button>
                   </div>
                 )}
               </>

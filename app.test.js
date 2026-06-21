@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, act, fireEvent } from '@testing-library/react';
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 const { loadKey } = require('./app.js');
 
@@ -93,6 +93,8 @@ describe('App Component', () => {
     document.body.appendChild(rootElement);
 
     window.HTMLElement.prototype.scrollIntoView = jest.fn();
+    // Ensure the app starts on the main view (not onboarding)
+    localStorage.setItem('onboarding_shown', '1');
   });
 
   test('renders navigation tabs', async () => {
@@ -109,7 +111,7 @@ describe('App Component', () => {
     expect(screen.getAllByText('Coach').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Entreno').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Registro').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Plan').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Perfil').length).toBeGreaterThan(0);
 
     console.error = originalError;
   });
@@ -124,13 +126,13 @@ describe('App Component', () => {
       render(<App />);
     });
 
-    expect(screen.getAllByText('Espacio IA · Bruno').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Espacio IA').length).toBeGreaterThan(0);
     expect(screen.getAllByText('CENTRO DE MANDO').length).toBeGreaterThan(0);
 
     console.error = originalError;
   });
 
-  test('preset buttons exist', async () => {
+  test('preset buttons exist in Perfil tab', async () => {
     const originalError = console.error;
     console.error = jest.fn();
 
@@ -138,6 +140,12 @@ describe('App Component', () => {
 
     await act(async () => {
       render(<App />);
+    });
+
+    const perfilTabButton = screen.getAllByText('Perfil')[0].closest('button');
+
+    await act(async () => {
+      perfilTabButton.click();
     });
 
     expect(screen.getAllByText('Definición').length).toBeGreaterThan(0);
@@ -172,19 +180,23 @@ describe('App Component', () => {
 
     expect(screen.getByText('ENTRENAMIENTO · SPLIT')).toBeInTheDocument();
 
-    const planTabButton = screen.getAllByText('Plan')[0].closest('button');
+    const perfilTabButton = screen.getAllByText('Perfil')[0].closest('button');
 
     await act(async () => {
-      planTabButton.click();
+      perfilTabButton.click();
     });
 
-    expect(screen.getByText('TU PLAN: DEFINICIÓN')).toBeInTheDocument();
+    expect(screen.getByText('Objetivo Principal')).toBeInTheDocument();
 
     console.error = originalError;
   });
 });
 
 describe('Hoy tab functionalities', () => {
+  beforeAll(() => {
+    localStorage.setItem('onboarding_shown', '1');
+  });
+
   test('hydration water increase works', async () => {
     const originalError = console.error;
     console.error = jest.fn();
