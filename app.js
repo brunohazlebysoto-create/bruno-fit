@@ -13436,6 +13436,10 @@ function Registro({
   const [progressPhotoBusy, setProgressPhotoBusy] = useState(false);
   const [progressPhotoErr, setProgressPhotoErr] = useState("");
   const [progressPhotoLoading, setProgressPhotoLoading] = useState(false);
+  const [photosUnlocked, setPhotosUnlocked] = useState(false);
+  const [photoPinInput, setPhotoPinInput] = useState("");
+  const [photoPinError, setPhotoPinError] = useState(false);
+  const [showPinInput, setShowPinInput] = useState(false);
 
   // Cargar análisis guardado cuando cambia la fecha seleccionada
   useEffect(() => {
@@ -15020,94 +15024,146 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           setProgressPhotoBusy(false);
         };
 
+        const checkPin = () => {
+          if (photoPinInput === "1234") {
+            setPhotosUnlocked(true);
+            setShowPinInput(false);
+            setPhotoPinInput("");
+            setPhotoPinError(false);
+          } else {
+            setPhotoPinError(true);
+            setPhotoPinInput("");
+          }
+        };
+
         return (
           <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
             <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
               <span style={{display:"flex", alignItems:"center", gap:6}}><Camera size={14} color={C.lime}/> Fotos de Progreso</span>
-              <label style={{background: progressPhotoLoading ? C.panel2 : C.lime, color: progressPhotoLoading ? C.muted : "#0c0e0b", border:"none", borderRadius:8, padding:"4px 10px", fontSize:11, fontWeight:800, cursor: progressPhotoLoading ? "default" : "pointer", display:"inline-flex", alignItems:"center", gap:4, pointerEvents: progressPhotoLoading ? "none" : "auto"}}>
-                {progressPhotoLoading ? <><span style={{animation:"spin 1s linear infinite", display:"inline-block"}}>⟳</span> Cargando…</> : "+ Fotos"}
-                <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={handlePhotoUpload} disabled={progressPhotoLoading}/>
-              </label>
+              {photosUnlocked ? (
+                <div style={{display:"flex", alignItems:"center", gap:6}}>
+                  <label style={{background: progressPhotoLoading ? C.panel2 : C.lime, color: progressPhotoLoading ? C.muted : "#0c0e0b", border:"none", borderRadius:8, padding:"4px 10px", fontSize:11, fontWeight:800, cursor: progressPhotoLoading ? "default" : "pointer", display:"inline-flex", alignItems:"center", gap:4, pointerEvents: progressPhotoLoading ? "none" : "auto"}}>
+                    {progressPhotoLoading ? <><span style={{animation:"spin 1s linear infinite", display:"inline-block"}}>⟳</span> Cargando…</> : "+ Fotos"}
+                    <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={handlePhotoUpload} disabled={progressPhotoLoading}/>
+                  </label>
+                  <button onClick={() => { setPhotosUnlocked(false); setShowPinInput(false); setPhotoPinInput(""); setPhotoPinError(false); }} style={{background:"none", border:`1px solid ${C.line}`, borderRadius:8, padding:"4px 8px", fontSize:11, color:C.muted, cursor:"pointer"}}>🔒</button>
+                </div>
+              ) : (
+                <span style={{fontSize:11, color:C.muted}}>🔒</span>
+              )}
             </div>
 
-            {progressPhotoErr && (
-              <div style={{background:"rgba(244,63,94,0.12)", border:"1px solid rgba(244,63,94,0.4)", borderRadius:8, padding:"7px 10px", marginBottom:8, fontSize:12, color:"#f43f5e"}}>
-                ⚠️ {progressPhotoErr}
-                <button onClick={() => setProgressPhotoErr("")} style={{float:"right", background:"none", border:"none", color:"#f43f5e", cursor:"pointer", fontSize:14, lineHeight:1, padding:0}}>✕</button>
-              </div>
-            )}
-
-            {todayPhotos.length > 0 ? (
-              <div style={{marginBottom:10}}>
-                <div style={{fontSize:10, color:C.lime, fontWeight:700, marginBottom:6}}>{selectedDateStr} — {todayPhotos.length} foto{todayPhotos.length !== 1 ? "s" : ""}</div>
-                <div style={{display:"flex", gap:6, overflowX:"auto", paddingBottom:4}}>
-                  {todayPhotos.map((url, idx) => (
-                    <div key={idx} style={{position:"relative", flexShrink:0}}>
-                      <img src={url} alt={`foto-${idx}`} style={{height:100, width:75, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`, display:"block"}}/>
-                      <button onClick={() => deletePhoto(idx)} style={{position:"absolute", top:2, right:2, background:"rgba(0,0,0,0.6)", border:"none", borderRadius:"50%", width:18, height:18, color:"#fff", fontSize:10, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0}}>✕</button>
-                    </div>
-                  ))}
-                </div>
-                <button
-                  onClick={analyzeProgressPhotos}
-                  disabled={progressPhotoBusy}
-                  style={{width:"100%", marginTop:8, height:36, borderRadius:10, border:"none",
-                    background: progressPhotoBusy ? C.panel2 : `linear-gradient(135deg,${C.lime},${C.cyan})`,
-                    color: progressPhotoBusy ? C.muted : "#0c0e0b",
-                    fontSize:12.5, fontWeight:800, cursor: progressPhotoBusy ? "default" : "pointer",
-                    display:"flex", alignItems:"center", justifyContent:"center", gap:6
-                  }}
-                >
-                  {progressPhotoBusy
-                    ? <><span style={{animation:"spin 1s linear infinite", display:"inline-block"}}>⟳</span> Analizando…</>
-                    : "✦ Analizar con IA"}
-                </button>
-                {progressPhotoAnalysis && (
-                  <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:10, marginTop:8, fontSize:12, color:C.ink, lineHeight:1.65, whiteSpace:"pre-wrap"}}>
-                    {progressPhotoAnalysis}
-                    <div style={{display:"flex", gap:6, marginTop:8}}>
-                      {sendCoachMessage && setView && (
-                        <button
-                          onClick={() => {
-                            sendCoachMessage(`Acabo de analizar mis fotos de progreso del ${selectedDateStr}. El análisis dice:\n"${progressPhotoAnalysis}"\n\nCon base en este análisis de fotos + todos mis datos de Fitdays, entreno y nutrición: ¿debo ajustar mis objetivos de calorías o macros? Si corresponde, actualízalos con UPDATE_TARGET. ¿Qué debo priorizar en las próximas 2 semanas?`);
-                            setView("coach");
-                          }}
-                          style={{flex:1, background:"rgba(205,255,74,0.08)", border:"1px solid rgba(205,255,74,0.35)", borderRadius:6, color:"#cdff4a", fontSize:11, fontWeight:800, padding:"5px", cursor:"pointer"}}
-                        >
-                          ✦ Enviar al Coach → Actualizar Objetivos
-                        </button>
-                      )}
-                      <button onClick={() => setProgressPhotoAnalysis("")} style={{flex:1, background:"none", border:`1px solid ${C.line}`, borderRadius:6, color:C.muted, fontSize:11, padding:"5px", cursor:"pointer"}}>Cerrar</button>
+            {!photosUnlocked ? (
+              <div style={{textAlign:"center", padding:"16px 0 10px"}}>
+                <div style={{fontSize:26, marginBottom:6}}>🔒</div>
+                <div style={{fontSize:12, color:C.muted, marginBottom:12}}>Sección protegida con contraseña</div>
+                {!showPinInput ? (
+                  <button onClick={() => setShowPinInput(true)} style={{background:"transparent", border:`1px solid ${C.lime}`, borderRadius:10, padding:"7px 22px", color:C.lime, fontSize:12.5, fontWeight:800, cursor:"pointer"}}>
+                    Ver fotos
+                  </button>
+                ) : (
+                  <div style={{display:"flex", flexDirection:"column", alignItems:"center", gap:8}}>
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={6}
+                      placeholder="PIN"
+                      value={photoPinInput}
+                      onChange={e => { setPhotoPinInput(e.target.value); setPhotoPinError(false); }}
+                      onKeyDown={e => { if (e.key === "Enter") checkPin(); }}
+                      style={{width:100, textAlign:"center", fontSize:18, letterSpacing:6, borderRadius:8, border:`1px solid ${photoPinError ? "#f43f5e" : C.line}`, background:C.panel2, color:C.ink, padding:"6px 10px", outline:"none"}}
+                      autoFocus
+                    />
+                    {photoPinError && <div style={{fontSize:11, color:"#f43f5e"}}>PIN incorrecto</div>}
+                    <div style={{display:"flex", gap:8}}>
+                      <button onClick={checkPin} style={{background:C.lime, border:"none", borderRadius:8, padding:"6px 18px", color:"#0c0e0b", fontSize:12, fontWeight:800, cursor:"pointer"}}>Entrar</button>
+                      <button onClick={() => { setShowPinInput(false); setPhotoPinInput(""); setPhotoPinError(false); }} style={{background:"none", border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 12px", color:C.muted, fontSize:12, cursor:"pointer"}}>Cancelar</button>
                     </div>
                   </div>
                 )}
               </div>
             ) : (
-              <div style={{textAlign:"center", color:C.muted, fontSize:12, padding:"12px 0"}}>
-                Sube fotos de hoy para analizar con IA 📸
-              </div>
-            )}
+              <>
+                {progressPhotoErr && (
+                  <div style={{background:"rgba(244,63,94,0.12)", border:"1px solid rgba(244,63,94,0.4)", borderRadius:8, padding:"7px 10px", marginBottom:8, fontSize:12, color:"#f43f5e"}}>
+                    ⚠️ {progressPhotoErr}
+                    <button onClick={() => setProgressPhotoErr("")} style={{float:"right", background:"none", border:"none", color:"#f43f5e", cursor:"pointer", fontSize:14, lineHeight:1, padding:0}}>✕</button>
+                  </div>
+                )}
 
-            {datesWithPhotos.filter(d => d !== selectedDateStr).length > 0 && (
-              <div>
-                <div style={{fontSize:10, color:C.muted, fontWeight:700, marginBottom:5}}>HISTORIAL</div>
-                <div style={{display:"flex", gap:8, overflowX:"auto", paddingBottom:4, scrollbarWidth:"none"}}>
-                  {datesWithPhotos.filter(d => d !== selectedDateStr).slice(0, 8).map(d => (
-                    <div key={d} style={{flexShrink:0, textAlign:"center"}}>
-                      <img src={getPhotos(metricslog[d])[0]} alt={d} style={{width:64, height:80, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`, display:"block"}}/>
-                      <div style={{fontSize:9, color:C.muted, marginTop:2}}>{d.slice(5)}</div>
-                      {getPhotos(metricslog[d]).length > 1 && <div style={{fontSize:8, color:C.cyan}}>+{getPhotos(metricslog[d]).length - 1}</div>}
+                {todayPhotos.length > 0 ? (
+                  <div style={{marginBottom:10}}>
+                    <div style={{fontSize:10, color:C.lime, fontWeight:700, marginBottom:6}}>{selectedDateStr} — {todayPhotos.length} foto{todayPhotos.length !== 1 ? "s" : ""}</div>
+                    <div style={{display:"flex", gap:6, overflowX:"auto", paddingBottom:4}}>
+                      {todayPhotos.map((url, idx) => (
+                        <div key={idx} style={{position:"relative", flexShrink:0}}>
+                          <img src={url} alt={`foto-${idx}`} style={{height:100, width:75, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`, display:"block"}}/>
+                          <button onClick={() => deletePhoto(idx)} style={{position:"absolute", top:2, right:2, background:"rgba(0,0,0,0.6)", border:"none", borderRadius:"50%", width:18, height:18, color:"#fff", fontSize:10, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0}}>✕</button>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </div>
+                    <button
+                      onClick={analyzeProgressPhotos}
+                      disabled={progressPhotoBusy}
+                      style={{width:"100%", marginTop:8, height:36, borderRadius:10, border:"none",
+                        background: progressPhotoBusy ? C.panel2 : `linear-gradient(135deg,${C.lime},${C.cyan})`,
+                        color: progressPhotoBusy ? C.muted : "#0c0e0b",
+                        fontSize:12.5, fontWeight:800, cursor: progressPhotoBusy ? "default" : "pointer",
+                        display:"flex", alignItems:"center", justifyContent:"center", gap:6
+                      }}
+                    >
+                      {progressPhotoBusy
+                        ? <><span style={{animation:"spin 1s linear infinite", display:"inline-block"}}>⟳</span> Analizando…</>
+                        : "✦ Analizar con IA"}
+                    </button>
+                    {progressPhotoAnalysis && (
+                      <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:10, marginTop:8, fontSize:12, color:C.ink, lineHeight:1.65, whiteSpace:"pre-wrap"}}>
+                        {progressPhotoAnalysis}
+                        <div style={{display:"flex", gap:6, marginTop:8}}>
+                          {sendCoachMessage && setView && (
+                            <button
+                              onClick={() => {
+                                sendCoachMessage(`Acabo de analizar mis fotos de progreso del ${selectedDateStr}. El análisis dice:\n"${progressPhotoAnalysis}"\n\nCon base en este análisis de fotos + todos mis datos de Fitdays, entreno y nutrición: ¿debo ajustar mis objetivos de calorías o macros? Si corresponde, actualízalos con UPDATE_TARGET. ¿Qué debo priorizar en las próximas 2 semanas?`);
+                                setView("coach");
+                              }}
+                              style={{flex:1, background:"rgba(205,255,74,0.08)", border:"1px solid rgba(205,255,74,0.35)", borderRadius:6, color:"#cdff4a", fontSize:11, fontWeight:800, padding:"5px", cursor:"pointer"}}
+                            >
+                              ✦ Enviar al Coach → Actualizar Objetivos
+                            </button>
+                          )}
+                          <button onClick={() => setProgressPhotoAnalysis("")} style={{flex:1, background:"none", border:`1px solid ${C.line}`, borderRadius:6, color:C.muted, fontSize:11, padding:"5px", cursor:"pointer"}}>Cerrar</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{textAlign:"center", color:C.muted, fontSize:12, padding:"12px 0"}}>
+                    Sube fotos de hoy para analizar con IA 📸
+                  </div>
+                )}
+
+                {datesWithPhotos.filter(d => d !== selectedDateStr).length > 0 && (
+                  <div>
+                    <div style={{fontSize:10, color:C.muted, fontWeight:700, marginBottom:5}}>HISTORIAL</div>
+                    <div style={{display:"flex", gap:8, overflowX:"auto", paddingBottom:4, scrollbarWidth:"none"}}>
+                      {datesWithPhotos.filter(d => d !== selectedDateStr).slice(0, 8).map(d => (
+                        <div key={d} style={{flexShrink:0, textAlign:"center"}}>
+                          <img src={getPhotos(metricslog[d])[0]} alt={d} style={{width:64, height:80, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`, display:"block"}}/>
+                          <div style={{fontSize:9, color:C.muted, marginTop:2}}>{d.slice(5)}</div>
+                          {getPhotos(metricslog[d]).length > 1 && <div style={{fontSize:8, color:C.cyan}}>+{getPhotos(metricslog[d]).length - 1}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         );
       })()}
 
       {/* Comparador de fotos corporales con IA */}
-      {(() => {
+      {photosUnlocked && (() => {
         const getPhotos2 = getEntryPhotos;
         const datesWithPhotos = Object.keys(metricslog).filter(d => getPhotos2(metricslog[d]).length > 0).sort().reverse();
         if (datesWithPhotos.length < 2) return null;
