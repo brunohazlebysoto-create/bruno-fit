@@ -2287,12 +2287,12 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     if (updates.splits !== undefined) writes.push(saveKey("training_splits", updates.splits));
     if (updates.dietGuidelines !== undefined) writes.push(saveKey("diet_guidelines", updates.dietGuidelines));
     if (updates.trainingGuidelines !== undefined) writes.push(saveKey("training_guidelines", updates.trainingGuidelines));
-    writes.push(saveKey("foodlog", nextFoodlog));
-    writes.push(saveKey("waterlog", nextWaterlog));
-    writes.push(saveKey("suppslog", nextSuppslog));
-    writes.push(saveKey("metricslog", nextMetricslog));
-    writes.push(saveKey("supps_inventory", nextSuppsInventory));
-    writes.push(saveKey("workout_durations", nextWorkoutDurations));
+    if (updates.log !== undefined) writes.push(saveKey("foodlog", nextFoodlog));
+    if (updates.water !== undefined) writes.push(saveKey("waterlog", nextWaterlog));
+    if (updates.supplements !== undefined) writes.push(saveKey("suppslog", nextSuppslog));
+    if (updates.metricslog !== undefined || updates.bodyComp !== undefined || updates.weight !== undefined) writes.push(saveKey("metricslog", nextMetricslog));
+    if (updates.suppsInventory !== undefined) writes.push(saveKey("supps_inventory", nextSuppsInventory));
+    if (updates.workoutDurations !== undefined) writes.push(saveKey("workout_durations", nextWorkoutDurations));
     if (updates.exerciseTechNotes !== undefined) writes.push(saveKey("exercise_tech_notes", nextExerciseTechNotes));
     writes.push(saveKey("last_local_update", updateTime));
     await Promise.all(writes);
@@ -13695,7 +13695,8 @@ function Registro({
     });
     
     setMetricslog(newMetricslog);
-    
+    saveKey("metricslog", newMetricslog);
+
     const noteDate = new Date(selectedDateStr + "T" + new Date().toTimeString().slice(0, 8)).toISOString();
     let pText = "Medidas: ";
     if (brazoDer) pText += `Brazos D:${brazoDer} I:${brazoIzq}cm | `;
@@ -15136,6 +15137,9 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
             const text = result?.trim() || "Sin análisis disponible.";
             setAICache("photo_cmp", cacheKey, text);
             setCmpPhotoAnalysis(text);
+            const updMetrics = { ...metricslog, [cmpDateB]: { ...(metricslog[cmpDateB] || {}), cmpPhotoAnalysis: text } };
+            saveKey("metricslog", updMetrics);
+            setMetricslog(updMetrics);
           } catch(e) {
             setCmpPhotoAnalysis("⚠️ " + aiErr(e));
           }
@@ -15215,6 +15219,9 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                 {cmpPhotoAnalysis && (
                   <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:11, padding:"11px 13px", color:C.ink}}>
                     <MarkdownText text={cmpPhotoAnalysis} style={{fontSize:12.5}}/>
+                    <button onClick={() => { sendCoachMessage(`[Comparativa fotos ${cmpDateA} → ${cmpDateB}]\n${cmpPhotoAnalysis}`); setView("coach"); }} style={{marginTop:10, width:"100%", height:36, borderRadius:9, border:`1px solid ${C.lime}`, background:"transparent", color:C.lime, fontSize:12, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6}}>
+                      <Sparkles size={13}/> Enviar al Coach
+                    </button>
                   </div>
                 )}
               </>
