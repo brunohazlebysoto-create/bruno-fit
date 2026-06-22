@@ -9948,6 +9948,7 @@ function Entreno({
   const [mergeTarget, setMergeTarget] = useState("");
   const [showExMgr, setShowExMgr] = useState(false);
   const [exMgrSearch, setExMgrSearch] = useState("");
+  const [exSearch, setExSearch] = useState("");
 
   const getRecentSensationsText = () => {
     const sevenDaysAgo = Date.now() - 7 * 86400000;
@@ -11456,9 +11457,40 @@ function Entreno({
         Ejercicios Atajo (Pulsa para abrir y registrar series)
       </div>
 
+      {/* Buscador de ejercicios */}
+      {dayExs.length > 3 && (
+        <div style={{position:"relative", marginBottom:10}}>
+          <input
+            type="text"
+            placeholder="Buscar por nombre o músculo…"
+            value={exSearch}
+            onChange={e => setExSearch(e.target.value)}
+            style={{width:"100%", boxSizing:"border-box", background:C.panel, border:`1px solid ${exSearch ? C.lime : C.line}`, borderRadius:10, padding:"8px 32px 8px 12px", fontSize:13, color:C.ink, outline:"none"}}
+          />
+          {exSearch ? (
+            <button onClick={() => setExSearch("")} style={{position:"absolute", right:8, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", color:C.muted, cursor:"pointer", fontSize:16, lineHeight:1, padding:0}}>✕</button>
+          ) : (
+            <span style={{position:"absolute", right:10, top:"50%", transform:"translateY(-50%)", color:C.muted, fontSize:14, pointerEvents:"none"}}>🔍</span>
+          )}
+        </div>
+      )}
+
       {/* Listado de ejercicios del día */}
-      {dayExs.map(ex => {
-        const isOpen = open === ex.name; 
+      {(() => {
+        const q = exSearch.toLowerCase().trim();
+        const filtered = q
+          ? dayExs.filter(ex =>
+              ex.name.toLowerCase().includes(q) ||
+              (ex.musculos || []).some(m => m.toLowerCase().includes(q))
+            )
+          : dayExs;
+        if (q && filtered.length === 0) return (
+          <div style={{textAlign:"center", color:C.muted, fontSize:13, padding:"16px 0"}}>
+            Sin resultados para "{exSearch}"
+          </div>
+        );
+        return filtered.map(ex => {
+          const isOpen = open === ex.name; 
         const l = last(ex.name); 
         const cd = chartData(ex.name);
         return (
@@ -11764,7 +11796,8 @@ function Entreno({
             )}
           </div>
         );
-      })}
+      });
+      })()}
 
       {/* ===== Gestionar todos los ejercicios ===== */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, marginBottom:12, overflow:"hidden"}}>
