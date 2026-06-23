@@ -10339,21 +10339,50 @@ function Entreno({
       return null;
     };
 
-    // ── Identify target body parts for this split ──
+    // ── Infer body part from exercise name (fallback for missing muscle data) ──
+    const NAME_BP = [
+      [["curl","predicador","concentr","martillo","scott","bíceps","bicep"], "Bíceps"],
+      [["tríceps","tricep","pushdown","skull","frances","press cerrado"], "Tríceps"],
+      [["press banca","press plano","apertura","pectoral","pecho","inclinado pecho","declinado"], "Pecho"],
+      [["sentadilla","prensa","extensión cuád","cuádricep","cuadricep","hack","leg press","búlgara","bulgar","zancada","estocada"], "Pierna"],
+      [["hip thrust","patada glúteo","glúteo","rdl"], "Glúteo"],
+      [["peso muerto","dominad","jalón","jalon","remo","dorsal","trapecio","rack pull","hiperextensión"], "Espalda"],
+      [["press militar","press hombro","elevacion","elevación","face pull","deltoid","pájaros"], "Hombros"],
+      [["gemelo","pantorrilla","calf","sóleo"], "Gemelos"],
+      [["abdomin","plancha","crunch","oblicuo","rueda"], "Core"],
+    ];
+    const inferBP = (name) => {
+      const low = name.toLowerCase();
+      for (const [keys, bp] of NAME_BP) { if (keys.some(k => low.includes(k))) return bp; }
+      return null;
+    };
+    const getExBP = (name) => {
+      const ex = allExMap[name];
+      if (ex?.musculos?.length) { const bp = toBodyPart(ex.musculos[0]); if (bp) return bp; }
+      return inferBP(name);
+    };
+
+    // ── Identify target body parts for this split (primary muscle only) ──
     const assignedExs = (exercises || {})[splitKey] || [];
-    const bpSet = new Set();
-    assignedExs.forEach(ex => (ex.musculos || []).slice(0, 2).forEach(m => { const bp = toBodyPart(m); if (bp) bpSet.add(bp); }));
-    if (bpSet.size === 0) {
+    const bpCount = {};
+    assignedExs.forEach(ex => {
+      const primaryM = (ex.musculos || [])[0];
+      const bp = primaryM ? toBodyPart(primaryM) : inferBP(ex.name);
+      if (bp) bpCount[bp] = (bpCount[bp] || 0) + 1;
+    });
+    // Also scan split name as fallback
+    if (Object.keys(bpCount).length === 0) {
       const n = (dayObj.name || "").toLowerCase();
-      if (n.includes("pecho") || n.includes("pectoral")) bpSet.add("Pecho");
-      if (n.includes("hombro") || n.includes("deltoid")) bpSet.add("Hombros");
-      if (n.includes("espalda") || n.includes("dorsal")) bpSet.add("Espalda");
-      if (n.includes("pierna") || n.includes("cuádricep") || n.includes("quad")) bpSet.add("Pierna");
-      if (n.includes("glúteo") || n.includes("gluteo")) bpSet.add("Glúteo");
-      if (n.includes("bíceps") || n.includes("bicep")) bpSet.add("Bíceps");
-      if (n.includes("tríceps") || n.includes("tricep")) bpSet.add("Tríceps");
+      if (n.includes("pecho") || n.includes("pectoral")) bpCount["Pecho"] = 1;
+      if (n.includes("hombro") || n.includes("deltoid")) bpCount["Hombros"] = 1;
+      if (n.includes("espalda") || n.includes("dorsal")) bpCount["Espalda"] = 1;
+      if (n.includes("pierna") || n.includes("cuádricep") || n.includes("quad")) bpCount["Pierna"] = 1;
+      if (n.includes("glúteo") || n.includes("gluteo")) bpCount["Glúteo"] = 1;
+      if (n.includes("bíceps") || n.includes("bicep")) bpCount["Bíceps"] = 1;
+      if (n.includes("tríceps") || n.includes("tricep")) bpCount["Tríceps"] = 1;
     }
-    const targetBPs = [...bpSet];
+    // Keep only body parts with ≥1 exercise assigned, ordered by count descending
+    const targetBPs = Object.entries(bpCount).sort((a,b) => b[1]-a[1]).map(([bp]) => bp);
 
     // ── Full analysis for one exercise ──
     const analyzeEx = (exName) => {
@@ -10443,13 +10472,9 @@ function Entreno({
     const sessionExs = []; // { exName, analysis, bodyPart, compound }
 
     for (const bp of targetBPs) {
-      // Pool: all exlog exercises whose primary muscle maps to this body part
+      // Pool: all exlog exercises mapping to this body part (by muscle data OR name inference)
       const candidates = Object.keys(exlog || {})
-        .filter(name => {
-          const ex = allExMap[name];
-          if (!ex?.musculos?.length) return false;
-          return toBodyPart(ex.musculos[0]) === bp;
-        })
+        .filter(name => getExBP(name) === bp)
         .map(name => {
           const a = analyzeEx(name);
           if (!a) return null;
