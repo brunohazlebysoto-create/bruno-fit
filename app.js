@@ -3140,7 +3140,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     const tdee = calcTDEE(fLog, mLog);
     setTdeeEstimate(tdee);
     if (tdee && tgt) {
-      const latestM = Object.entries(mLog||{}).filter(([_,v])=>v?.weight).sort((a,b)=>b[0] < a[0] ? -1 : (b[0] > a[0] ? 1 : 0))[0]?.[1];
+      // ⚡ Bolt: Replaced O(N log N) sort with O(N) reduce to find latest weight entry
+      const latestM = Object.entries(mLog||{}).reduce((max, curr) => (curr[1]?.weight && (!max || curr[0] > max[0])) ? curr : max, null)?.[1];
       if (latestM) setProjections(calcBodyProjection(parseFloat(latestM.weight), parseFloat(latestM.grasaPct)||25, tdee, tgt.kcal, 12));
     }
     if (trend && Math.abs(trend.kgPerWeek) < 0.1 && trend.dataPoints >= 7) {
@@ -3983,7 +3984,8 @@ No repitas los datos que ya te mandé. No me pidas registrar nada.`;
 
       const wDates = last7.filter(d=>metricslog?.[d]?.weight);
       const weightChange = wDates.length>=2 ? (parseFloat(metricslog[wDates[wDates.length-1]].weight)-parseFloat(metricslog[wDates[0]].weight)).toFixed(1) : null;
-      const latestMetricDate = Object.keys(metricslog||{}).sort().reverse()[0];
+      // ⚡ Bolt: Replaced O(N log N) sort with O(N) reduce to find latest date
+      const latestMetricDate = Object.keys(metricslog||{}).reduce((max, curr) => (!max || curr > max) ? curr : max, null);
       const lm = latestMetricDate ? metricslog[latestMetricDate] : null;
 
       // Build per-day detail for AI prompt
@@ -8069,7 +8071,8 @@ function Coach({
   const contextSummary = React.useMemo(() => {
     const nutritionDays = Object.keys(foodlog || {}).filter(d => (foodlog[d]||[]).length > 0).length;
     const workoutSessions = Object.keys(exlog || {}).filter(d => (exlog[d]||[]).length > 0).length;
-    const latestMetrics = Object.entries(metricslog || {}).sort((a,b) => b[0] < a[0] ? -1 : (b[0] > a[0] ? 1 : 0))[0];
+    // ⚡ Bolt: Replaced O(N log N) sort with O(N) reduce to find latest metrics
+    const latestMetrics = Object.entries(metricslog || {}).reduce((max, curr) => (!max || curr[0] > max[0]) ? curr : max, null);
     const latestWeight = latestMetrics ? latestMetrics[1]?.weight : null;
     return { nutritionDays, workoutSessions, latestWeight };
   }, [foodlog, exlog, metricslog]);
@@ -9488,7 +9491,8 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
   const getLastEntry = (exName) => {
     const work = (exlog[exName] || []).filter(s => s.type !== "warmup");
     if (work.length === 0) return { w: 0, reps: "8" };
-    const last = [...work].sort((a,b) => b.date < a.date ? -1 : (b.date > a.date ? 1 : 0))[0];
+    // ⚡ Bolt: Replaced O(N log N) sort with O(N) reduce to find latest workout entry
+    const last = work.reduce((max, curr) => (!max || curr.date > max.date) ? curr : max, work[0]);
     return { w: parseFloat(last.w) || 0, reps: String(parseInt(last.reps) || 8) };
   };
   const getVals = (exName) => overrides[exName] || getLastEntry(exName);
