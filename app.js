@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W2";
+const APP_VERSION = "v2026.06.23-W3";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -10235,14 +10235,18 @@ function Entreno({
       const validDrops = dropRows.filter(r => r.w && parseFloat(r.w) > 0);
       if (!validDrops.length) return;
       const drops = validDrops.map(r => ({w: parseFloat(r.w), reps: (r.reps||"").trim() || "-"}));
+      const rirVal = rir === "-" ? null : parseInt(rir);
+      // For chart 1RM: use top weight × total reps across all drops (fairer than just first drop)
+      const totalReps = drops.reduce((acc, d) => acc + (parseInt(d.reps) || 0), 0);
+      const effectiveW = drops[0].w * (1 + (totalReps + (rirVal || 0)) / 30);
       for (let i = 0; i < count; i++) {
         const d = new Date(parseInt(parts[0]), parseInt(parts[1])-1, parseInt(parts[2]), now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds() - (count-1-i)*10);
         newSets.push({
           date: d.toISOString(),
           w: drops[0].w,
-          reps: drops[0].reps,
+          reps: String(totalReps), // effective reps for chart 1RM calculation
           type: "dropset",
-          rir: null,
+          rir: rirVal,
           ...(drops.length > 1 ? {drops} : {})
         });
       }
@@ -11657,18 +11661,30 @@ tr:last-child td{border-bottom:none}
                                     onClick={() => setDropRows(prev => [...prev, {w:"", reps:""}])}
                                     style={{flex:1, height:32, borderRadius:8, border:`1px dashed rgba(255,107,152,0.5)`, background:"transparent", color:C.rose, cursor:"pointer", fontSize:11, fontWeight:700}}
                                   >+ drop</button>
+                                  <select
+                                    value={rir}
+                                    onChange={e => setRir(e.target.value)}
+                                    style={{width:60, background:C.panel2, border:`1px solid rgba(255,107,152,0.4)`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:12, outline:"none", textAlign:"center", cursor:"pointer"}}
+                                  >
+                                    <option value="-">RIR</option>
+                                    <option value="0">RIR 0</option>
+                                    <option value="1">RIR 1</option>
+                                    <option value="2">RIR 2</option>
+                                    <option value="3">RIR 3</option>
+                                    <option value="4">RIR 4+</option>
+                                  </select>
                                   <input
                                     value={setsCount}
                                     onChange={e => setSetsCount(e.target.value)}
                                     type="number" inputMode="numeric" className="ph"
                                     placeholder="rond."
                                     title="Cuántas veces repetir este drop set"
-                                    style={{width:52, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 4px", color:C.ink, fontSize:13, outline:"none", textAlign:"center"}}
+                                    style={{width:44, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 4px", color:C.ink, fontSize:13, outline:"none", textAlign:"center"}}
                                   />
                                   <button onClick={() => addSet(exName)} style={{width:36, height:34, borderRadius:9, border:"none", background:C.rose, color:"#fff", cursor:"pointer", fontSize:18, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center"}}>＋</button>
                                 </div>
                                 <div style={{fontSize:9.5, color:C.muted, marginTop:4}}>
-                                  {dropRows.length} pesos · {parseInt(setsCount)||1} ronda{(parseInt(setsCount)||1)>1?"s":""}
+                                  {dropRows.length} pesos · {parseInt(setsCount)||1} ronda{(parseInt(setsCount)||1)>1?"s":""}{rir !== "-" ? ` · RIR ${rir}` : ""}
                                 </div>
                               </div>
                             ) : (
@@ -11741,7 +11757,7 @@ tr:last-child td{border-bottom:none}
                                     </div>
                                     <div style={{fontSize:10.5, color:C.cyan, marginTop:1}}>
                                       Vol: {s.drops.reduce((acc,d) => acc + (parseFloat(d.w)||0)*(parseInt(d.reps)||0), 0).toFixed(0)} kg
-                                      {" · "}1RM≈{Math.round((parseFloat(s.drops[0].w)||0)*(1+(parseInt(s.drops[0].reps)||0)/30))} kg
+                                      {" · "}1RM≈{Math.round((parseFloat(s.drops[0].w)||0)*(1+(s.drops.reduce((a,d)=>a+(parseInt(d.reps)||0),0)+(s.rir||0))/30))} kg
                                     </div>
                                   </div>
                                 ) : (
@@ -12159,18 +12175,30 @@ tr:last-child td{border-bottom:none}
                         onClick={() => setDropRows(prev => [...prev, {w:"", reps:""}])}
                         style={{flex:1, height:32, borderRadius:8, border:`1px dashed rgba(255,107,152,0.5)`, background:"transparent", color:C.rose, cursor:"pointer", fontSize:11, fontWeight:700}}
                       >+ drop</button>
+                      <select
+                        value={rir}
+                        onChange={e => setRir(e.target.value)}
+                        style={{width:60, background:C.panel2, border:`1px solid rgba(255,107,152,0.4)`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:12, outline:"none", textAlign:"center", cursor:"pointer"}}
+                      >
+                        <option value="-">RIR</option>
+                        <option value="0">RIR 0</option>
+                        <option value="1">RIR 1</option>
+                        <option value="2">RIR 2</option>
+                        <option value="3">RIR 3</option>
+                        <option value="4">RIR 4+</option>
+                      </select>
                       <input
                         value={setsCount}
                         onChange={e => setSetsCount(e.target.value)}
                         type="number" inputMode="numeric" className="ph"
                         placeholder="rond."
                         title="Cuántas veces repetir este drop set"
-                        style={{width:52, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 4px", color:C.ink, fontSize:13, outline:"none", textAlign:"center"}}
+                        style={{width:44, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 4px", color:C.ink, fontSize:13, outline:"none", textAlign:"center"}}
                       />
                       <button onClick={() => addSet(ex.name)} style={{width:36, height:34, borderRadius:9, border:"none", background:C.rose, color:"#fff", cursor:"pointer", fontSize:18, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center"}}>＋</button>
                     </div>
                     <div style={{fontSize:9.5, color:C.muted, marginTop:4}}>
-                      {dropRows.length} pesos · {parseInt(setsCount)||1} ronda{(parseInt(setsCount)||1)>1?"s":""}
+                      {dropRows.length} pesos · {parseInt(setsCount)||1} ronda{(parseInt(setsCount)||1)>1?"s":""}{rir !== "-" ? ` · RIR ${rir}` : ""}
                     </div>
                   </div>
                 ) : (
@@ -12242,7 +12270,7 @@ tr:last-child td{border-bottom:none}
                           <span style={{color:C.muted, fontWeight:400}}> × {s.drops.map(d=>d.reps).join("/")}</span>
                         </div>
                         <div style={{fontSize:10.5, color:C.cyan, marginTop:1}}>
-                          Vol: {s.drops.reduce((acc,d) => acc+(parseFloat(d.w)||0)*(parseInt(d.reps)||0), 0).toFixed(0)} kg · 1RM≈{Math.round((parseFloat(s.drops[0].w)||0)*(1+(parseInt(s.drops[0].reps)||0)/30))} kg
+                          Vol: {s.drops.reduce((acc,d) => acc+(parseFloat(d.w)||0)*(parseInt(d.reps)||0), 0).toFixed(0)} kg · 1RM≈{Math.round((parseFloat(s.drops[0].w)||0)*(1+(s.drops.reduce((a,d)=>a+(parseInt(d.reps)||0),0)+(s.rir||0))/30))} kg
                         </div>
                       </div>
                     ) : (
