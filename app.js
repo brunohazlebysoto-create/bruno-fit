@@ -1,14 +1,14 @@
-const APP_VERSION = "v2026.06.23-W3";
+const APP_VERSION = "v2026.06.23-W4";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
-import { 
-  Flame, Beef, Wheat, Droplet, Plus, Minus, Trash2, Send, Utensils, 
-  MessageSquare, NotebookPen, Loader2, Scale, Camera, Clock, ChefHat, 
-  Sparkles, LineChart, Dumbbell, ClipboardList, GlassWater, Target, 
+import {
+  Flame, Beef, Wheat, Droplet, Plus, Minus, Trash2, Send, Utensils,
+  MessageSquare, NotebookPen, Loader2, Scale, Camera, Clock, ChefHat,
+  Sparkles, LineChart, Dumbbell, ClipboardList, GlassWater, Target,
   CalendarDays, ShoppingCart, Activity, Eye, EyeOff, CheckSquare, Square, ShieldAlert,
-  RefreshCw, Link2, Copy, Check, Settings, Pill, X, TrendingUp, FileText
+  RefreshCw, Link2, Copy, Check, Settings, Pill, X, TrendingUp, FileText, Share2
 } from "lucide-react";
 
 /* ===== CONSTANTES Y PRESETS ===== */
@@ -8038,6 +8038,39 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
   );
 }
 
+function ShareButton({ text }) {
+  const [copied, setCopied] = React.useState(false);
+  const handle = async () => {
+    // Strip markdown for cleaner sharing
+    const plain = text.replace(/\*\*(.*?)\*\*/g,"$1").replace(/\*(.*?)\*/g,"$1").replace(/#{1,3} /g,"").replace(/`(.*?)`/g,"$1").trim();
+    if (navigator.share) {
+      try { await navigator.share({ title:"Bruno Fit — Coach IA", text: plain }); return; } catch(_) {}
+    }
+    try {
+      await navigator.clipboard.writeText(plain);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch(_) {}
+  };
+  return (
+    <button
+      onClick={handle}
+      title={copied ? "¡Copiado!" : "Compartir respuesta"}
+      style={{
+        display:"flex", alignItems:"center", gap:4,
+        marginTop:4, marginLeft:2,
+        background:"none", border:"none", cursor:"pointer",
+        color: copied ? "#cdff4a" : "rgba(154,160,136,0.6)",
+        fontSize:11, fontWeight:700, padding:"2px 4px",
+        transition:"color .2s"
+      }}
+    >
+      {copied ? <Check size={13}/> : <Share2 size={13}/>}
+      <span>{copied ? "Copiado" : "Compartir"}</span>
+    </button>
+  );
+}
+
 /* ===== TAB COACH ===== */
 function Coach({
   chat, setChat, target, totals, sendCoachMessage, chatBusy, sendDailyGreetingIfNeeded,
@@ -8133,8 +8166,13 @@ function Coach({
         )}
         
         {chat.slice(-4).map((m, i) => (
-          <div key={i} className={`chat-bubble ${m.role === "user" ? "user" : "assistant"}`}>
-            {m.role === "user" ? m.content : <MarkdownText text={m.content}/>}
+          <div key={i} style={{position:"relative"}}>
+            <div className={`chat-bubble ${m.role === "user" ? "user" : "assistant"}`}>
+              {m.role === "user" ? m.content : <MarkdownText text={m.content}/>}
+            </div>
+            {m.role === "assistant" && m.content && m.content.length > 10 && (
+              <ShareButton text={m.content}/>
+            )}
           </div>
         ))}
         
