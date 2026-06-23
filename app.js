@@ -8,7 +8,7 @@ import {
   MessageSquare, NotebookPen, Loader2, Scale, Camera, Clock, ChefHat, 
   Sparkles, LineChart, Dumbbell, ClipboardList, GlassWater, Target, 
   CalendarDays, ShoppingCart, Activity, Eye, EyeOff, CheckSquare, Square, ShieldAlert,
-  RefreshCw, Link2, Copy, Check, Settings, Pill, X, TrendingUp
+  RefreshCw, Link2, Copy, Check, Settings, Pill, X, TrendingUp, FileText
 } from "lucide-react";
 
 /* ===== CONSTANTES Y PRESETS ===== */
@@ -10300,6 +10300,198 @@ function Entreno({
   };
 
   // --- Splits Manual Actions & Helpers ---
+
+  const buildRoutinePDF = (splitKey) => {
+    const allSplits = splits || DEFAULT_SPLITS;
+    const dayObj = allSplits.find(d => d.key === splitKey) || allSplits[0];
+    const dayExs = (exercises || {})[splitKey] || [];
+    const today = new Date().toLocaleDateString("es-ES", {day:"2-digit", month:"long", year:"numeric"});
+
+    // Get last recorded weight/reps for an exercise from exlog
+    const getLastSet = (exName) => {
+      const el = exlog || {};
+      const key = Object.keys(el).find(k => k.toLowerCase() === exName.toLowerCase()) || exName;
+      const sets = (el[key] || []).filter(s => s.type !== "warmup");
+      if (!sets.length) return null;
+      return sets[0]; // already sorted newest first
+    };
+
+    // Suggest working weight: last weight or placeholder
+    const suggestLoad = (exName) => {
+      const s = getLastSet(exName);
+      if (s && s.w) return `${s.w} kg × ${s.reps} reps`;
+      return "— kg × — reps";
+    };
+
+    const TECH_NOTES = {
+      "sentadilla": ["Bracing 360° antes de bajar", "Rodillas siguen la dirección de los pies", "Cadera por debajo del paralelo", "Ascenso explosivo, bajada controlada"],
+      "prensa": ["Espalda baja completamente apoyada durante todo el movimiento", "Empuje a través del talón y mediopié", "No bloquees las rodillas al final", "Pies altos = glúteo; pies bajos = cuádriceps"],
+      "press": ["Core activado, zona lumbar neutra", "Bajada controlada hasta el pecho o clavícula", "Codos a ~45° del torso en press de pecho"],
+      "curl": ["No balancear el torso", "Supinación completa en el tope", "Bajada excéntrica lenta (2–3 seg)"],
+      "dominad": ["Escápulas deprimidas antes de jalar", "Codos hacia las caderas en el descenso", "Rango completo: extensión hasta casi colgar"],
+      "remo": ["Espalda recta, bisagra de cadera", "Jalar hasta el abdomen bajo, codos pegados al cuerpo", "Squeeze (apriete) 1 seg en el tope"],
+      "extensión": ["Eje de la máquina alineado con la rodilla", "Mantener 1 seg con cuádricep contraído", "Bajada lenta: 2–3 seg"],
+      "elevacion": ["Sin balanceo de torso ni impulso", "Sube solo hasta altura del hombro", "Bajada excéntrica lenta (2 seg)"],
+      "face pull": ["Cuerda separada al llegar a la cara", "Rotación externa al final", "Codos a altura de hombros o más"],
+      "búlgara": ["Pie trasero en banco (empeine)", "Rodilla delantera no sobrepasa el pie", "Torso ligeramente inclinado = más cuádriceps"],
+      "zancada": ["Paso largo, rodilla trasera casi toca el suelo", "Torso erguido", "Empuje con el talón del pie delantero"],
+      "hip thrust": ["Escápulas sobre el banco", "Empuje de cadera hasta extensión completa", "Squeeze de glúteo 1 seg en el tope"],
+      "peso muerto": ["Barra sobre el mediopié", "Caderas y hombros suben al mismo ritmo", "Espalda neutral durante todo el movimiento"],
+      "aperturas": ["Codo ligeramente flexionado fijo", "Hasta sentir estiramiento en pectoral", "Cierre con pecho, no con brazos"],
+    };
+
+    const getTechNotes = (exName) => {
+      const low = exName.toLowerCase();
+      for (const [key, notes] of Object.entries(TECH_NOTES)) {
+        if (low.includes(key)) return notes;
+      }
+      return ["Mantener técnica estricta durante toda la serie", "Excéntrico controlado (2–3 seg)", "RIR objetivo: 1–2 en series de trabajo"];
+    };
+
+    const exRows = dayExs.map((ex, i) => {
+      const last = getLastSet(ex.name);
+      const lastW = last ? parseFloat(last.w) : null;
+      const lastR = last ? parseInt(last.reps) : null;
+      const w1 = lastW || 0;
+      const w2 = w1 ? (w1 * 1.05).toFixed(1) : "—";
+      const warmW1 = w1 ? Math.round(w1 * 0.5) : "—";
+      const warmW2 = w1 ? Math.round(w1 * 0.7) : "—";
+      const techs = getTechNotes(ex.name);
+      const muscStr = (ex.musculos || []).slice(0, 4).join(", ") || "—";
+      return `
+        <div class="ex-card">
+          <div class="ex-header">
+            <span class="ex-num">${i + 1}</span>
+            <div class="ex-title">
+              <div class="ex-name">${ex.name}</div>
+              <div class="ex-muscles">${muscStr}</div>
+            </div>
+            <div class="ex-last">${last ? `Último: <strong>${last.w}kg×${last.reps}</strong>` : "Sin historial"}</div>
+          </div>
+          <div class="ex-body">
+            <div class="sets-block">
+              <div class="block-title">SERIES Y CARGAS</div>
+              <table>
+                <thead><tr><th>Tipo</th><th>Carga</th><th>Reps</th><th>Intensidad</th></tr></thead>
+                <tbody>
+                  <tr class="row-warm"><td>Calent. 1</td><td>${warmW1} kg</td><td>8–10</td><td>Técnica</td></tr>
+                  <tr class="row-warm"><td>Calent. 2</td><td>${warmW2} kg</td><td>5</td><td>Aprox.</td></tr>
+                  <tr class="row-work"><td>Trabajo 1</td><td><strong>${w1 || "—"} kg</strong></td><td>${lastR || "8–10"}</td><td>@RIR 2</td></tr>
+                  <tr class="row-work"><td>Trabajo 2</td><td><strong>${w1 || "—"} kg</strong></td><td>${lastR || "8–10"}</td><td>@RIR 2</td></tr>
+                  <tr class="row-work"><td>Trabajo 3</td><td><strong>${w1 ? Math.round(w1 * 0.95) : "—"} kg</strong></td><td>${lastR || "8–10"}</td><td>@RIR 2</td></tr>
+                </tbody>
+              </table>
+              <div class="prog-hint">Progresión: si 3 series @RIR≥2, sube a <strong>${w2} kg</strong> la próxima sesión</div>
+            </div>
+            <div class="tech-block">
+              <div class="block-title">TÉCNICA CLAVE</div>
+              <ul>${techs.map(t => `<li>${t}</li>`).join("")}</ul>
+            </div>
+          </div>
+        </div>`;
+    }).join("");
+
+    const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<title>Split ${splitKey} — ${dayObj.name}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;color:#111;font-size:10.5pt;line-height:1.5;background:#fff}
+.page{max-width:780px;margin:0 auto;padding:28px 24px 44px}
+.doc-header{border-bottom:3px solid #111;padding-bottom:12px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:flex-end}
+.doc-header h1{font-size:20pt;font-weight:900;letter-spacing:-0.5px;line-height:1.1}
+.doc-header .meta{text-align:right;font-size:9pt;color:#555;line-height:1.8}
+.badge{display:inline-block;background:#111;color:#fff;font-size:8pt;font-weight:700;padding:3px 9px;border-radius:20px}
+.info-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:18px}
+.info-box{border:1.5px solid #ddd;border-radius:7px;padding:9px 12px}
+.info-box .lbl{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:2px}
+.info-box .val{font-size:10.5pt;font-weight:700}
+.ex-card{border:1.5px solid #e5e7eb;border-radius:9px;margin-bottom:12px;overflow:hidden;page-break-inside:avoid}
+.ex-header{background:#f3f4f6;padding:9px 12px;border-bottom:1.5px solid #e5e7eb;display:flex;align-items:center;gap:10px}
+.ex-num{background:#111;color:#fff;font-size:10pt;font-weight:800;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.ex-title{flex:1}
+.ex-name{font-size:11.5pt;font-weight:800}
+.ex-muscles{font-size:8.5pt;color:#6b7280;margin-top:1px}
+.ex-last{font-size:9pt;color:#555;white-space:nowrap}
+.ex-body{padding:11px 12px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.block-title{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:7px}
+table{width:100%;border-collapse:collapse;font-size:9.5pt}
+th{text-align:left;font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#6b7280;border-bottom:1.5px solid #e5e7eb;padding:3px 5px}
+td{padding:4px 5px;border-bottom:1px solid #f3f4f6}
+tr:last-child td{border-bottom:none}
+.row-warm td{color:#d97706}
+.row-work td{color:#1d4ed8}
+.row-work td:nth-child(2){font-weight:700;color:#111}
+.prog-hint{margin-top:7px;background:#eff6ff;border-left:3px solid #3b82f6;border-radius:0 5px 5px 0;padding:5px 9px;font-size:9pt;color:#1e40af}
+.tech-block ul{list-style:none}
+.tech-block ul li{font-size:9.5pt;padding:3px 0 3px 13px;position:relative;color:#374151;border-bottom:1px solid #f9fafb}
+.tech-block ul li::before{content:"→";position:absolute;left:0;color:#9ca3af}
+.legend{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:20px;page-break-inside:avoid}
+.leg-box{border:1.5px solid #e5e7eb;border-radius:7px;padding:9px 12px}
+.leg-box h4{font-size:8pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:7px}
+.leg-box ul{list-style:none}
+.leg-box ul li{font-size:9pt;padding:2px 0;display:flex;gap:8px}
+.leg-box ul li strong{min-width:52px;color:#1d4ed8}
+.footer{margin-top:28px;padding-top:10px;border-top:1.5px solid #e5e7eb;display:flex;justify-content:space-between;font-size:8pt;color:#9ca3af}
+.print-btn{position:fixed;top:14px;right:14px;background:#111;color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:11pt;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+@media print{.print-btn{display:none}@page{size:A4;margin:14mm 14mm 18mm 14mm}}
+</style>
+</head>
+<body>
+<button class="print-btn" onclick="window.print()">🖨 Guardar PDF</button>
+<div class="page">
+  <div class="doc-header">
+    <div>
+      <h1>Split ${splitKey} — ${dayObj.name.toUpperCase()}</h1>
+      <div style="font-size:10pt;color:#555;margin-top:4px">Plan detallado · Técnica + Progresión de cargas</div>
+    </div>
+    <div class="meta">
+      <div><span class="badge">Bruno Hazleby</span></div>
+      <div style="margin-top:6px">Generado: ${today}</div>
+      <div>Ejercicios: <strong>${dayExs.length}</strong></div>
+    </div>
+  </div>
+  <div class="info-row">
+    <div class="info-box"><div class="lbl">Enfoque calórico</div><div class="val">${dayObj.fuel || "—"}</div></div>
+    <div class="info-box"><div class="lbl">Descanso compuestos</div><div class="val">3–4 minutos</div></div>
+    <div class="info-box"><div class="lbl">Descanso aislamiento</div><div class="val">90 seg – 2 min</div></div>
+  </div>
+  ${exRows || '<p style="color:#888;text-align:center;padding:20px">No hay ejercicios registrados en este split.</p>'}
+  <div class="legend">
+    <div class="leg-box">
+      <h4>RIR — Repeticiones en Reserva</h4>
+      <ul>
+        <li><strong>@RIR 0</strong> Fallo total — no puedes más</li>
+        <li><strong>@RIR 1</strong> Podrías hacer 1 rep más</li>
+        <li><strong>@RIR 2</strong> Podrías hacer 2 reps más (objetivo)</li>
+        <li><strong>@RIR 3+</strong> Calentamiento / técnica</li>
+      </ul>
+    </div>
+    <div class="leg-box">
+      <h4>Cuándo bajar la carga ese día</h4>
+      <ul>
+        <li><strong>Técnica</strong> Si la forma se rompe</li>
+        <li><strong>Dolor</strong> Dolor articular (no quemazón)</li>
+        <li><strong>Sueño</strong> Menos de 6 h la noche anterior</li>
+        <li><strong>Fatiga</strong> Sesiones acumuladas sin descanso</li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer">
+    <span>Bruno Fit · Plan generado automáticamente</span>
+    <span>Split ${splitKey} — ${dayObj.name}</span>
+    <span>${today}</span>
+  </div>
+</div>
+</body>
+</html>`;
+
+    const win = window.open("", "_blank");
+    if (win) { win.document.write(html); win.document.close(); }
+  };
+
   const startEditSplits = () => {
     const baseSplits = (splits || DEFAULT_SPLITS).map(s => ({ ...s, ex: [...(s.ex || []), ...(exercises[s.key] || []).map(e => e.name)] }));
     // Deduplicate ex per split
@@ -11418,27 +11610,49 @@ function Entreno({
             {d.key}
           </button>
         ))}
-        <button
-          onClick={startEditSplits}
-          style={{
-            marginLeft:"auto",
-            padding:"6px 12px",
-            height:36,
-            borderRadius:10,
-            background: C.panel2,
-            border: `1px solid ${C.line}`,
-            color: C.lime,
-            fontSize:11.5,
-            fontWeight:800,
-            cursor:"pointer",
-            display:"flex",
-            alignItems:"center",
-            gap:4
-          }}
-        >
-          <Settings size={12}/>
-          <span>Editar Splits</span>
-        </button>
+        <div style={{marginLeft:"auto", display:"flex", gap:6}}>
+          <button
+            onClick={() => buildRoutinePDF(sel)}
+            title="Generar PDF imprimible de este split"
+            style={{
+              padding:"6px 11px",
+              height:36,
+              borderRadius:10,
+              background: C.panel2,
+              border: `1px solid ${C.line}`,
+              color: C.muted,
+              fontSize:11.5,
+              fontWeight:800,
+              cursor:"pointer",
+              display:"flex",
+              alignItems:"center",
+              gap:4
+            }}
+          >
+            <FileText size={12}/>
+            <span>PDF</span>
+          </button>
+          <button
+            onClick={startEditSplits}
+            style={{
+              padding:"6px 12px",
+              height:36,
+              borderRadius:10,
+              background: C.panel2,
+              border: `1px solid ${C.line}`,
+              color: C.lime,
+              fontSize:11.5,
+              fontWeight:800,
+              cursor:"pointer",
+              display:"flex",
+              alignItems:"center",
+              gap:4
+            }}
+          >
+            <Settings size={12}/>
+            <span>Editar Splits</span>
+          </button>
+        </div>
       </div>
 
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
