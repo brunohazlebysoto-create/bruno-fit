@@ -1,4 +1,4 @@
-const APP_VERSION = "v2025.06.20-W";
+const APP_VERSION = "v2026.06.23-W";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
