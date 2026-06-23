@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W";
+const APP_VERSION = "v2026.06.23-W2";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -12126,46 +12126,90 @@ tr:last-child td{border-bottom:none}
                 </div>
 
                 {/* Agregar series */}
-                <div style={{display:"flex", gap:4, marginBottom:8, width:"100%"}}>
-                  <input 
-                    value={w} 
-                    onChange={e => setW(e.target.value)} 
-                    type="number" 
-                    inputMode="decimal" 
-                    className="ph" 
-                    placeholder="kg" 
-                    style={{flex:1.2, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
-                  />
-                  <input 
-                    value={reps} 
-                    onChange={e => setReps(e.target.value)} 
-                    className="ph" 
-                    placeholder="reps" 
-                    style={{flex:1, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
-                  />
-                  <select 
-                    value={rir} 
-                    onChange={e => setRir(e.target.value)} 
-                    style={{width:54, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center", cursor:"pointer"}}
-                  >
-                    <option value="-">RIR</option>
-                    <option value="0">RIR 0</option>
-                    <option value="1">RIR 1</option>
-                    <option value="2">RIR 2</option>
-                    <option value="3">RIR 3</option>
-                    <option value="4">RIR 4+</option>
-                  </select>
-                  <input 
-                    value={setsCount} 
-                    onChange={e => setSetsCount(e.target.value)} 
-                    type="number"
-                    inputMode="numeric"
-                    className="ph" 
-                    placeholder="ser." 
-                    style={{width:44, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center"}}
-                  />
-                  <button onClick={() => addSet(ex.name)} style={{width:36, height:35, borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", fontSize:18, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center"}}>＋</button>
-                </div>
+                {setType === "dropset" ? (
+                  <div style={{marginBottom:8}}>
+                    {dropRows.map((row, idx) => (
+                      <div key={idx} style={{display:"flex", gap:4, alignItems:"center", marginBottom:5}}>
+                        <span style={{width:18, fontSize:13, color:C.rose, textAlign:"center", flexShrink:0, fontWeight:700}}>
+                          {idx === 0 ? "1°" : "↘"}
+                        </span>
+                        <input
+                          value={row.w}
+                          onChange={e => { const n2=[...dropRows]; n2[idx]={...n2[idx],w:e.target.value}; setDropRows(n2); }}
+                          type="number" inputMode="decimal" className="ph"
+                          placeholder="kg"
+                          style={{flex:1.2, minWidth:0, background:C.panel2, border:`1px solid rgba(255,107,152,0.4)`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
+                        />
+                        <input
+                          value={row.reps}
+                          onChange={e => { const n2=[...dropRows]; n2[idx]={...n2[idx],reps:e.target.value}; setDropRows(n2); }}
+                          className="ph" placeholder="reps"
+                          style={{flex:1, minWidth:0, background:C.panel2, border:`1px solid rgba(255,107,152,0.4)`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
+                        />
+                        {idx > 0 && (
+                          <button
+                            onClick={() => setDropRows(prev => prev.filter((_,i) => i !== idx))}
+                            style={{width:26, height:34, border:"none", background:"transparent", color:C.rose, cursor:"pointer", fontSize:17, padding:0, flexShrink:0}}
+                          >×</button>
+                        )}
+                      </div>
+                    ))}
+                    <div style={{display:"flex", gap:4, alignItems:"center", marginTop:2}}>
+                      <button
+                        onClick={() => setDropRows(prev => [...prev, {w:"", reps:""}])}
+                        style={{flex:1, height:32, borderRadius:8, border:`1px dashed rgba(255,107,152,0.5)`, background:"transparent", color:C.rose, cursor:"pointer", fontSize:11, fontWeight:700}}
+                      >+ drop</button>
+                      <input
+                        value={setsCount}
+                        onChange={e => setSetsCount(e.target.value)}
+                        type="number" inputMode="numeric" className="ph"
+                        placeholder="rond."
+                        title="Cuántas veces repetir este drop set"
+                        style={{width:52, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 4px", color:C.ink, fontSize:13, outline:"none", textAlign:"center"}}
+                      />
+                      <button onClick={() => addSet(ex.name)} style={{width:36, height:34, borderRadius:9, border:"none", background:C.rose, color:"#fff", cursor:"pointer", fontSize:18, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center"}}>＋</button>
+                    </div>
+                    <div style={{fontSize:9.5, color:C.muted, marginTop:4}}>
+                      {dropRows.length} pesos · {parseInt(setsCount)||1} ronda{(parseInt(setsCount)||1)>1?"s":""}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{display:"flex", gap:4, marginBottom:8, width:"100%"}}>
+                    <input
+                      value={w}
+                      onChange={e => setW(e.target.value)}
+                      type="number" inputMode="decimal" className="ph"
+                      placeholder="kg"
+                      style={{flex:1.2, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
+                    />
+                    <input
+                      value={reps}
+                      onChange={e => setReps(e.target.value)}
+                      className="ph" placeholder="reps"
+                      style={{flex:1, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
+                    />
+                    <select
+                      value={rir}
+                      onChange={e => setRir(e.target.value)}
+                      style={{width:54, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center", cursor:"pointer"}}
+                    >
+                      <option value="-">RIR</option>
+                      <option value="0">RIR 0</option>
+                      <option value="1">RIR 1</option>
+                      <option value="2">RIR 2</option>
+                      <option value="3">RIR 3</option>
+                      <option value="4">RIR 4+</option>
+                    </select>
+                    <input
+                      value={setsCount}
+                      onChange={e => setSetsCount(e.target.value)}
+                      type="number" inputMode="numeric" className="ph"
+                      placeholder="ser."
+                      style={{width:44, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center"}}
+                    />
+                    <button onClick={() => addSet(ex.name)} style={{width:36, height:35, borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", fontSize:18, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center"}}>＋</button>
+                  </div>
+                )}
 
                 <Chart entries={cd}/>
 
@@ -12186,12 +12230,31 @@ tr:last-child td{border-bottom:none}
                 {(exlog[findExlogKey(ex.name)] || []).map((s, i) => (
                   <div key={i} style={{display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${C.line}`, opacity: s.type === "warmup" ? 0.6 : 1}}>
                     <span style={{fontSize:12.5, color:C.muted, minWidth:54}}>{fdate(s.date)}</span>
-                    <span style={{fontSize:13.5, fontWeight:600}}>{s.w} kg</span>
-                    <span style={{fontSize:13, color:C.muted}}>
-                      × {s.reps}
-                      {s.rir !== undefined && s.rir !== null ? ` @RIR ${s.rir}` : ""}
-                    </span>
-                    {(() => {
+                    {s.drops?.length > 1 ? (
+                      <div style={{flex:1, minWidth:0}}>
+                        <div style={{fontSize:13, fontWeight:600, lineHeight:1.3}}>
+                          {s.drops.map((d,di) => (
+                            <React.Fragment key={di}>
+                              {di > 0 && <span style={{color:C.rose, fontWeight:400, margin:"0 1px"}}>↘</span>}
+                              {d.w}kg
+                            </React.Fragment>
+                          ))}
+                          <span style={{color:C.muted, fontWeight:400}}> × {s.drops.map(d=>d.reps).join("/")}</span>
+                        </div>
+                        <div style={{fontSize:10.5, color:C.cyan, marginTop:1}}>
+                          Vol: {s.drops.reduce((acc,d) => acc+(parseFloat(d.w)||0)*(parseInt(d.reps)||0), 0).toFixed(0)} kg · 1RM≈{Math.round((parseFloat(s.drops[0].w)||0)*(1+(parseInt(s.drops[0].reps)||0)/30))} kg
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <span style={{fontSize:13.5, fontWeight:600}}>{s.w} kg</span>
+                        <span style={{fontSize:13, color:C.muted}}>
+                          × {s.reps}
+                          {s.rir !== undefined && s.rir !== null ? ` @RIR ${s.rir}` : ""}
+                        </span>
+                      </>
+                    )}
+                    {!s.drops?.length && (() => {
                       const repsNum = parseInt(s.reps);
                       const rirNum = (s.rir !== undefined && s.rir !== null && !isNaN(parseInt(s.rir))) ? parseInt(s.rir) : 0;
                       if (!isNaN(s.w) && !isNaN(repsNum) && repsNum > 0) {
