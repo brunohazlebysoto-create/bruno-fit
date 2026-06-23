@@ -10388,6 +10388,7 @@ function Entreno({
           allSets.forEach(s => { const d = (s.date||"").slice(0,10); (byDate[d] = byDate[d]||[]).push(s); });
           const dates = Object.keys(byDate).sort().reverse();
           const best1RM = Math.max(...allSets.map(s => epley(s.w, s.reps)));
+          const bestWeight = Math.max(...allSets.map(s => parseFloat(s.w)));
           const last3W = dates.slice(0,3).map(d => Math.max(...byDate[d].map(s => parseFloat(s.w))));
           const prev3W = dates.slice(3,6).map(d => Math.max(...byDate[d].map(s => parseFloat(s.w))));
           const avgL = last3W.reduce((a,b)=>a+b,0)/(last3W.length||1);
@@ -10396,14 +10397,20 @@ function Entreno({
           const trend = prev3W.length === 0 ? "NUEVO" : delta > 2 ? "SUBIENDO" : delta < -2 ? "BAJANDO" : "MESETA";
           const isPlat = last3W.length >= 3 && (Math.max(...last3W) - Math.min(...last3W)) <= 2.5;
           const muscles = (allExMap[name]?.musculos || []).slice(0,3).join(", ") || "—";
-          const sessions = dates.slice(0,5).map(d => {
+          // Last session detail
+          const lastDate = dates[0];
+          const lastSets = byDate[lastDate] || [];
+          const lastMaxW = lastSets.length ? Math.max(...lastSets.map(s => parseFloat(s.w))) : 0;
+          const lastAvgR = lastSets.length ? Math.round(lastSets.reduce((a,s)=>a+parseInt(s.reps),0)/lastSets.length) : 0;
+          // All sessions (up to 12) for full trend visibility
+          const sessions = dates.slice(0,12).map(d => {
             const sets = byDate[d];
             const maxW = Math.max(...sets.map(s => parseFloat(s.w)));
             const avgR = Math.round(sets.reduce((a,s)=>a+parseInt(s.reps),0)/sets.length);
-            return `${d.slice(5)}: ${maxW}kg×${avgR}r(${sets.length}s)`;
+            return `${d}: ${maxW}kg×${avgR}r(${sets.length}s)`;
           }).join(" | ");
-          historyLines.push(`**${name}** [Músculos: ${muscles}] [1RM≈${best1RM.toFixed(0)}kg] [${trend}${isPlat?" ⚠ESTANCADO":""}] [${dates.length} sesiones]`);
-          historyLines.push(`  ${sessions}`);
+          historyLines.push(`**${name}** [Músculos: ${muscles}] [1RM≈${best1RM.toFixed(0)}kg] [MejorPeso: ${bestWeight}kg] [ÚltimaSesión: ${lastDate} → ${lastMaxW}kg×${lastAvgR}r×${lastSets.length}s] [${trend}${isPlat?" ⚠ESTANCADO":""}] [Total: ${dates.length} sesiones]`);
+          historyLines.push(`  Historial completo: ${sessions}`);
         }
       }
 
@@ -10443,27 +10450,37 @@ function Entreno({
         required: ["muscleGroups","sessionNotes","estimatedDuration"]
       };
 
-      const sysPrompt = `Eres un coach de fuerza e hipertrofia experto con 15 años de experiencia. Analizas el historial de entrenamiento real de un atleta y creas planes de sesión precisos, estratégicos y basados en datos. Respondes siempre en español.`;
+      const sysPrompt = `Eres un coach de fuerza e hipertrofia experto con 15 años de experiencia. Tu trabajo es analizar el historial COMPLETO de entrenamiento y diseñar la PRÓXIMA sesión óptima — no repetir la última. Piensas en progresión, selección estratégica y periodización. Respondes siempre en español.`;
 
-      const userMsg = `Analiza el historial de entrenamiento de Bruno y crea un plan completo de sesión para el Split ${splitKey} (${dayObj.name}).
+      const userMsg = `Analiza el historial COMPLETO de Bruno y diseña la PRÓXIMA sesión para Split ${splitKey} (${dayObj.name}).
 
-REGLAS:
-- Selecciona EXACTAMENTE 3-4 ejercicios por grupo muscular usando SOLO ejercicios que estén en el historial
-- Ordena: compuestos multi-articulares primero, aislamientos después
-- Proporciona cargas ESPECÍFICAS en kg basadas en el historial real (no rangos genéricos)
-- Para MESETA: propone ajuste concreto (+2.5kg, cambiar rango de reps, o variación)
-- Para SUBIENDO: propone la siguiente carga lógica con progresión
-- Para BAJANDO: carga conservadora, reduce volumen a 2-3 series
-- Calentamiento: 3 series al 40%, 60% y 75% de la carga de trabajo
-- 3-4 puntos de técnica clave por ejercicio (concisos, accionables)
-- coachRationale: 1 oración explicando por qué este ejercicio en este orden
-- progressionHint: cuándo y cuánto subir la carga la próxima sesión
-- sessionNotes: 2-3 oraciones con el enfoque estratégico de esta sesión
+⚠ IMPORTANTE — ESTO ES LA PRÓXIMA SESIÓN, NO UNA COPIA DEL ÚLTIMO DÍA:
+- Cada ejercicio tiene "ÚltimaSesión" con la fecha y carga exacta del último entrenamiento
+- Los pesos que propongas DEBEN ser la PROGRESIÓN de esa última sesión, NO los mismos
+- Si SUBIENDO → +2.5kg o +5kg según el ritmo de progresión que muestra el historial completo
+- Si MESETA → misma carga pero +1 rep por serie, o cambio de esquema (ej: 4×8 → 3×12)
+- Si BAJANDO → baja 5% la carga y consolida técnica
+- Si NUEVO → comienza con 60% del 1RM estimado
 
-HISTORIAL:
+REGLAS DE SELECCIÓN:
+- Elige EXACTAMENTE 3-4 ejercicios por grupo muscular del historial
+- Prioriza ejercicios con más sesiones totales (más datos = mejor análisis)
+- Incluye al menos 1 compuesto pesado (mayor 1RM) por grupo
+- Ordena: compuesto multi-articular → compuesto secundario → aislamiento
+- Si hay estancamiento en un ejercicio, rótalos por una variación del historial
+
+FORMATO DE CADA EJERCICIO:
+- workSets: 3-4 series con el peso PROGRESADO (no la última sesión exacta)
+- warmupSets: 3 series al 40%, 60%, 75% del peso de trabajo
+- techniqueNotes: 3-4 puntos concisos y accionables
+- coachRationale: por qué este ejercicio hoy y en este orden
+- progressionHint: cuándo y cuánto aumentar la próxima vez
+
+HISTORIAL COMPLETO (analiza TODAS las fechas para detectar tendencia real):
 ${historyLines.join("\n")}
 
-Grupos a trabajar hoy: ${targetBPs.join(", ")}`;
+Grupos musculares de hoy: ${targetBPs.join(", ")}
+sessionNotes: resume la estrategia de esta sesión en 2-3 oraciones (menciona la progresión planificada vs última sesión)`;
 
       const raw = await callGemini([{ role:"user", content:userMsg }], sysPrompt, ROUTINE_SCHEMA);
       const plan = cleanAndParseJSON(typeof raw === "string" ? raw : JSON.stringify(raw));
