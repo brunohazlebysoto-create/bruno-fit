@@ -10304,136 +10304,214 @@ function Entreno({
   const buildRoutinePDF = (splitKey) => {
     const allSplits = splits || DEFAULT_SPLITS;
     const dayObj = allSplits.find(d => d.key === splitKey) || allSplits[0];
-    const dayExs = (exercises || {})[splitKey] || [];
     const today = new Date().toLocaleDateString("es-ES", {day:"2-digit", month:"long", year:"numeric"});
     const round25 = (w) => Math.round(w / 2.5) * 2.5;
     const epley = (w, r) => parseFloat(w) * (1 + parseInt(r) / 30);
 
-    // Full exercise history analysis
+    // ── Exercise metadata from all splits ──
+    const allExMap = {};
+    Object.values(exercises || {}).flat().forEach(ex => { if (ex?.name) allExMap[ex.name] = ex; });
+
+    // ── Compound detection ──
+    const COMPOUND_KW = ["sentadilla","prensa","peso muerto","press","remo","dominad","jalón","jalon","fondos","hip thrust","estocada","zancada","búlgara","bulgar","rack","hack","sumo"];
+    const isCompound = (name) => {
+      const low = name.toLowerCase();
+      if (COMPOUND_KW.some(k => low.includes(k))) return true;
+      const ex = allExMap[name];
+      return !!(ex?.musculos?.length >= 3);
+    };
+
+    // ── Muscle → body part normalization ──
+    const MUSCLE_MAP = [
+      [["pectoral","pec"], "Pecho"],
+      [["deltoid","hombro","deltoide"], "Hombros"],
+      [["dorsal","trapecio","romboides","lumbar","espalda"], "Espalda"],
+      [["cuádricep","cuadricep","femoral","isquio","tibial"], "Pierna"],
+      [["glúteo","gluteo"], "Glúteo"],
+      [["gemelo","gastrocnemio","sóleo","soleo"], "Gemelos"],
+      [["bíceps","bicep","braquial"], "Bíceps"],
+      [["tríceps","tricep"], "Tríceps"],
+      [["abdominal","oblicuo"], "Core"],
+    ];
+    const toBodyPart = (m) => {
+      const low = (m || "").toLowerCase();
+      for (const [keys, bp] of MUSCLE_MAP) { if (keys.some(k => low.includes(k))) return bp; }
+      return null;
+    };
+
+    // ── Identify target body parts for this split ──
+    const assignedExs = (exercises || {})[splitKey] || [];
+    const bpSet = new Set();
+    assignedExs.forEach(ex => (ex.musculos || []).slice(0, 2).forEach(m => { const bp = toBodyPart(m); if (bp) bpSet.add(bp); }));
+    if (bpSet.size === 0) {
+      const n = (dayObj.name || "").toLowerCase();
+      if (n.includes("pecho") || n.includes("pectoral")) bpSet.add("Pecho");
+      if (n.includes("hombro") || n.includes("deltoid")) bpSet.add("Hombros");
+      if (n.includes("espalda") || n.includes("dorsal")) bpSet.add("Espalda");
+      if (n.includes("pierna") || n.includes("cuádricep") || n.includes("quad")) bpSet.add("Pierna");
+      if (n.includes("glúteo") || n.includes("gluteo")) bpSet.add("Glúteo");
+      if (n.includes("bíceps") || n.includes("bicep")) bpSet.add("Bíceps");
+      if (n.includes("tríceps") || n.includes("tricep")) bpSet.add("Tríceps");
+    }
+    const targetBPs = [...bpSet];
+
+    // ── Full analysis for one exercise ──
     const analyzeEx = (exName) => {
       const el = exlog || {};
       const key = Object.keys(el).find(k => k.toLowerCase() === exName.toLowerCase()) || exName;
       const allSets = (el[key] || []).filter(s => s.type !== "warmup" && s.w && s.reps && parseFloat(s.w) > 0);
       if (!allSets.length) return null;
-
-      // Group by session date
       const byDate = {};
-      for (const s of allSets) {
-        const d = (s.date || "").slice(0, 10);
-        if (!byDate[d]) byDate[d] = [];
-        byDate[d].push(s);
-      }
-      const sessionDates = Object.keys(byDate).sort().reverse(); // newest first
-
-      // Per-session: best 1RM and max weight
-      const sessionStats = sessionDates.map(d => {
+      allSets.forEach(s => { const d = (s.date||"").slice(0,10); (byDate[d] = byDate[d]||[]).push(s); });
+      const dates = Object.keys(byDate).sort().reverse();
+      const stats = dates.map(d => {
         const sets = byDate[d];
-        const best1RM = Math.max(...sets.map(s => epley(s.w, s.reps)));
-        const maxW = Math.max(...sets.map(s => parseFloat(s.w)));
-        const avgReps = Math.round(sets.reduce((a, s) => a + parseInt(s.reps), 0) / sets.length);
-        return { date: d, best1RM, maxW, avgReps, setCount: sets.length };
+        return {
+          maxW: Math.max(...sets.map(s => parseFloat(s.w))),
+          best1RM: Math.max(...sets.map(s => epley(s.w, s.reps))),
+          avgReps: Math.round(sets.reduce((a,s) => a + parseInt(s.reps), 0) / sets.length),
+          setCount: sets.length
+        };
+      });
+      const best1RM = Math.max(...stats.map(s => s.best1RM));
+      const last3W = stats.slice(0,3).map(s => s.maxW);
+      const prev3W = stats.slice(3,6).map(s => s.maxW);
+      const avgL = last3W.reduce((a,b)=>a+b,0) / (last3W.length||1);
+      const avgP = prev3W.length ? prev3W.reduce((a,b)=>a+b,0)/prev3W.length : avgL;
+      const delta = avgL - avgP;
+      const trendBadge = prev3W.length === 0 ? "nuevo" : delta > 2 ? "up" : delta < -2 ? "down" : "flat";
+      const trendTxt = prev3W.length === 0 ? "Primer registro" : delta > 2 ? `↑ +${delta.toFixed(1)} kg` : delta < -2 ? `↓ ${delta.toFixed(1)} kg` : `→ Meseta (±${Math.abs(delta).toFixed(1)} kg)`;
+      const isPlateaued = last3W.length >= 3 && (Math.max(...last3W) - Math.min(...last3W)) <= 2.5;
+      const lastMaxW = stats[0]?.maxW || 0;
+      const lastAvgReps = stats[0]?.avgReps || 8;
+      const cutoff = Date.now() - 28*86400000;
+      const setsPerWeek = +(allSets.filter(s => new Date(s.date).getTime() > cutoff).length / 4).toFixed(1);
+      const baseW = isPlateaued ? round25(lastMaxW * 1.025) : lastMaxW;
+      const cmpd = isCompound(exName);
+      const targetReps = cmpd ? Math.min(Math.max(lastAvgReps, 4), 8) : Math.max(lastAvgReps, 10);
+      // Score: more sessions + better trend = higher priority
+      const score = dates.length * (trendBadge === "up" ? 1.3 : trendBadge === "flat" ? 1.0 : 0.8);
+      let assessment;
+      if (!prev3W.length) assessment = `${dates.length} sesión(es). Establece técnica y carga base.`;
+      else if (isPlateaued) assessment = `⚠ Estancado ~${lastMaxW} kg. Plan: +2.5 kg esta sesión. Si no avanza, variar rango.`;
+      else if (trendBadge === "up") assessment = `✓ Progresando. 1RM estimado: ${best1RM.toFixed(0)} kg. Continuar escalando.`;
+      else if (trendBadge === "down") assessment = `↓ Carga bajando. Reducir a 2 series y re-evaluar recuperación.`;
+      else assessment = `Meseta leve. 1RM est: ${best1RM.toFixed(0)} kg. Cambiar rep range próxima sesión.`;
+      return {
+        best1RM, lastMaxW, lastAvgReps: targetReps, trendBadge, trendTxt, isPlateaued,
+        setsPerWeek, sessionCount: dates.length, baseW,
+        warmW1: round25(baseW*0.40), warmW2: round25(baseW*0.60), warmW3: round25(baseW*0.78),
+        todaySets: [
+          { tipo:"Trabajo 1", w:baseW, reps:targetReps, rir:"RIR 2", note: isPlateaued ? "+2.5% respecto último" : "Carga objetivo" },
+          { tipo:"Trabajo 2", w:baseW, reps:targetReps, rir:"RIR 2", note:"" },
+          { tipo:"Trabajo 3", w:baseW, reps:targetReps, rir:"RIR 1–2", note:"" },
+          { tipo:"Backoff",   w:round25(baseW*0.92), reps:targetReps+2, rir:"RIR 3", note:"Opcional si fatiga alta" },
+        ],
+        assessment, score, compound: cmpd
+      };
+    };
+
+    // ── Technique notes lookup ──
+    const TECH = {
+      "sentadilla":  ["Bracing 360° antes de bajar","Rodillas siguen la punta del pie","Cadera bajo el paralelo","Ascenso explosivo"],
+      "prensa":      ["Espalda baja apoyada todo el movimiento","Empuje desde talón","No bloquear rodillas","Pies altos = glúteo / bajos = cuádriceps"],
+      "press":       ["Core activado, lumbar neutra","Bajada controlada hasta pecho/clavícula","Codos ~45° (pecho) o verticales (hombro)","Sin rebotar la barra"],
+      "peso muerto": ["Barra sobre el mediopié","Caderas y hombros suben al mismo ritmo","Espalda neutral en todo el movimiento","Empuja el suelo, no jales la barra"],
+      "dominad":     ["Escápulas deprimidas antes de jalar","Codos hacia caderas en el descenso","Rango completo — extensión total abajo"],
+      "jalón":       ["Jalar hasta la clavícula","Torso ligeramente inclinado atrás","Escápulas bajas al llegar al pecho"],
+      "remo":        ["Espalda recta, bisagra de cadera","Jalar al abdomen bajo, codos pegados","Squeeze 1 seg en el tope"],
+      "hip thrust":  ["Escápulas sobre el banco","Extensión completa de cadera arriba","Squeeze glúteo 1 seg","Barbilla al pecho"],
+      "búlgara":     ["Pie trasero en banco (empeine)","Rodilla delantera no supera el pie","Torso inclinado = cuádriceps / recto = glúteo"],
+      "zancada":     ["Paso largo, rodilla trasera casi al suelo","Torso erguido","Empuje con el talón delantero"],
+      "extensión":   ["Eje de máquina alineado con la rodilla","Contracción 1 seg arriba","Bajada excéntrica 2–3 seg"],
+      "flexión":     ["Rango completo","Excéntrico 2–3 seg","No hiperextender"],
+      "curl":        ["Sin balanceo de torso","Supinación completa al subir","Excéntrico lento 2–3 seg"],
+      "elevacion":   ["Sin impulso de cadera","Solo hasta altura del hombro","Excéntrico 2 seg","Codo levemente flexionado fijo"],
+      "face pull":   ["Cuerda separada al llegar a la cara","Manos apuntan hacia arriba al final","Codos a altura de hombros o más"],
+      "fondos":      ["Torso inclinado = pecho / vertical = tríceps","Descenso hasta 90° de codo","Sin bloquear codos arriba"],
+      "apertura":    ["Codo levemente flexionado fijo","Hasta sentir estiramiento en pectoral","Cierre con pecho, no con brazos"],
+      "gemelo":      ["Rango completo — talón bajo la plataforma","Pausa 1 seg arriba contraído","Sin rebotar en el fondo"],
+    };
+    const getTech = (name) => {
+      const low = name.toLowerCase();
+      for (const [k, notes] of Object.entries(TECH)) { if (low.includes(k)) return notes; }
+      return ["Técnica estricta toda la serie","Excéntrico controlado 2–3 seg","RIR 1–2 en series de trabajo"];
+    };
+
+    // ── Select exercises per body part (min 3, ideal 4) ──
+    const IDEAL = 4; const MIN = 3;
+    const sessionExs = []; // { exName, analysis, bodyPart, compound }
+
+    for (const bp of targetBPs) {
+      // Pool: all exlog exercises whose primary muscle maps to this body part
+      const candidates = Object.keys(exlog || {})
+        .filter(name => {
+          const ex = allExMap[name];
+          if (!ex?.musculos?.length) return false;
+          return toBodyPart(ex.musculos[0]) === bp;
+        })
+        .map(name => {
+          const a = analyzeEx(name);
+          if (!a) return null;
+          return { exName: name, analysis: a, bodyPart: bp, compound: isCompound(name) };
+        })
+        .filter(Boolean);
+
+      // Sort: compounds first, then by score (sessions × trend)
+      candidates.sort((a, b) => {
+        if (a.compound !== b.compound) return a.compound ? -1 : 1;
+        return b.analysis.score - a.analysis.score;
       });
 
-      const best1RM = Math.max(...sessionStats.map(s => s.best1RM));
+      let picked = candidates.slice(0, IDEAL);
 
-      // Trend: compare avg max weight of last 3 sessions vs prev 3
-      const last3 = sessionStats.slice(0, 3).map(s => s.maxW);
-      const prev3 = sessionStats.slice(3, 6).map(s => s.maxW);
-      const avgLast = last3.reduce((a, b) => a + b, 0) / (last3.length || 1);
-      const avgPrev = prev3.length ? prev3.reduce((a, b) => a + b, 0) / prev3.length : avgLast;
-      const delta = avgLast - avgPrev;
-      let trend, trendBadge;
-      if (prev3.length === 0) { trend = "Primera fase de registro"; trendBadge = "nuevo"; }
-      else if (delta > 2) { trend = `Progresando (+${delta.toFixed(1)} kg vs 3 ses. anteriores)`; trendBadge = "up"; }
-      else if (delta < -2) { trend = `Carga bajando (${delta.toFixed(1)} kg vs 3 ses. anteriores)`; trendBadge = "down"; }
-      else { trend = `Meseta (±${Math.abs(delta).toFixed(1)} kg en últimas 6 sesiones)`; trendBadge = "flat"; }
-
-      // Plateau: same max weight (±2.5 kg) for last 3+ sessions
-      const isPlateaued = last3.length >= 3 && (Math.max(...last3) - Math.min(...last3)) <= 2.5;
-
-      // Sets/week last 28 days
-      const cutoff = Date.now() - 28 * 86400000;
-      const recentSets = allSets.filter(s => new Date(s.date).getTime() > cutoff);
-      const setsPerWeek = +(recentSets.length / 4).toFixed(1);
-
-      // Working weight for plan: last max weight, adjusted if plateaued
-      const lastMaxW = sessionStats[0]?.maxW || 0;
-      const lastAvgReps = sessionStats[0]?.avgReps || 8;
-      const baseW = isPlateaued ? round25(lastMaxW * 1.025) : lastMaxW;
-
-      // Today's session sets
-      const todaySets = [
-        { tipo: "Trabajo 1", w: baseW, reps: isPlateaued ? 5 : (lastAvgReps || 8), rir: "RIR 2", note: isPlateaued ? "+2.5% sobre última carga" : "Carga objetivo" },
-        { tipo: "Trabajo 2", w: baseW, reps: isPlateaued ? 5 : (lastAvgReps || 8), rir: "RIR 2", note: "" },
-        { tipo: "Trabajo 3", w: baseW, reps: isPlateaued ? 5 : (lastAvgReps || 8), rir: "RIR 1–2", note: "" },
-        { tipo: "Backoff", w: round25(baseW * 0.92), reps: (lastAvgReps || 8) + 2, rir: "RIR 3", note: "Si fatiga alta — opcional" },
-      ];
-
-      // Warmup protocol
-      const warmW1 = round25(baseW * 0.40);
-      const warmW2 = round25(baseW * 0.60);
-      const warmW3 = round25(baseW * 0.78);
-
-      // Assessment text
-      let assessment;
-      if (!prev3.length) {
-        assessment = `Datos de ${sessionStats.length} sesión(es). Establece tu base técnica y prioriza consistencia sobre carga.`;
-      } else if (isPlateaued) {
-        assessment = `⚠ Estancado en ~${lastMaxW} kg durante las últimas ${last3.length} sesiones. Plan: micro-progresión +2.5% semanal. Si no avanza en sem 3, insertar semana de deload (−15%) antes de reintentar.`;
-      } else if (trendBadge === "up") {
-        assessment = `✓ Buena progresión. 1RM estimado: ${best1RM.toFixed(1)} kg. Continuar escalando carga con RIR estricto — no forzar si la técnica cede.`;
-      } else if (trendBadge === "down") {
-        assessment = `↓ Carga bajando — posible fatiga acumulada o técnica inconsistente. Reducir a 2 series en sem 1 y re-evaluar.`;
-      } else {
-        assessment = `→ Progresión estabilizada. 1RM estimado: ${best1RM.toFixed(1)} kg. Variar rango de reps para romper la meseta.`;
+      // Pad with assigned exercises if below minimum
+      if (picked.length < MIN) {
+        assignedExs
+          .filter(ex => toBodyPart((ex.musculos||[])[0]) === bp && !picked.find(p => p.exName === ex.name))
+          .slice(0, MIN - picked.length)
+          .forEach(ex => picked.push({ exName: ex.name, analysis: analyzeEx(ex.name), bodyPart: bp, compound: isCompound(ex.name) }));
       }
 
-      return { best1RM, lastMaxW, lastAvgReps, trend, trendBadge, isPlateaued, setsPerWeek, sessionCount: sessionDates.length, todaySets, warmW1, warmW2, warmW3, baseW, assessment };
-    };
+      sessionExs.push(...picked);
+    }
 
-    const TECH_NOTES = {
-      "sentadilla": ["Bracing 360° antes de bajar", "Rodillas siguen la dirección de los pies", "Cadera por debajo del paralelo", "Ascenso explosivo, bajada controlada", "Talones siempre apoyados en el suelo"],
-      "prensa": ["Espalda baja completamente apoyada", "Empuje a través de talón y mediopié", "No bloquees rodillas al final", "Pies altos = más glúteo / pies bajos = más cuádriceps"],
-      "press": ["Core activado, lumbar neutra", "Bajada controlada hasta pecho/clavícula", "Codos ~45° del torso (press pecho) o verticales (press hombro)", "No rebotar la barra"],
-      "curl": ["Sin balanceo de torso ni cadera", "Supinación completa al subir", "Excéntrico lento 2–3 seg", "Codo fijo en todo el recorrido"],
-      "dominad": ["Escápulas deprimidas antes de jalar", "Codos hacia las caderas en el descenso", "Rango completo: extensión completa abajo"],
-      "jalón": ["Jalar hasta la clavícula", "Mantener el torso ligeramente inclinado hacia atrás", "Escápulas bajas al llegar al pecho"],
-      "remo": ["Espalda recta, bisagra de cadera", "Jalar hasta el abdomen bajo, codos pegados", "Squeeze 1 seg en el tope"],
-      "extensión": ["Eje máquina alineado con la rodilla", "Contracción 1 seg en el tope", "Bajada excéntrica 2–3 seg"],
-      "flexión": ["Rodilla alineada con el pie", "Excéntrico 2–3 seg", "Rango completo sin hiperextender"],
-      "elevacion": ["Sin impulso de cadera ni torso", "Hasta altura del hombro, no más", "Excéntrico lento 2 seg", "Codo levemente flexionado fijo"],
-      "face pull": ["Cuerda separada al llegar a la cara", "Rotación externa (manos hacia arriba)", "Codos a altura de hombros o más"],
-      "búlgara": ["Pie trasero en banco (empeine)", "Rodilla delantera no sobrepasa el pie", "Torso inclinado = más cuádriceps / vertical = más glúteo"],
-      "zancada": ["Paso largo, rodilla trasera casi toca el suelo", "Torso erguido", "Empuje con el talón del pie delantero"],
-      "hip thrust": ["Escápulas sobre el banco", "Extensión completa de cadera arriba", "Squeeze de glúteo 1 seg en el tope", "Barbilla al pecho, no echar la cabeza atrás"],
-      "peso muerto": ["Barra sobre el mediopié", "Caderas y hombros suben al mismo ritmo", "Espalda neutral en todo el movimiento", "Empuje el suelo, no jales la barra"],
-      "aperturas": ["Codo ligeramente flexionado fijo", "Hasta sentir estiramiento en pectoral", "Cierre con pecho, no con brazos"],
-      "fondos": ["Torso inclinado adelante = más pectoral / vertical = más tríceps", "Descenso hasta 90° de codo o más", "Sin bloquear completamente los codos arriba"],
-    };
+    // ── Global ordering (coach logic) ──
+    // Within session: larger muscle groups first, compounds before isolations within group
+    const BP_ORDER = { Pierna:0, Glúteo:1, Espalda:2, Pecho:3, Hombros:4, Bíceps:5, Tríceps:6, Gemelos:7, Core:8 };
+    sessionExs.sort((a, b) => {
+      const oa = BP_ORDER[a.bodyPart] ?? 9;
+      const ob = BP_ORDER[b.bodyPart] ?? 9;
+      if (oa !== ob) return oa - ob;
+      if (a.compound !== b.compound) return a.compound ? -1 : 1;
+      return (b.analysis?.score||0) - (a.analysis?.score||0);
+    });
 
-    const getTechNotes = (exName) => {
-      const low = exName.toLowerCase();
-      for (const [key, notes] of Object.entries(TECH_NOTES)) {
-        if (low.includes(key)) return notes;
+    const trendColor = (t) => ({ up:"#15803d", down:"#be123c", flat:"#b45309", nuevo:"#1d4ed8" }[t]||"#555");
+    const trendIcon  = (t) => ({ up:"↑", down:"↓", flat:"→", nuevo:"★" }[t]||"→");
+
+    // ── Build HTML cards ──
+    let exRows = "";
+    let globalIdx = 0;
+    let lastBP = null;
+    for (const { exName, analysis: a, bodyPart, compound } of sessionExs) {
+      globalIdx++;
+      if (bodyPart !== lastBP) {
+        exRows += `<div class="bp-header">${bodyPart.toUpperCase()}</div>`;
+        lastBP = bodyPart;
       }
-      return ["Mantener técnica estricta en todas las series", "Excéntrico controlado 2–3 seg", "RIR objetivo 1–2 en series de trabajo", "Parar si hay dolor articular"];
-    };
-
-    const trendIcon = (badge) => ({ up: "↑", down: "↓", flat: "→", nuevo: "★" }[badge] || "→");
-    const trendColor = (badge) => ({ up: "#15803d", down: "#be123c", flat: "#b45309", nuevo: "#1d4ed8" }[badge] || "#555");
-
-    const exRows = dayExs.map((ex, i) => {
-      const a = analyzeEx(ex.name);
-      const muscStr = (ex.musculos || []).slice(0, 5).join(" · ") || "—";
-      const techs = getTechNotes(ex.name);
+      const techs = getTech(exName);
+      const muscStr = (allExMap[exName]?.musculos || []).slice(0,5).join(" · ") || "—";
+      const compTag = compound
+        ? `<span class="tag-compound">Compuesto</span>`
+        : `<span class="tag-iso">Aislamiento</span>`;
 
       if (!a) {
-        // No history — show template with blanks
-        return `
+        exRows += `
         <div class="ex-card">
           <div class="ex-header">
-            <span class="ex-num">${i + 1}</span>
-            <div class="ex-title"><div class="ex-name">${ex.name}</div><div class="ex-muscles">${muscStr}</div></div>
+            <span class="ex-num">${globalIdx}</span>
+            <div class="ex-title"><div class="ex-name">${exName} ${compTag}</div><div class="ex-muscles">${muscStr}</div></div>
             <div class="ex-badge new">SIN HISTORIAL</div>
           </div>
           <div class="ex-body">
@@ -10441,36 +10519,31 @@ function Entreno({
               <div class="block-title">PLAN SESIÓN 1</div>
               <table><thead><tr><th>Tipo</th><th>Carga</th><th>Reps</th><th>RIR</th></tr></thead>
               <tbody>
-                <tr class="row-warm"><td>Calent. 1</td><td>Muy ligero</td><td>10</td><td>—</td></tr>
-                <tr class="row-warm"><td>Calent. 2</td><td>Ligero</td><td>6</td><td>—</td></tr>
-                <tr class="row-work"><td>Trabajo 1</td><td>Moderado</td><td>8–10</td><td>RIR 3</td></tr>
-                <tr class="row-work"><td>Trabajo 2</td><td>Moderado</td><td>8–10</td><td>RIR 2</td></tr>
-                <tr class="row-work"><td>Trabajo 3</td><td>Moderado</td><td>8–10</td><td>RIR 2</td></tr>
+                <tr class="row-warm"><td>Calent.</td><td>Muy ligero</td><td>10</td><td>—</td></tr>
+                <tr class="row-work"><td>Trabajo 1</td><td>Moderado</td><td>10</td><td>RIR 3</td></tr>
+                <tr class="row-work"><td>Trabajo 2</td><td>Moderado</td><td>10</td><td>RIR 2</td></tr>
+                <tr class="row-work"><td>Trabajo 3</td><td>Moderado</td><td>10</td><td>RIR 2</td></tr>
               </tbody></table>
-              <div class="assessment">Registra esta primera sesión para obtener un plan personalizado con progresión real.</div>
+              <div class="assessment">Registra esta sesión para obtener plan personalizado.</div>
             </div>
             <div class="tech-block"><div class="block-title">TÉCNICA CLAVE</div><ul>${techs.map(t=>`<li>${t}</li>`).join("")}</ul></div>
           </div>
         </div>`;
+        continue;
       }
 
-      const { best1RM, lastMaxW, lastAvgReps, trend, trendBadge, isPlateaued, setsPerWeek, sessionCount, todaySets, warmW1, warmW2, warmW3, baseW, assessment } = a;
-
-      const workRows = todaySets.map(s => `
-        <tr class="${s.tipo === "Backoff" ? "row-backoff" : "row-work"}">
-          <td>${s.tipo}</td>
-          <td><strong>${s.w} kg</strong></td>
-          <td>${s.reps}</td>
-          <td>${s.rir}</td>
-          <td class="note-col">${s.note}</td>
+      const { best1RM, lastMaxW, trendBadge, trendTxt, isPlateaued, setsPerWeek, sessionCount, todaySets, warmW1, warmW2, warmW3, assessment } = a;
+      const workRows = todaySets.map(s =>
+        `<tr class="${s.tipo==="Backoff"?"row-backoff":"row-work"}">
+          <td>${s.tipo}</td><td><strong>${s.w} kg</strong></td><td>${s.reps}</td><td>${s.rir}</td><td class="note-col">${s.note}</td>
         </tr>`).join("");
 
-      return `
-        <div class="ex-card${isPlateaued ? " card-plateau" : ""}">
+      exRows += `
+        <div class="ex-card${isPlateaued?" card-plateau":""}">
           <div class="ex-header">
-            <span class="ex-num">${i + 1}</span>
+            <span class="ex-num">${globalIdx}</span>
             <div class="ex-title">
-              <div class="ex-name">${ex.name}${isPlateaued ? ' <span class="pill-warn">MESETA</span>' : ""}</div>
+              <div class="ex-name">${exName} ${compTag}${isPlateaued?' <span class="pill-warn">MESETA</span>':""}</div>
               <div class="ex-muscles">${muscStr}</div>
             </div>
             <div class="ex-stats">
@@ -10480,7 +10553,7 @@ function Entreno({
             </div>
           </div>
           <div class="trend-bar" style="color:${trendColor(trendBadge)}">
-            <strong>${trendIcon(trendBadge)} ${trend}</strong> · ${sessionCount} sesiones registradas
+            <strong>${trendIcon(trendBadge)} ${trendTxt}</strong> · ${sessionCount} sesiones registradas
           </div>
           <div class="ex-body">
             <div class="sets-block">
@@ -10502,7 +10575,9 @@ function Entreno({
             </div>
           </div>
         </div>`;
-    }).join("");
+    }
+
+    if (!exRows) exRows = '<p style="color:#888;text-align:center;padding:20px">Sin ejercicios con historial para este split. Registra sesiones primero.</p>';
 
     const html = `<!DOCTYPE html>
 <html lang="es">
@@ -10512,57 +10587,59 @@ function Entreno({
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,-apple-system,sans-serif;color:#111;font-size:10.5pt;line-height:1.5;background:#fff}
-.page{max-width:790px;margin:0 auto;padding:26px 22px 42px}
-.doc-header{border-bottom:3px solid #111;padding-bottom:12px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:flex-end}
-.doc-header h1{font-size:19pt;font-weight:900;letter-spacing:-0.5px;line-height:1.1}
-.doc-header .meta{text-align:right;font-size:9pt;color:#555;line-height:1.8}
+.page{max-width:790px;margin:0 auto;padding:24px 22px 40px}
+.doc-header{border-bottom:3px solid #111;padding-bottom:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:flex-end}
+h1{font-size:18pt;font-weight:900;letter-spacing:-.5px;line-height:1.1}
+.meta{text-align:right;font-size:9pt;color:#555;line-height:1.8}
 .badge{display:inline-block;background:#111;color:#fff;font-size:8pt;font-weight:700;padding:3px 9px;border-radius:20px}
-.info-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
+.info-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
 .info-box{border:1.5px solid #ddd;border-radius:7px;padding:8px 11px}
 .info-box .lbl{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:2px}
 .info-box .val{font-size:10.5pt;font-weight:700}
-/* exercise card */
-.ex-card{border:1.5px solid #e5e7eb;border-radius:9px;margin-bottom:11px;overflow:hidden;page-break-inside:avoid}
+.bp-header{font-size:10pt;font-weight:900;text-transform:uppercase;letter-spacing:.1em;color:#fff;background:#111;padding:6px 12px;border-radius:7px;margin:14px 0 8px}
+.ex-card{border:1.5px solid #e5e7eb;border-radius:9px;margin-bottom:10px;overflow:hidden;page-break-inside:avoid}
 .card-plateau{border-color:#f59e0b}
-.ex-header{background:#f3f4f6;padding:9px 12px;border-bottom:1.5px solid #e5e7eb;display:flex;align-items:center;gap:10px}
+.ex-header{background:#f3f4f6;padding:8px 11px;border-bottom:1.5px solid #e5e7eb;display:flex;align-items:center;gap:9px}
 .card-plateau .ex-header{background:#fffbeb}
-.ex-num{background:#111;color:#fff;font-size:9.5pt;font-weight:800;width:23px;height:23px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.ex-title{flex:1}
-.ex-name{font-size:11pt;font-weight:800}
-.ex-muscles{font-size:8pt;color:#6b7280;margin-top:1px}
-.pill-warn{display:inline-block;background:#f59e0b;color:#fff;font-size:7.5pt;font-weight:800;padding:1px 7px;border-radius:20px;margin-left:6px;vertical-align:middle}
-.ex-stats{display:flex;gap:12px;flex-shrink:0}
+.ex-num{background:#111;color:#fff;font-size:9pt;font-weight:800;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.ex-title{flex:1;min-width:0}
+.ex-name{font-size:10.5pt;font-weight:800}
+.ex-muscles{font-size:7.5pt;color:#6b7280;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tag-compound{display:inline-block;font-size:7.5pt;font-weight:700;padding:1px 7px;border-radius:20px;border:1.5px solid #1d4ed8;color:#1d4ed8;margin-left:5px;vertical-align:middle}
+.tag-iso{display:inline-block;font-size:7.5pt;font-weight:700;padding:1px 7px;border-radius:20px;border:1.5px solid #7c3aed;color:#7c3aed;margin-left:5px;vertical-align:middle}
+.pill-warn{display:inline-block;background:#f59e0b;color:#fff;font-size:7.5pt;font-weight:800;padding:1px 7px;border-radius:20px;margin-left:5px;vertical-align:middle}
+.ex-stats{display:flex;gap:10px;flex-shrink:0}
 .stat-item{text-align:center}
-.stat-lbl{display:block;font-size:7pt;font-weight:700;text-transform:uppercase;color:#9ca3af}
+.stat-lbl{display:block;font-size:6.5pt;font-weight:700;text-transform:uppercase;color:#9ca3af}
 .stat-val{display:block;font-size:10pt;font-weight:800;color:#111}
-.trend-bar{background:#f9fafb;border-bottom:1px solid #e5e7eb;padding:5px 12px;font-size:9pt}
-.ex-body{padding:10px 12px;display:grid;grid-template-columns:55% 42%;gap:14px}
-.block-title{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:6px}
-table{width:100%;border-collapse:collapse;font-size:9.5pt}
-th{text-align:left;font-size:7.5pt;font-weight:700;text-transform:uppercase;color:#6b7280;border-bottom:1.5px solid #e5e7eb;padding:3px 5px}
-td{padding:4px 5px;border-bottom:1px solid #f3f4f6;vertical-align:middle}
+.trend-bar{background:#f9fafb;border-bottom:1px solid #e5e7eb;padding:4px 11px;font-size:8.5pt}
+.ex-body{padding:10px 11px;display:grid;grid-template-columns:55% 43%;gap:12px}
+.block-title{font-size:7pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:5px}
+table{width:100%;border-collapse:collapse;font-size:9pt}
+th{text-align:left;font-size:7pt;font-weight:700;text-transform:uppercase;color:#6b7280;border-bottom:1.5px solid #e5e7eb;padding:3px 4px}
+td{padding:3.5px 4px;border-bottom:1px solid #f3f4f6;vertical-align:middle}
 tr:last-child td{border-bottom:none}
 .row-warm td{color:#b45309}
-.row-work td{color:#1d4ed8}
-.row-work td:nth-child(2){font-weight:800;color:#111;font-size:10.5pt}
-.row-backoff td{color:#6b7280;font-style:italic}
-.note-col{font-size:8.5pt;color:#9ca3af}
-.assessment{margin-top:8px;background:#f0fdf4;border-left:3px solid #16a34a;border-radius:0 5px 5px 0;padding:6px 10px;font-size:9pt;color:#166534;line-height:1.5}
+.row-work td:first-child{color:#374151}
+.row-work td:nth-child(2){font-weight:800;color:#111;font-size:10pt}
+.row-work td:nth-child(4){color:#1d4ed8;font-weight:700}
+.row-backoff td{color:#9ca3af;font-style:italic}
+.note-col{font-size:8pt;color:#9ca3af}
+.assessment{margin-top:7px;background:#f0fdf4;border-left:3px solid #16a34a;border-radius:0 5px 5px 0;padding:5px 9px;font-size:8.5pt;color:#166534;line-height:1.5}
 .card-plateau .assessment{background:#fffbeb;border-left-color:#d97706;color:#92400e}
+.ex-badge.new{font-size:8pt;font-weight:700;padding:2px 8px;border-radius:20px;border:1.5px solid #bfdbfe;color:#1d4ed8}
 .tech-block ul{list-style:none}
-.tech-block ul li{font-size:9.5pt;padding:3px 0 3px 13px;position:relative;color:#374151;border-bottom:1px solid #f9fafb}
+.tech-block ul li{font-size:9pt;padding:3px 0 3px 12px;position:relative;color:#374151;border-bottom:1px solid #f9fafb}
 .tech-block ul li::before{content:"→";position:absolute;left:0;color:#9ca3af}
-.ex-badge{font-size:8pt;font-weight:700;padding:2px 8px;border-radius:20px;border:1.5px solid #e5e7eb;color:#6b7280}
-.ex-badge.new{color:#1d4ed8;border-color:#bfdbfe}
-.legend{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px;page-break-inside:avoid}
-.leg-box{border:1.5px solid #e5e7eb;border-radius:7px;padding:9px 12px}
-.leg-box h4{font-size:8pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:7px}
+.legend{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px;page-break-inside:avoid}
+.leg-box{border:1.5px solid #e5e7eb;border-radius:7px;padding:8px 11px}
+.leg-box h4{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:6px}
 .leg-box ul{list-style:none}
-.leg-box ul li{font-size:9pt;padding:2px 0;display:flex;gap:8px}
-.leg-box ul li strong{min-width:52px;color:#1d4ed8}
-.footer{margin-top:24px;padding-top:10px;border-top:1.5px solid #e5e7eb;display:flex;justify-content:space-between;font-size:8pt;color:#9ca3af}
+.leg-box ul li{font-size:9pt;padding:2px 0;display:flex;gap:7px}
+.leg-box ul li strong{min-width:48px;color:#1d4ed8}
+.footer{margin-top:20px;padding-top:9px;border-top:1.5px solid #e5e7eb;display:flex;justify-content:space-between;font-size:7.5pt;color:#9ca3af}
 .print-btn{position:fixed;top:14px;right:14px;background:#111;color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:11pt;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2)}
-@media print{.print-btn{display:none}@page{size:A4;margin:13mm 13mm 17mm 13mm}}
+@media print{.print-btn{display:none}@page{size:A4;margin:12mm 12mm 16mm 12mm}}
 </style>
 </head>
 <body>
@@ -10571,43 +10648,43 @@ tr:last-child td{border-bottom:none}
   <div class="doc-header">
     <div>
       <h1>Split ${splitKey} — ${dayObj.name.toUpperCase()}</h1>
-      <div style="font-size:9.5pt;color:#555;margin-top:4px">Plan de sesión · Cargas basadas en historial real + técnica</div>
+      <div style="font-size:9pt;color:#555;margin-top:3px">Selección inteligente del historial · Cargas reales · Técnica profesional</div>
     </div>
     <div class="meta">
       <span class="badge">Bruno Hazleby</span><br>
       <span style="margin-top:4px;display:inline-block">${today}</span><br>
-      <strong>${dayExs.length} ejercicios</strong>
+      <strong>${sessionExs.length} ejercicios · ${targetBPs.length} grupo${targetBPs.length!==1?"s":""} muscular${targetBPs.length!==1?"es":""}</strong>
     </div>
   </div>
   <div class="info-row">
-    <div class="info-box"><div class="lbl">Enfoque calórico</div><div class="val">${dayObj.fuel || "—"}</div></div>
+    <div class="info-box"><div class="lbl">Enfoque calórico</div><div class="val">${dayObj.fuel||"—"}</div></div>
     <div class="info-box"><div class="lbl">Descanso compuestos</div><div class="val">3–4 min</div></div>
     <div class="info-box"><div class="lbl">Descanso aislamiento</div><div class="val">90 seg – 2 min</div></div>
   </div>
-  ${exRows || '<p style="color:#888;text-align:center;padding:20px">No hay ejercicios registrados en este split.</p>'}
+  ${exRows}
   <div class="legend">
     <div class="leg-box">
       <h4>RIR — Repeticiones en Reserva</h4>
       <ul>
-        <li><strong>RIR 0</strong> Fallo total — no puedes más</li>
+        <li><strong>RIR 0</strong> Fallo — no puedes más</li>
         <li><strong>RIR 1</strong> Podrías hacer 1 rep más</li>
-        <li><strong>RIR 2</strong> Podrías hacer 2 reps más (objetivo)</li>
-        <li><strong>RIR 3</strong> Cómodo — calentamiento/backoff</li>
+        <li><strong>RIR 2</strong> Podrías hacer 2 más (objetivo trabajo)</li>
+        <li><strong>RIR 3</strong> Cómodo — calentamiento / backoff</li>
       </ul>
     </div>
     <div class="leg-box">
       <h4>Señales para bajar la carga ese día</h4>
       <ul>
         <li><strong>Técnica</strong> Si la forma se rompe</li>
-        <li><strong>Dolor</strong> Dolor articular (no quemazón)</li>
+        <li><strong>Dolor</strong> Articular (no quemazón muscular)</li>
         <li><strong>Sueño</strong> Menos de 6 h la noche anterior</li>
-        <li><strong>Fatiga</strong> HRV bajo o sesiones sin descanso</li>
+        <li><strong>Fatiga</strong> HRV bajo o acumulación de sesiones</li>
       </ul>
     </div>
   </div>
   <div class="footer">
-    <span>Bruno Fit · Plan basado en ${Object.keys(exlog||{}).length} ejercicios históricos</span>
-    <span>Split ${splitKey} — ${dayObj.name}</span>
+    <span>Bruno Fit · ${Object.keys(exlog||{}).length} ejercicios en historial</span>
+    <span>Split ${splitKey} — ${targetBPs.join(" + ")}</span>
     <span>${today}</span>
   </div>
 </div>
