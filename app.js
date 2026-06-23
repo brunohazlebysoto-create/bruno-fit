@@ -9949,6 +9949,7 @@ function Entreno({
   const [showExMgr, setShowExMgr] = useState(false);
   const [exMgrSearch, setExMgrSearch] = useState("");
   const [exSearch, setExSearch] = useState("");
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   const getRecentSensationsText = () => {
     const sevenDaysAgo = Date.now() - 7 * 86400000;
@@ -10301,423 +10302,313 @@ function Entreno({
 
   // --- Splits Manual Actions & Helpers ---
 
-  const buildRoutinePDF = (splitKey) => {
-    const allSplits = splits || DEFAULT_SPLITS;
-    const dayObj = allSplits.find(d => d.key === splitKey) || allSplits[0];
-    const today = new Date().toLocaleDateString("es-ES", {day:"2-digit", month:"long", year:"numeric"});
-    const round25 = (w) => Math.round(w / 2.5) * 2.5;
-    const epley = (w, r) => parseFloat(w) * (1 + parseInt(r) / 30);
+  const buildRoutinePDF = async (splitKey) => {
+    if (pdfBusy) return;
+    setPdfBusy(true);
+    try {
+      const allSplits = splits || DEFAULT_SPLITS;
+      const dayObj = allSplits.find(d => d.key === splitKey) || allSplits[0];
+      const today = new Date().toLocaleDateString("es-ES", {day:"2-digit", month:"long", year:"numeric"});
+      const epley = (w, r) => parseFloat(w) * (1 + parseInt(r) / 30);
 
-    // ── Exercise metadata from all splits ──
-    const allExMap = {};
-    Object.values(exercises || {}).flat().forEach(ex => { if (ex?.name) allExMap[ex.name] = ex; });
+      // ── Exercise metadata from all splits ──
+      const allExMap = {};
+      Object.values(exercises || {}).flat().forEach(ex => { if (ex?.name) allExMap[ex.name] = ex; });
 
-    // ── Compound detection ──
-    const COMPOUND_KW = ["sentadilla","prensa","peso muerto","press","remo","dominad","jalón","jalon","fondos","hip thrust","estocada","zancada","búlgara","bulgar","rack","hack","sumo"];
-    const isCompound = (name) => {
-      const low = name.toLowerCase();
-      if (COMPOUND_KW.some(k => low.includes(k))) return true;
-      const ex = allExMap[name];
-      return !!(ex?.musculos?.length >= 3);
-    };
-
-    // ── Muscle → body part normalization ──
-    const MUSCLE_MAP = [
-      [["pectoral","pec"], "Pecho"],
-      [["deltoid","hombro","deltoide"], "Hombros"],
-      [["dorsal","trapecio","romboides","lumbar","espalda"], "Espalda"],
-      [["cuádricep","cuadricep","femoral","isquio","tibial"], "Pierna"],
-      [["glúteo","gluteo"], "Glúteo"],
-      [["gemelo","gastrocnemio","sóleo","soleo"], "Gemelos"],
-      [["bíceps","bicep","braquial"], "Bíceps"],
-      [["tríceps","tricep"], "Tríceps"],
-      [["abdominal","oblicuo"], "Core"],
-    ];
-    const toBodyPart = (m) => {
-      const low = (m || "").toLowerCase();
-      for (const [keys, bp] of MUSCLE_MAP) { if (keys.some(k => low.includes(k))) return bp; }
-      return null;
-    };
-
-    // ── Infer body part from exercise name (fallback for missing muscle data) ──
-    const NAME_BP = [
-      [["curl","predicador","concentr","martillo","scott","bíceps","bicep"], "Bíceps"],
-      [["tríceps","tricep","pushdown","skull","frances","press cerrado"], "Tríceps"],
-      [["press banca","press plano","apertura","pectoral","pecho","inclinado pecho","declinado"], "Pecho"],
-      [["sentadilla","prensa","extensión cuád","cuádricep","cuadricep","hack","leg press","búlgara","bulgar","zancada","estocada"], "Pierna"],
-      [["hip thrust","patada glúteo","glúteo","rdl"], "Glúteo"],
-      [["peso muerto","dominad","jalón","jalon","remo","dorsal","trapecio","rack pull","hiperextensión"], "Espalda"],
-      [["press militar","press hombro","elevacion","elevación","face pull","deltoid","pájaros"], "Hombros"],
-      [["gemelo","pantorrilla","calf","sóleo"], "Gemelos"],
-      [["abdomin","plancha","crunch","oblicuo","rueda"], "Core"],
-    ];
-    const inferBP = (name) => {
-      const low = name.toLowerCase();
-      for (const [keys, bp] of NAME_BP) { if (keys.some(k => low.includes(k))) return bp; }
-      return null;
-    };
-    const getExBP = (name) => {
-      const ex = allExMap[name];
-      if (ex?.musculos?.length) { const bp = toBodyPart(ex.musculos[0]); if (bp) return bp; }
-      return inferBP(name);
-    };
-
-    // ── Identify target body parts for this split (primary muscle only) ──
-    const assignedExs = (exercises || {})[splitKey] || [];
-    const bpCount = {};
-    assignedExs.forEach(ex => {
-      const primaryM = (ex.musculos || [])[0];
-      const bp = primaryM ? toBodyPart(primaryM) : inferBP(ex.name);
-      if (bp) bpCount[bp] = (bpCount[bp] || 0) + 1;
-    });
-    // Also scan split name as fallback
-    if (Object.keys(bpCount).length === 0) {
-      const n = (dayObj.name || "").toLowerCase();
-      if (n.includes("pecho") || n.includes("pectoral")) bpCount["Pecho"] = 1;
-      if (n.includes("hombro") || n.includes("deltoid")) bpCount["Hombros"] = 1;
-      if (n.includes("espalda") || n.includes("dorsal")) bpCount["Espalda"] = 1;
-      if (n.includes("pierna") || n.includes("cuádricep") || n.includes("quad")) bpCount["Pierna"] = 1;
-      if (n.includes("glúteo") || n.includes("gluteo")) bpCount["Glúteo"] = 1;
-      if (n.includes("bíceps") || n.includes("bicep")) bpCount["Bíceps"] = 1;
-      if (n.includes("tríceps") || n.includes("tricep")) bpCount["Tríceps"] = 1;
-    }
-    // Keep only body parts with ≥1 exercise assigned, ordered by count descending
-    const targetBPs = Object.entries(bpCount).sort((a,b) => b[1]-a[1]).map(([bp]) => bp);
-
-    // ── Full analysis for one exercise ──
-    const analyzeEx = (exName) => {
-      const el = exlog || {};
-      const key = Object.keys(el).find(k => k.toLowerCase() === exName.toLowerCase()) || exName;
-      const allSets = (el[key] || []).filter(s => s.type !== "warmup" && s.w && s.reps && parseFloat(s.w) > 0);
-      if (!allSets.length) return null;
-      const byDate = {};
-      allSets.forEach(s => { const d = (s.date||"").slice(0,10); (byDate[d] = byDate[d]||[]).push(s); });
-      const dates = Object.keys(byDate).sort().reverse();
-      const stats = dates.map(d => {
-        const sets = byDate[d];
-        return {
-          maxW: Math.max(...sets.map(s => parseFloat(s.w))),
-          best1RM: Math.max(...sets.map(s => epley(s.w, s.reps))),
-          avgReps: Math.round(sets.reduce((a,s) => a + parseInt(s.reps), 0) / sets.length),
-          setCount: sets.length
-        };
-      });
-      const best1RM = Math.max(...stats.map(s => s.best1RM));
-      const last3W = stats.slice(0,3).map(s => s.maxW);
-      const prev3W = stats.slice(3,6).map(s => s.maxW);
-      const avgL = last3W.reduce((a,b)=>a+b,0) / (last3W.length||1);
-      const avgP = prev3W.length ? prev3W.reduce((a,b)=>a+b,0)/prev3W.length : avgL;
-      const delta = avgL - avgP;
-      const trendBadge = prev3W.length === 0 ? "nuevo" : delta > 2 ? "up" : delta < -2 ? "down" : "flat";
-      const trendTxt = prev3W.length === 0 ? "Primer registro" : delta > 2 ? `↑ +${delta.toFixed(1)} kg` : delta < -2 ? `↓ ${delta.toFixed(1)} kg` : `→ Meseta (±${Math.abs(delta).toFixed(1)} kg)`;
-      const isPlateaued = last3W.length >= 3 && (Math.max(...last3W) - Math.min(...last3W)) <= 2.5;
-      const lastMaxW = stats[0]?.maxW || 0;
-      const lastAvgReps = stats[0]?.avgReps || 8;
-      const cutoff = Date.now() - 28*86400000;
-      const setsPerWeek = +(allSets.filter(s => new Date(s.date).getTime() > cutoff).length / 4).toFixed(1);
-      const baseW = isPlateaued ? round25(lastMaxW * 1.025) : lastMaxW;
-      const cmpd = isCompound(exName);
-      const targetReps = cmpd ? Math.min(Math.max(lastAvgReps, 4), 8) : Math.max(lastAvgReps, 10);
-      // Score: more sessions + better trend = higher priority
-      const score = dates.length * (trendBadge === "up" ? 1.3 : trendBadge === "flat" ? 1.0 : 0.8);
-      let assessment;
-      if (!prev3W.length) assessment = `${dates.length} sesión(es). Establece técnica y carga base.`;
-      else if (isPlateaued) assessment = `⚠ Estancado ~${lastMaxW} kg. Plan: +2.5 kg esta sesión. Si no avanza, variar rango.`;
-      else if (trendBadge === "up") assessment = `✓ Progresando. 1RM estimado: ${best1RM.toFixed(0)} kg. Continuar escalando.`;
-      else if (trendBadge === "down") assessment = `↓ Carga bajando. Reducir a 2 series y re-evaluar recuperación.`;
-      else assessment = `Meseta leve. 1RM est: ${best1RM.toFixed(0)} kg. Cambiar rep range próxima sesión.`;
-      return {
-        best1RM, lastMaxW, lastAvgReps: targetReps, trendBadge, trendTxt, isPlateaued,
-        setsPerWeek, sessionCount: dates.length, baseW,
-        warmW1: round25(baseW*0.40), warmW2: round25(baseW*0.60), warmW3: round25(baseW*0.78),
-        todaySets: [
-          { tipo:"Trabajo 1", w:baseW, reps:targetReps, rir:"RIR 2", note: isPlateaued ? "+2.5% respecto último" : "Carga objetivo" },
-          { tipo:"Trabajo 2", w:baseW, reps:targetReps, rir:"RIR 2", note:"" },
-          { tipo:"Trabajo 3", w:baseW, reps:targetReps, rir:"RIR 1–2", note:"" },
-          { tipo:"Backoff",   w:round25(baseW*0.92), reps:targetReps+2, rir:"RIR 3", note:"Opcional si fatiga alta" },
-        ],
-        assessment, score, compound: cmpd
+      // ── Muscle → body part ──
+      const MUSCLE_MAP = [
+        [["pectoral","pec"], "Pecho"],
+        [["deltoid","hombro","deltoide"], "Hombros"],
+        [["dorsal","trapecio","romboides","lumbar","espalda"], "Espalda"],
+        [["cuádricep","cuadricep","femoral","isquio","tibial"], "Pierna"],
+        [["glúteo","gluteo"], "Glúteo"],
+        [["gemelo","gastrocnemio","sóleo","soleo"], "Gemelos"],
+        [["bíceps","bicep","braquial"], "Bíceps"],
+        [["tríceps","tricep"], "Tríceps"],
+        [["abdominal","oblicuo"], "Core"],
+      ];
+      const toBodyPart = (m) => {
+        const low = (m || "").toLowerCase();
+        for (const [keys, bp] of MUSCLE_MAP) { if (keys.some(k => low.includes(k))) return bp; }
+        return null;
       };
-    };
+      const NAME_BP = [
+        [["curl","predicador","concentr","martillo","scott","bíceps","bicep"], "Bíceps"],
+        [["tríceps","tricep","pushdown","skull","frances","press cerrado"], "Tríceps"],
+        [["press banca","press plano","apertura","pectoral","pecho","inclinado pecho","declinado"], "Pecho"],
+        [["sentadilla","prensa","extensión cuád","cuádricep","cuadricep","hack","leg press","búlgara","bulgar","zancada","estocada"], "Pierna"],
+        [["hip thrust","patada glúteo","glúteo","rdl"], "Glúteo"],
+        [["peso muerto","dominad","jalón","jalon","remo","dorsal","trapecio","rack pull","hiperextensión"], "Espalda"],
+        [["press militar","press hombro","elevacion","elevación","face pull","deltoid","pájaros"], "Hombros"],
+        [["gemelo","pantorrilla","calf","sóleo"], "Gemelos"],
+        [["abdomin","plancha","crunch","oblicuo","rueda"], "Core"],
+      ];
+      const inferBP = (name) => {
+        const low = name.toLowerCase();
+        for (const [keys, bp] of NAME_BP) { if (keys.some(k => low.includes(k))) return bp; }
+        return null;
+      };
+      const getExBP = (name) => {
+        const ex = allExMap[name];
+        if (ex?.musculos?.length) { const bp = toBodyPart(ex.musculos[0]); if (bp) return bp; }
+        return inferBP(name);
+      };
 
-    // ── Technique notes lookup ──
-    const TECH = {
-      "sentadilla":  ["Bracing 360° antes de bajar","Rodillas siguen la punta del pie","Cadera bajo el paralelo","Ascenso explosivo"],
-      "prensa":      ["Espalda baja apoyada todo el movimiento","Empuje desde talón","No bloquear rodillas","Pies altos = glúteo / bajos = cuádriceps"],
-      "press":       ["Core activado, lumbar neutra","Bajada controlada hasta pecho/clavícula","Codos ~45° (pecho) o verticales (hombro)","Sin rebotar la barra"],
-      "peso muerto": ["Barra sobre el mediopié","Caderas y hombros suben al mismo ritmo","Espalda neutral en todo el movimiento","Empuja el suelo, no jales la barra"],
-      "dominad":     ["Escápulas deprimidas antes de jalar","Codos hacia caderas en el descenso","Rango completo — extensión total abajo"],
-      "jalón":       ["Jalar hasta la clavícula","Torso ligeramente inclinado atrás","Escápulas bajas al llegar al pecho"],
-      "remo":        ["Espalda recta, bisagra de cadera","Jalar al abdomen bajo, codos pegados","Squeeze 1 seg en el tope"],
-      "hip thrust":  ["Escápulas sobre el banco","Extensión completa de cadera arriba","Squeeze glúteo 1 seg","Barbilla al pecho"],
-      "búlgara":     ["Pie trasero en banco (empeine)","Rodilla delantera no supera el pie","Torso inclinado = cuádriceps / recto = glúteo"],
-      "zancada":     ["Paso largo, rodilla trasera casi al suelo","Torso erguido","Empuje con el talón delantero"],
-      "extensión":   ["Eje de máquina alineado con la rodilla","Contracción 1 seg arriba","Bajada excéntrica 2–3 seg"],
-      "flexión":     ["Rango completo","Excéntrico 2–3 seg","No hiperextender"],
-      "curl":        ["Sin balanceo de torso","Supinación completa al subir","Excéntrico lento 2–3 seg"],
-      "elevacion":   ["Sin impulso de cadera","Solo hasta altura del hombro","Excéntrico 2 seg","Codo levemente flexionado fijo"],
-      "face pull":   ["Cuerda separada al llegar a la cara","Manos apuntan hacia arriba al final","Codos a altura de hombros o más"],
-      "fondos":      ["Torso inclinado = pecho / vertical = tríceps","Descenso hasta 90° de codo","Sin bloquear codos arriba"],
-      "apertura":    ["Codo levemente flexionado fijo","Hasta sentir estiramiento en pectoral","Cierre con pecho, no con brazos"],
-      "gemelo":      ["Rango completo — talón bajo la plataforma","Pausa 1 seg arriba contraído","Sin rebotar en el fondo"],
-    };
-    const getTech = (name) => {
-      const low = name.toLowerCase();
-      for (const [k, notes] of Object.entries(TECH)) { if (low.includes(k)) return notes; }
-      return ["Técnica estricta toda la serie","Excéntrico controlado 2–3 seg","RIR 1–2 en series de trabajo"];
-    };
-
-    // ── Select exercises per body part (min 3, ideal 4) ──
-    const IDEAL = 4; const MIN = 3;
-    const sessionExs = []; // { exName, analysis, bodyPart, compound }
-
-    for (const bp of targetBPs) {
-      // Pool: all exlog exercises mapping to this body part (by muscle data OR name inference)
-      const candidates = Object.keys(exlog || {})
-        .filter(name => getExBP(name) === bp)
-        .map(name => {
-          const a = analyzeEx(name);
-          if (!a) return null;
-          return { exName: name, analysis: a, bodyPart: bp, compound: isCompound(name) };
-        })
-        .filter(Boolean);
-
-      // Sort: compounds first, then by score (sessions × trend)
-      candidates.sort((a, b) => {
-        if (a.compound !== b.compound) return a.compound ? -1 : 1;
-        return b.analysis.score - a.analysis.score;
+      // ── Target body parts for this split ──
+      const assignedExs = (exercises || {})[splitKey] || [];
+      const bpCount = {};
+      assignedExs.forEach(ex => {
+        const primaryM = (ex.musculos || [])[0];
+        const bp = primaryM ? toBodyPart(primaryM) : inferBP(ex.name);
+        if (bp) bpCount[bp] = (bpCount[bp] || 0) + 1;
       });
+      if (Object.keys(bpCount).length === 0) {
+        const n = (dayObj.name || "").toLowerCase();
+        if (n.includes("pecho") || n.includes("pectoral")) bpCount["Pecho"] = 1;
+        if (n.includes("hombro") || n.includes("deltoid")) bpCount["Hombros"] = 1;
+        if (n.includes("espalda") || n.includes("dorsal")) bpCount["Espalda"] = 1;
+        if (n.includes("pierna") || n.includes("cuádricep") || n.includes("quad")) bpCount["Pierna"] = 1;
+        if (n.includes("glúteo") || n.includes("gluteo")) bpCount["Glúteo"] = 1;
+        if (n.includes("bíceps") || n.includes("bicep")) bpCount["Bíceps"] = 1;
+        if (n.includes("tríceps") || n.includes("tricep")) bpCount["Tríceps"] = 1;
+      }
+      const targetBPs = Object.entries(bpCount).sort((a,b) => b[1]-a[1]).map(([bp]) => bp);
 
-      let picked = candidates.slice(0, IDEAL);
-
-      // Pad with assigned exercises if below minimum
-      if (picked.length < MIN) {
-        assignedExs
-          .filter(ex => toBodyPart((ex.musculos||[])[0]) === bp && !picked.find(p => p.exName === ex.name))
-          .slice(0, MIN - picked.length)
-          .forEach(ex => picked.push({ exName: ex.name, analysis: analyzeEx(ex.name), bodyPart: bp, compound: isCompound(ex.name) }));
+      // ── Build exercise history context for AI ──
+      const el = exlog || {};
+      const historyLines = [];
+      for (const bp of targetBPs) {
+        const bpExs = Object.keys(el).filter(name => getExBP(name) === bp);
+        if (!bpExs.length) continue;
+        historyLines.push(`\n### ${bp.toUpperCase()}`);
+        for (const name of bpExs) {
+          const allSets = (el[name] || []).filter(s => s.type !== "warmup" && s.w && s.reps && parseFloat(s.w) > 0);
+          if (!allSets.length) continue;
+          const byDate = {};
+          allSets.forEach(s => { const d = (s.date||"").slice(0,10); (byDate[d] = byDate[d]||[]).push(s); });
+          const dates = Object.keys(byDate).sort().reverse();
+          const best1RM = Math.max(...allSets.map(s => epley(s.w, s.reps)));
+          const last3W = dates.slice(0,3).map(d => Math.max(...byDate[d].map(s => parseFloat(s.w))));
+          const prev3W = dates.slice(3,6).map(d => Math.max(...byDate[d].map(s => parseFloat(s.w))));
+          const avgL = last3W.reduce((a,b)=>a+b,0)/(last3W.length||1);
+          const avgP = prev3W.length ? prev3W.reduce((a,b)=>a+b,0)/prev3W.length : avgL;
+          const delta = avgL - avgP;
+          const trend = prev3W.length === 0 ? "NUEVO" : delta > 2 ? "SUBIENDO" : delta < -2 ? "BAJANDO" : "MESETA";
+          const isPlat = last3W.length >= 3 && (Math.max(...last3W) - Math.min(...last3W)) <= 2.5;
+          const muscles = (allExMap[name]?.musculos || []).slice(0,3).join(", ") || "—";
+          const sessions = dates.slice(0,5).map(d => {
+            const sets = byDate[d];
+            const maxW = Math.max(...sets.map(s => parseFloat(s.w)));
+            const avgR = Math.round(sets.reduce((a,s)=>a+parseInt(s.reps),0)/sets.length);
+            return `${d.slice(5)}: ${maxW}kg×${avgR}r(${sets.length}s)`;
+          }).join(" | ");
+          historyLines.push(`**${name}** [Músculos: ${muscles}] [1RM≈${best1RM.toFixed(0)}kg] [${trend}${isPlat?" ⚠ESTANCADO":""}] [${dates.length} sesiones]`);
+          historyLines.push(`  ${sessions}`);
+        }
       }
 
-      sessionExs.push(...picked);
-    }
+      // ── AI schema ──
+      const ROUTINE_SCHEMA = {
+        type: "OBJECT",
+        properties: {
+          sessionNotes: { type: "STRING" },
+          estimatedDuration: { type: "STRING" },
+          muscleGroups: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                name: { type: "STRING" },
+                exercises: {
+                  type: "ARRAY",
+                  items: {
+                    type: "OBJECT",
+                    properties: {
+                      name: { type: "STRING" },
+                      exerciseType: { type: "STRING" },
+                      warmupSets: { type: "ARRAY", items: { type: "OBJECT", properties: { weight: { type: "NUMBER" }, reps: { type: "NUMBER" } }, required: ["weight","reps"] } },
+                      workSets: { type: "ARRAY", items: { type: "OBJECT", properties: { weight: { type: "NUMBER" }, reps: { type: "NUMBER" }, rir: { type: "STRING" }, note: { type: "STRING" } }, required: ["weight","reps","rir"] } },
+                      techniqueNotes: { type: "ARRAY", items: { type: "STRING" } },
+                      coachRationale: { type: "STRING" },
+                      progressionHint: { type: "STRING" }
+                    },
+                    required: ["name","exerciseType","warmupSets","workSets","techniqueNotes","coachRationale","progressionHint"]
+                  }
+                }
+              },
+              required: ["name","exercises"]
+            }
+          }
+        },
+        required: ["muscleGroups","sessionNotes","estimatedDuration"]
+      };
 
-    // ── Global ordering (coach logic) ──
-    // Within session: larger muscle groups first, compounds before isolations within group
-    const BP_ORDER = { Pierna:0, Glúteo:1, Espalda:2, Pecho:3, Hombros:4, Bíceps:5, Tríceps:6, Gemelos:7, Core:8 };
-    sessionExs.sort((a, b) => {
-      const oa = BP_ORDER[a.bodyPart] ?? 9;
-      const ob = BP_ORDER[b.bodyPart] ?? 9;
-      if (oa !== ob) return oa - ob;
-      if (a.compound !== b.compound) return a.compound ? -1 : 1;
-      return (b.analysis?.score||0) - (a.analysis?.score||0);
-    });
+      const sysPrompt = `Eres un coach de fuerza e hipertrofia experto con 15 años de experiencia. Analizas el historial de entrenamiento real de un atleta y creas planes de sesión precisos, estratégicos y basados en datos. Respondes siempre en español.`;
 
-    const trendColor = (t) => ({ up:"#15803d", down:"#be123c", flat:"#b45309", nuevo:"#1d4ed8" }[t]||"#555");
-    const trendIcon  = (t) => ({ up:"↑", down:"↓", flat:"→", nuevo:"★" }[t]||"→");
+      const userMsg = `Analiza el historial de entrenamiento de Bruno y crea un plan completo de sesión para el Split ${splitKey} (${dayObj.name}).
 
-    // ── Build HTML cards ──
-    let exRows = "";
-    let globalIdx = 0;
-    let lastBP = null;
-    for (const { exName, analysis: a, bodyPart, compound } of sessionExs) {
-      globalIdx++;
-      if (bodyPart !== lastBP) {
-        exRows += `<div class="bp-header">${bodyPart.toUpperCase()}</div>`;
-        lastBP = bodyPart;
-      }
-      const techs = getTech(exName);
-      const muscStr = (allExMap[exName]?.musculos || []).slice(0,5).join(" · ") || "—";
-      const compTag = compound
-        ? `<span class="tag-compound">Compuesto</span>`
-        : `<span class="tag-iso">Aislamiento</span>`;
+REGLAS:
+- Selecciona EXACTAMENTE 3-4 ejercicios por grupo muscular usando SOLO ejercicios que estén en el historial
+- Ordena: compuestos multi-articulares primero, aislamientos después
+- Proporciona cargas ESPECÍFICAS en kg basadas en el historial real (no rangos genéricos)
+- Para MESETA: propone ajuste concreto (+2.5kg, cambiar rango de reps, o variación)
+- Para SUBIENDO: propone la siguiente carga lógica con progresión
+- Para BAJANDO: carga conservadora, reduce volumen a 2-3 series
+- Calentamiento: 3 series al 40%, 60% y 75% de la carga de trabajo
+- 3-4 puntos de técnica clave por ejercicio (concisos, accionables)
+- coachRationale: 1 oración explicando por qué este ejercicio en este orden
+- progressionHint: cuándo y cuánto subir la carga la próxima sesión
+- sessionNotes: 2-3 oraciones con el enfoque estratégico de esta sesión
 
-      if (!a) {
-        exRows += `
-        <div class="ex-card">
-          <div class="ex-header">
-            <span class="ex-num">${globalIdx}</span>
-            <div class="ex-title"><div class="ex-name">${exName} ${compTag}</div><div class="ex-muscles">${muscStr}</div></div>
-            <div class="ex-badge new">SIN HISTORIAL</div>
-          </div>
-          <div class="ex-body">
-            <div class="sets-block">
-              <div class="block-title">PLAN SESIÓN 1</div>
-              <table><thead><tr><th>Tipo</th><th>Carga</th><th>Reps</th><th>RIR</th></tr></thead>
-              <tbody>
-                <tr class="row-warm"><td>Calent.</td><td>Muy ligero</td><td>10</td><td>—</td></tr>
-                <tr class="row-work"><td>Trabajo 1</td><td>Moderado</td><td>10</td><td>RIR 3</td></tr>
-                <tr class="row-work"><td>Trabajo 2</td><td>Moderado</td><td>10</td><td>RIR 2</td></tr>
-                <tr class="row-work"><td>Trabajo 3</td><td>Moderado</td><td>10</td><td>RIR 2</td></tr>
-              </tbody></table>
-              <div class="assessment">Registra esta sesión para obtener plan personalizado.</div>
+HISTORIAL:
+${historyLines.join("\n")}
+
+Grupos a trabajar hoy: ${targetBPs.join(", ")}`;
+
+      const raw = await callGemini([{ role:"user", content:userMsg }], sysPrompt, ROUTINE_SCHEMA);
+      const plan = cleanAndParseJSON(typeof raw === "string" ? raw : JSON.stringify(raw));
+      if (!plan?.muscleGroups?.length) throw new Error("La IA no generó ejercicios. Verifica tu historial e intenta de nuevo.");
+
+      // ── Build HTML ──
+      let exRows = "";
+      let globalIdx = 0;
+      for (const group of plan.muscleGroups) {
+        exRows += `<div class="bp-header">${(group.name||"").toUpperCase()}</div>`;
+        for (const ex of (group.exercises || [])) {
+          globalIdx++;
+          const isCmpd = (ex.exerciseType||"").toLowerCase().includes("compuesto") || (ex.exerciseType||"").toLowerCase().includes("compound");
+          const typeTag = isCmpd
+            ? `<span class="tag-c">Compuesto</span>`
+            : `<span class="tag-i">Aislamiento</span>`;
+          const warmRows = (ex.warmupSets||[]).map(s =>
+            `<tr class="rw"><td>Calent.</td><td>${s.weight} kg</td><td>${s.reps}</td><td>—</td></tr>`
+          ).join("");
+          const workRows = (ex.workSets||[]).map((s,i) =>
+            `<tr class="rk"><td>Serie ${i+1}</td><td><strong>${s.weight} kg</strong></td><td>${s.reps}</td><td>${s.rir}</td><td class="nc">${s.note||""}</td></tr>`
+          ).join("");
+          const techList = (ex.techniqueNotes||[]).map(t=>`<li>${t}</li>`).join("");
+          exRows += `
+        <div class="ec">
+          <div class="eh">
+            <span class="en">${globalIdx}</span>
+            <div class="et">
+              <div class="ename">${ex.name} ${typeTag}</div>
+              <div class="erat">${ex.coachRationale||""}</div>
             </div>
-            <div class="tech-block"><div class="block-title">TÉCNICA CLAVE</div><ul>${techs.map(t=>`<li>${t}</li>`).join("")}</ul></div>
+          </div>
+          <div class="eb">
+            <div class="sb">
+              <div class="bt">CALENTAMIENTO</div>
+              <table><thead><tr><th>Tipo</th><th>Carga</th><th>Reps</th><th>RIR</th></tr></thead><tbody>${warmRows}</tbody></table>
+              <div class="bt" style="margin-top:9px">SERIES DE TRABAJO</div>
+              <table><thead><tr><th>Serie</th><th>Carga</th><th>Reps</th><th>RIR</th><th>Nota</th></tr></thead><tbody>${workRows}</tbody></table>
+              <div class="ph">${ex.progressionHint||""}</div>
+            </div>
+            <div class="tb"><div class="bt">TÉCNICA CLAVE</div><ul>${techList}</ul></div>
           </div>
         </div>`;
-        continue;
+        }
       }
 
-      const { best1RM, lastMaxW, trendBadge, trendTxt, isPlateaued, setsPerWeek, sessionCount, todaySets, warmW1, warmW2, warmW3, assessment } = a;
-      const workRows = todaySets.map(s =>
-        `<tr class="${s.tipo==="Backoff"?"row-backoff":"row-work"}">
-          <td>${s.tipo}</td><td><strong>${s.w} kg</strong></td><td>${s.reps}</td><td>${s.rir}</td><td class="note-col">${s.note}</td>
-        </tr>`).join("");
-
-      exRows += `
-        <div class="ex-card${isPlateaued?" card-plateau":""}">
-          <div class="ex-header">
-            <span class="ex-num">${globalIdx}</span>
-            <div class="ex-title">
-              <div class="ex-name">${exName} ${compTag}${isPlateaued?' <span class="pill-warn">MESETA</span>':""}</div>
-              <div class="ex-muscles">${muscStr}</div>
-            </div>
-            <div class="ex-stats">
-              <div class="stat-item"><span class="stat-lbl">1RM Est.</span><span class="stat-val">${best1RM.toFixed(0)} kg</span></div>
-              <div class="stat-item"><span class="stat-lbl">Últ. carga</span><span class="stat-val">${lastMaxW} kg</span></div>
-              <div class="stat-item"><span class="stat-lbl">Series/sem</span><span class="stat-val">${setsPerWeek}</span></div>
-            </div>
-          </div>
-          <div class="trend-bar" style="color:${trendColor(trendBadge)}">
-            <strong>${trendIcon(trendBadge)} ${trendTxt}</strong> · ${sessionCount} sesiones registradas
-          </div>
-          <div class="ex-body">
-            <div class="sets-block">
-              <div class="block-title">CALENTAMIENTO</div>
-              <table><thead><tr><th>Tipo</th><th>Carga</th><th>Reps</th><th>Objetivo</th></tr></thead>
-              <tbody>
-                <tr class="row-warm"><td>Calent. 1</td><td>${warmW1} kg</td><td>10</td><td>Técnica</td></tr>
-                <tr class="row-warm"><td>Calent. 2</td><td>${warmW2} kg</td><td>6</td><td>Activación</td></tr>
-                <tr class="row-warm"><td>Calent. 3</td><td>${warmW3} kg</td><td>3</td><td>Aproximación</td></tr>
-              </tbody></table>
-              <div class="block-title" style="margin-top:10px">SERIES DE TRABAJO</div>
-              <table><thead><tr><th>Serie</th><th>Carga</th><th>Reps</th><th>RIR</th><th>Nota</th></tr></thead>
-              <tbody>${workRows}</tbody></table>
-              <div class="assessment">${assessment}</div>
-            </div>
-            <div class="tech-block">
-              <div class="block-title">TÉCNICA CLAVE</div>
-              <ul>${techs.map(t=>`<li>${t}</li>`).join("")}</ul>
-            </div>
-          </div>
-        </div>`;
-    }
-
-    if (!exRows) exRows = '<p style="color:#888;text-align:center;padding:20px">Sin ejercicios con historial para este split. Registra sesiones primero.</p>';
-
-    const html = `<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8"/>
-<title>Split ${splitKey} — ${dayObj.name} · ${today}</title>
+      const html = `<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"/>
+<title>Split ${splitKey} — ${dayObj.name} · Plan IA · ${today}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,-apple-system,sans-serif;color:#111;font-size:10.5pt;line-height:1.5;background:#fff}
+body{font-family:system-ui,sans-serif;color:#111;font-size:10.5pt;line-height:1.5;background:#fff}
 .page{max-width:790px;margin:0 auto;padding:24px 22px 40px}
-.doc-header{border-bottom:3px solid #111;padding-bottom:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:flex-end}
-h1{font-size:18pt;font-weight:900;letter-spacing:-.5px;line-height:1.1}
-.meta{text-align:right;font-size:9pt;color:#555;line-height:1.8}
+.dh{border-bottom:3px solid #111;padding-bottom:12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:flex-end}
+h1{font-size:17pt;font-weight:900;letter-spacing:-.5px;line-height:1.1}
+.meta{text-align:right;font-size:9pt;color:#555;line-height:1.9}
 .badge{display:inline-block;background:#111;color:#fff;font-size:8pt;font-weight:700;padding:3px 9px;border-radius:20px}
-.info-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
-.info-box{border:1.5px solid #ddd;border-radius:7px;padding:8px 11px}
-.info-box .lbl{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:2px}
-.info-box .val{font-size:10.5pt;font-weight:700}
-.bp-header{font-size:10pt;font-weight:900;text-transform:uppercase;letter-spacing:.1em;color:#fff;background:#111;padding:6px 12px;border-radius:7px;margin:14px 0 8px}
-.ex-card{border:1.5px solid #e5e7eb;border-radius:9px;margin-bottom:10px;overflow:hidden;page-break-inside:avoid}
-.card-plateau{border-color:#f59e0b}
-.ex-header{background:#f3f4f6;padding:8px 11px;border-bottom:1.5px solid #e5e7eb;display:flex;align-items:center;gap:9px}
-.card-plateau .ex-header{background:#fffbeb}
-.ex-num{background:#111;color:#fff;font-size:9pt;font-weight:800;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.ex-title{flex:1;min-width:0}
-.ex-name{font-size:10.5pt;font-weight:800}
-.ex-muscles{font-size:7.5pt;color:#6b7280;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tag-compound{display:inline-block;font-size:7.5pt;font-weight:700;padding:1px 7px;border-radius:20px;border:1.5px solid #1d4ed8;color:#1d4ed8;margin-left:5px;vertical-align:middle}
-.tag-iso{display:inline-block;font-size:7.5pt;font-weight:700;padding:1px 7px;border-radius:20px;border:1.5px solid #7c3aed;color:#7c3aed;margin-left:5px;vertical-align:middle}
-.pill-warn{display:inline-block;background:#f59e0b;color:#fff;font-size:7.5pt;font-weight:800;padding:1px 7px;border-radius:20px;margin-left:5px;vertical-align:middle}
-.ex-stats{display:flex;gap:10px;flex-shrink:0}
-.stat-item{text-align:center}
-.stat-lbl{display:block;font-size:6.5pt;font-weight:700;text-transform:uppercase;color:#9ca3af}
-.stat-val{display:block;font-size:10pt;font-weight:800;color:#111}
-.trend-bar{background:#f9fafb;border-bottom:1px solid #e5e7eb;padding:4px 11px;font-size:8.5pt}
-.ex-body{padding:10px 11px;display:grid;grid-template-columns:55% 43%;gap:12px}
-.block-title{font-size:7pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:5px}
+.badge-ai{background:#7c3aed}
+.sn{background:#f0fdf4;border-left:4px solid #16a34a;border-radius:0 8px 8px 0;padding:9px 13px;margin-bottom:12px;font-size:9.5pt;color:#166534}
+.ir{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:12px}
+.ib{border:1.5px solid #ddd;border-radius:7px;padding:7px 10px}
+.ib .l{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:2px}
+.ib .v{font-size:10.5pt;font-weight:700}
+.bp-header{font-size:10pt;font-weight:900;text-transform:uppercase;letter-spacing:.1em;color:#fff;background:#111;padding:5px 11px;border-radius:7px;margin:12px 0 7px}
+.ec{border:1.5px solid #e5e7eb;border-radius:9px;margin-bottom:9px;overflow:hidden;page-break-inside:avoid}
+.eh{background:#f3f4f6;padding:8px 11px;border-bottom:1.5px solid #e5e7eb;display:flex;align-items:flex-start;gap:9px}
+.en{background:#111;color:#fff;font-size:9pt;font-weight:800;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px}
+.et{flex:1}
+.ename{font-size:11pt;font-weight:800;margin-bottom:2px}
+.erat{font-size:8.5pt;color:#6b7280;font-style:italic}
+.tag-c{display:inline-block;font-size:7.5pt;font-weight:700;padding:1px 7px;border-radius:20px;border:1.5px solid #1d4ed8;color:#1d4ed8;margin-left:5px;vertical-align:middle}
+.tag-i{display:inline-block;font-size:7.5pt;font-weight:700;padding:1px 7px;border-radius:20px;border:1.5px solid #7c3aed;color:#7c3aed;margin-left:5px;vertical-align:middle}
+.eb{padding:10px 11px;display:grid;grid-template-columns:55% 43%;gap:12px}
+.bt{font-size:7pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:5px}
 table{width:100%;border-collapse:collapse;font-size:9pt}
 th{text-align:left;font-size:7pt;font-weight:700;text-transform:uppercase;color:#6b7280;border-bottom:1.5px solid #e5e7eb;padding:3px 4px}
 td{padding:3.5px 4px;border-bottom:1px solid #f3f4f6;vertical-align:middle}
 tr:last-child td{border-bottom:none}
-.row-warm td{color:#b45309}
-.row-work td:first-child{color:#374151}
-.row-work td:nth-child(2){font-weight:800;color:#111;font-size:10pt}
-.row-work td:nth-child(4){color:#1d4ed8;font-weight:700}
-.row-backoff td{color:#9ca3af;font-style:italic}
-.note-col{font-size:8pt;color:#9ca3af}
-.assessment{margin-top:7px;background:#f0fdf4;border-left:3px solid #16a34a;border-radius:0 5px 5px 0;padding:5px 9px;font-size:8.5pt;color:#166534;line-height:1.5}
-.card-plateau .assessment{background:#fffbeb;border-left-color:#d97706;color:#92400e}
-.ex-badge.new{font-size:8pt;font-weight:700;padding:2px 8px;border-radius:20px;border:1.5px solid #bfdbfe;color:#1d4ed8}
-.tech-block ul{list-style:none}
-.tech-block ul li{font-size:9pt;padding:3px 0 3px 12px;position:relative;color:#374151;border-bottom:1px solid #f9fafb}
-.tech-block ul li::before{content:"→";position:absolute;left:0;color:#9ca3af}
-.legend{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px;page-break-inside:avoid}
-.leg-box{border:1.5px solid #e5e7eb;border-radius:7px;padding:8px 11px}
-.leg-box h4{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:6px}
-.leg-box ul{list-style:none}
-.leg-box ul li{font-size:9pt;padding:2px 0;display:flex;gap:7px}
-.leg-box ul li strong{min-width:48px;color:#1d4ed8}
-.footer{margin-top:20px;padding-top:9px;border-top:1.5px solid #e5e7eb;display:flex;justify-content:space-between;font-size:7.5pt;color:#9ca3af}
-.print-btn{position:fixed;top:14px;right:14px;background:#111;color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:11pt;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2)}
-@media print{.print-btn{display:none}@page{size:A4;margin:12mm 12mm 16mm 12mm}}
-</style>
-</head>
-<body>
-<button class="print-btn" onclick="window.print()">🖨 Guardar PDF</button>
+.rw td{color:#b45309}
+.rk td:nth-child(2){font-weight:800;color:#111;font-size:10pt}
+.rk td:nth-child(4){color:#1d4ed8;font-weight:700}
+.nc{font-size:8pt;color:#9ca3af}
+.ph{margin-top:7px;background:#eff6ff;border-left:3px solid #3b82f6;border-radius:0 5px 5px 0;padding:5px 9px;font-size:8.5pt;color:#1e40af}
+.tb ul{list-style:none}
+.tb ul li{font-size:9pt;padding:3px 0 3px 12px;position:relative;color:#374151;border-bottom:1px solid #f9fafb}
+.tb ul li::before{content:"→";position:absolute;left:0;color:#9ca3af}
+.leg{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:14px;page-break-inside:avoid}
+.lb{border:1.5px solid #e5e7eb;border-radius:7px;padding:8px 11px}
+.lb h4{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:6px}
+.lb ul{list-style:none}
+.lb ul li{font-size:9pt;padding:2px 0;display:flex;gap:7px}
+.lb ul li strong{min-width:48px;color:#1d4ed8}
+.ft{margin-top:18px;padding-top:9px;border-top:1.5px solid #e5e7eb;display:flex;justify-content:space-between;font-size:7.5pt;color:#9ca3af}
+.pbtn{position:fixed;top:14px;right:14px;background:#7c3aed;color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:11pt;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+@media print{.pbtn{display:none}@page{size:A4;margin:12mm 12mm 16mm 12mm}}
+</style></head><body>
+<button class="pbtn" onclick="window.print()">🖨 Guardar PDF</button>
 <div class="page">
-  <div class="doc-header">
+  <div class="dh">
     <div>
       <h1>Split ${splitKey} — ${dayObj.name.toUpperCase()}</h1>
-      <div style="font-size:9pt;color:#555;margin-top:3px">Selección inteligente del historial · Cargas reales · Técnica profesional</div>
+      <div style="font-size:9pt;color:#555;margin-top:3px">Plan de coach IA · Basado en historial real · ${today}</div>
     </div>
     <div class="meta">
-      <span class="badge">Bruno Hazleby</span><br>
-      <span style="margin-top:4px;display:inline-block">${today}</span><br>
-      <strong>${sessionExs.length} ejercicios · ${targetBPs.length} grupo${targetBPs.length!==1?"s":""} muscular${targetBPs.length!==1?"es":""}</strong>
+      <span class="badge">Bruno Hazleby</span> <span class="badge badge-ai">✦ IA</span><br>
+      <span>${plan.estimatedDuration||""}</span><br>
+      <strong>${globalIdx} ejercicios · ${plan.muscleGroups.length} grupos</strong>
     </div>
   </div>
-  <div class="info-row">
-    <div class="info-box"><div class="lbl">Enfoque calórico</div><div class="val">${dayObj.fuel||"—"}</div></div>
-    <div class="info-box"><div class="lbl">Descanso compuestos</div><div class="val">3–4 min</div></div>
-    <div class="info-box"><div class="lbl">Descanso aislamiento</div><div class="val">90 seg – 2 min</div></div>
+  ${plan.sessionNotes ? `<div class="sn">🎯 ${plan.sessionNotes}</div>` : ""}
+  <div class="ir">
+    <div class="ib"><div class="l">Enfoque calórico</div><div class="v">${dayObj.fuel||"—"}</div></div>
+    <div class="ib"><div class="l">Descanso compuestos</div><div class="v">3–4 min</div></div>
+    <div class="ib"><div class="l">Descanso aislamiento</div><div class="v">90 seg – 2 min</div></div>
   </div>
   ${exRows}
-  <div class="legend">
-    <div class="leg-box">
-      <h4>RIR — Repeticiones en Reserva</h4>
-      <ul>
-        <li><strong>RIR 0</strong> Fallo — no puedes más</li>
-        <li><strong>RIR 1</strong> Podrías hacer 1 rep más</li>
-        <li><strong>RIR 2</strong> Podrías hacer 2 más (objetivo trabajo)</li>
-        <li><strong>RIR 3</strong> Cómodo — calentamiento / backoff</li>
-      </ul>
-    </div>
-    <div class="leg-box">
-      <h4>Señales para bajar la carga ese día</h4>
-      <ul>
-        <li><strong>Técnica</strong> Si la forma se rompe</li>
-        <li><strong>Dolor</strong> Articular (no quemazón muscular)</li>
-        <li><strong>Sueño</strong> Menos de 6 h la noche anterior</li>
-        <li><strong>Fatiga</strong> HRV bajo o acumulación de sesiones</li>
-      </ul>
-    </div>
+  <div class="leg">
+    <div class="lb"><h4>RIR — Repeticiones en Reserva</h4><ul>
+      <li><strong>RIR 0</strong> Fallo — no puedes más</li>
+      <li><strong>RIR 1</strong> Podrías hacer 1 rep más</li>
+      <li><strong>RIR 2</strong> 2 más en reserva (objetivo trabajo)</li>
+      <li><strong>RIR 3</strong> Cómodo — calentamiento / backoff</li>
+    </ul></div>
+    <div class="lb"><h4>Señales para bajar la carga</h4><ul>
+      <li><strong>Técnica</strong> Si la forma se rompe</li>
+      <li><strong>Dolor</strong> Articular (no quemazón)</li>
+      <li><strong>Sueño</strong> Menos de 6 h anoche</li>
+      <li><strong>Fatiga</strong> HRV bajo o sesiones sin descanso</li>
+    </ul></div>
   </div>
-  <div class="footer">
-    <span>Bruno Fit · ${Object.keys(exlog||{}).length} ejercicios en historial</span>
+  <div class="ft">
+    <span>Bruno Fit · Plan IA con historial real</span>
     <span>Split ${splitKey} — ${targetBPs.join(" + ")}</span>
     <span>${today}</span>
   </div>
-</div>
-</body>
-</html>`;
+</div></body></html>`;
 
-    const win = window.open("", "_blank");
-    if (win) { win.document.write(html); win.document.close(); }
+      const win = window.open("", "_blank");
+      if (win) { win.document.write(html); win.document.close(); }
+
+    } catch(err) {
+      alert("Error generando el plan IA: " + (err.message || String(err)));
+    } finally {
+      setPdfBusy(false);
+    }
   };
 
   const startEditSplits = () => {
@@ -11841,7 +11732,8 @@ tr:last-child td{border-bottom:none}
         <div style={{marginLeft:"auto", display:"flex", gap:6}}>
           <button
             onClick={() => buildRoutinePDF(sel)}
-            title="Generar PDF imprimible de este split"
+            disabled={pdfBusy}
+            title="Generar plan de sesión con IA"
             style={{
               padding:"6px 11px",
               height:36,
@@ -11857,8 +11749,7 @@ tr:last-child td{border-bottom:none}
               gap:4
             }}
           >
-            <FileText size={12}/>
-            <span>PDF</span>
+            {pdfBusy ? <><Loader2 size={12} style={{animation:"spin 1s linear infinite", display:"inline-block"}}/> <span>Generando…</span></> : <><FileText size={12}/> <span>PDF IA</span></>}
           </button>
           <button
             onClick={startEditSplits}
