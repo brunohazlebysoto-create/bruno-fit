@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W4";
+const APP_VERSION = "v2026.06.23-W5";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -728,9 +728,11 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
         if (responseSchema) {
           generationConfig.responseMimeType = "application/json";
           generationConfig.responseSchema = responseSchema;
-          // Disable thinking for structured output — thinking tokens can exhaust
-          // the budget before the JSON is complete, causing empty/malformed responses
-          generationConfig.thinkingConfig = { thinkingBudget: 0 };
+          // thinkingBudget:0 causes empty responses on gemini-2.5-flash + JSON schema
+          // Only disable thinking on 2.0/1.5 models; let 2.5+ use default thinking
+          if (!nativeModel.includes("2.5") && !nativeModel.includes("2.0-flash-thinking")) {
+            generationConfig.thinkingConfig = { thinkingBudget: 0 };
+          }
         }
 
         const body = {
@@ -768,6 +770,9 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
         // gemini-2.5-flash thinking models prepend a {thought:true} part before the actual response
         const textPart = parts.find(p => !p.thought && p.text != null) || parts[parts.length - 1];
         const textOut = textPart?.text || "";
+        if (!textOut && responseSchema) {
+          throw new Error("El modelo devolvió una respuesta vacía. Intenta de nuevo o cambia el modelo en Perfil → Ajustes.");
+        }
         return textOut.trim();
       }
     } catch (e) {
@@ -12870,8 +12875,6 @@ tr:last-child td{border-bottom:none}
                                 musculos: {
                                   type: "ARRAY",
                                   items: { type: "STRING" },
-                                  minItems: 5,
-                                  maxItems: 5,
                                   description: "Exactamente 5 músculos de mayor a menor activación"
                                 }
                               },
