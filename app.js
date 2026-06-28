@@ -1460,12 +1460,13 @@ export default function App(){
   };
 
   const getMetricsForDate = (dateStr) => {
+    // ⚡ Bolt: Using reduce instead of sort to find the latest entry in O(N) instead of O(N log N)
     const entries = Object.entries(metricslog || {})
-      .filter(([d]) => d <= dateStr)
-      .sort((a, b) => b[0] < a[0] ? -1 : (b[0] > a[0] ? 1 : 0));
+      .filter(([d]) => d <= dateStr);
     
     if (entries.length > 0) {
-      const latest = entries[0][1] || {};
+      const latestEntry = entries.reduce((latest, current) => current[0] > latest[0] ? current : latest, entries[0]);
+      const latest = latestEntry[1] || {};
       return {
         weight: parseFloat(latest.weight) || START_W,
         musculo: parseFloat(latest.musculo) || (bodyComp ? bodyComp.musculo : 64.7),
@@ -1482,10 +1483,11 @@ export default function App(){
       };
     }
     
-    const wNotes = (notes || [])
-      .filter(n => n && n.type === "peso" && n.date && n.date.slice(0, 10) <= dateStr && n.weight)
-      .sort((a, b) => b.date < a.date ? -1 : (b.date > a.date ? 1 : 0));
-    const wVal = parseFloat(wNotes.length > 0 ? wNotes[0].weight : ((notes || []).find(n => n && n.type === "peso" && n.weight)?.weight || START_W)) || START_W;
+    // ⚡ Bolt: Using reduce instead of sort to find the latest note in O(N) instead of O(N log N)
+    const validNotes = (notes || [])
+      .filter(n => n && n.type === "peso" && n.date && n.date.slice(0, 10) <= dateStr && n.weight);
+    const latestNote = validNotes.reduce((latest, current) => (latest === null || current.date > latest.date ? current : latest), null);
+    const wVal = parseFloat(latestNote ? latestNote.weight : ((notes || []).find(n => n && n.type === "peso" && n.weight)?.weight || START_W)) || START_W;
     
     return {
       weight: wVal,
@@ -3140,7 +3142,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     const tdee = calcTDEE(fLog, mLog);
     setTdeeEstimate(tdee);
     if (tdee && tgt) {
-      const latestM = Object.entries(mLog||{}).filter(([_,v])=>v?.weight).sort((a,b)=>b[0] < a[0] ? -1 : (b[0] > a[0] ? 1 : 0))[0]?.[1];
+      // ⚡ Bolt: Using reduce instead of sort to find the latest metric in O(N) instead of O(N log N)
+      const latestM = Object.entries(mLog||{})
+        .filter(([_,v])=>v?.weight)
+        .reduce((latest, current) => (latest === null || current[0] > latest[0] ? current : latest), null)?.[1];
       if (latestM) setProjections(calcBodyProjection(parseFloat(latestM.weight), parseFloat(latestM.grasaPct)||25, tdee, tgt.kcal, 12));
     }
     if (trend && Math.abs(trend.kgPerWeek) < 0.1 && trend.dataPoints >= 7) {
@@ -3751,9 +3756,11 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
       // Get Fitdays body composition data
       const getFitdaysCompositionText = () => {
-        const keys = Object.keys(metricslog || {}).sort().reverse();
+        const keys = Object.keys(metricslog || {});
         if (keys.length === 0) return "Sin registros Fitdays.";
-        const latest = metricslog[keys[0]];
+        // ⚡ Bolt: Using reduce instead of sort to find the latest key in O(N) instead of O(N log N)
+        const latestKey = keys.reduce((max, curr) => curr > max ? curr : max, keys[0]);
+        const latest = metricslog[latestKey];
         if (!latest) return "Sin registros Fitdays.";
 
         let comp = "";
