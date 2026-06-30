@@ -4,3 +4,6 @@
 ## 2026-06-16 - Array Sort Bottleneck
 **Learning:** Instantiating `new Date()` inside an array `.sort()` callback is exceptionally slow and causes an O(N log N) performance bottleneck, especially on large datasets like exercise logs. Using native string comparisons (e.g., `a < b ? -1 : (a > b ? 1 : 0)`) for ISO 8601 date strings is up to 30x faster.
 **Action:** Always use direct lexicographical string comparisons instead of `new Date()` instantiations or `localeCompare()` for sorting ISO 8601 date strings in this codebase.
+## 2023-10-27 - O(N log N) Array Sort Bottleneck for Maximum Values
+**Learning:** Using `Object.entries().sort()[0]` or `Object.keys().sort().reverse()[0]` just to find a single maximum or latest value in large state objects (like `metricslog` or `exlog`) incurs an unnecessary O(N log N) penalty.
+**Action:** Replace sorting with an O(N) linear scan using `.reduce((max, curr) => (!max || curr > max ? curr : max), undefined)` when only extracting the latest or largest element.
