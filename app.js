@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W5";
+const APP_VERSION = "v2026.06.23-W6";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1367,33 +1367,54 @@ const MUSCLE_ACTIVATION_WEIGHTS = [1.0, 0.6, 0.35, 0.2, 0.1];
 
 function calcSessionMuscleSets(exlog, exercises, dateStr) {
   const allExObjects = Object.values(exercises || {}).flat();
-  const muscleMap = {}; // muscle → { sets, weightedSets, exNames }
 
+  // 1) Recolectar los ejercicios del día con su instante más temprano (orden cronológico)
+  const dayExercises = [];
   Object.entries(exlog || {}).forEach(([exName, allSets]) => {
     const daySets = (allSets || []).filter(s =>
       s?.date && s.type !== "warmup" &&
       (() => { try { const d = new Date(s.date); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; } catch(e){ return ""; } })() === dateStr
     );
     if (!daySets.length) return;
-
     const exObj = allExObjects.find(e => e.name === exName);
     const musculos = exObj?.musculos || [];
     if (!musculos.length) return;
+    const times = daySets.map(s => { try { return new Date(s.date).getTime(); } catch(e){ return 0; } });
+    dayExercises.push({ exName, sets: daySets.length, musculos, earliest: Math.min(...times) });
+  });
 
-    const effectiveSets = daySets.length;
+  // 2) Ordenar por momento de ejecución (lo que se hizo primero, primero)
+  dayExercises.sort((a, b) => a.earliest - b.earliest);
+
+  // 3) Acumular trabajo ponderado por % de participación + decaimiento por fatiga
+  const muscleMap = {};   // músculo → { sets, weightedSets, freshSets, exNames }
+  const accumulated = {}; // músculo → carga efectiva ya realizada antes (proxy de fatiga)
+  const FATIGUE_K = 0.07; // rendimientos decrecientes por serie efectiva acumulada
+
+  dayExercises.forEach(({ exName, sets, musculos }) => {
     musculos.forEach((m, idx) => {
       const w = MUSCLE_ACTIVATION_WEIGHTS[idx] ?? 0.1;
-      if (!muscleMap[m]) muscleMap[m] = { sets: 0, weightedSets: 0, exNames: [] };
-      muscleMap[m].sets += effectiveSets;
-      muscleMap[m].weightedSets += Math.round(effectiveSets * w * 10) / 10;
+      const eff = sets * w;                          // series efectivas por participación
+      const prior = accumulated[m] || 0;
+      const freshFactor = 1 / (1 + prior * FATIGUE_K); // el estímulo fresco baja si el músculo viene fatigado
+      if (!muscleMap[m]) muscleMap[m] = { sets: 0, weightedSets: 0, freshSets: 0, exNames: [] };
+      muscleMap[m].sets += sets;
+      muscleMap[m].weightedSets += eff;
+      muscleMap[m].freshSets += eff * freshFactor;
       if (!muscleMap[m].exNames.includes(exName)) muscleMap[m].exNames.push(exName);
+      accumulated[m] = prior + eff;
     });
   });
 
-  // Return sorted by weighted sets descending
+  // 4) Ordenar por trabajo efectivo total (mayor participación primero)
   return Object.entries(muscleMap)
-    .sort(([, a], [, b]) => b.weightedSets - a.weightedSets)
-    .map(([muscle, data]) => ({ muscle, ...data }));
+    .map(([muscle, d]) => {
+      const weightedSets = Math.round(d.weightedSets * 10) / 10;
+      const freshSets = Math.round(d.freshSets * 10) / 10;
+      const fatiguePct = weightedSets > 0 ? Math.max(0, Math.round((1 - freshSets / weightedSets) * 100)) : 0;
+      return { muscle, sets: d.sets, weightedSets, freshSets, fatiguePct, exNames: d.exNames };
+    })
+    .sort((a, b) => b.weightedSets - a.weightedSets);
 }
 
 export default function App(){
@@ -11421,19 +11442,31 @@ tr:last-child td{border-bottom:none}
                 if (!muscleSets.length) return null;
                 return (
                   <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", marginBottom:10}}>
-                    <div style={{fontSize:10, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", marginBottom:8}}>
+                    <div style={{fontSize:10, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", marginBottom:3}}>
                       Músculos trabajados hoy
                     </div>
+                    <div style={{fontSize:9, color:C.muted, marginBottom:8, opacity:.8}}>
+                      Ordenado por trabajo efectivo (% de participación). 💤 = pre-fatiga acumulada por ejercicios previos.
+                    </div>
                     <div style={{display:"flex", flexDirection:"column", gap:5}}>
-                      {muscleSets.map(({ muscle, weightedSets, sets, exNames }, i) => {
+                      {muscleSets.map(({ muscle, weightedSets, sets, fatiguePct }, i) => {
                         const maxW = muscleSets[0]?.weightedSets || 1;
                         const pct = Math.round((weightedSets / maxW) * 100);
                         const color = i === 0 ? C.lime : i === 1 ? C.cyan : i <= 3 ? C.amber : C.muted;
                         return (
                           <div key={muscle}>
                             <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3}}>
-                              <span style={{fontSize:11.5, fontWeight:700, color: i < 3 ? C.ink : C.muted}}>{muscle}</span>
-                              <span style={{fontSize:10, color:C.muted}}>{sets} series</span>
+                              <span style={{fontSize:11.5, fontWeight:700, color: i < 3 ? C.ink : C.muted, display:"flex", alignItems:"center", gap:5}}>
+                                {muscle}
+                                {fatiguePct >= 25 && (
+                                  <span title={`${fatiguePct}% de fatiga acumulada de ejercicios previos`} style={{fontSize:9, color:C.amber, background:"rgba(255,177,61,.12)", padding:"1px 5px", borderRadius:4, fontWeight:700}}>
+                                    💤 {fatiguePct}%
+                                  </span>
+                                )}
+                              </span>
+                              <span style={{fontSize:10, color:C.muted}}>
+                                <b style={{color: i < 3 ? C.ink : C.muted}}>{weightedSets}</b> ser. efect. · {sets} reales
+                              </span>
                             </div>
                             <div style={{height:4, borderRadius:4, background:"rgba(255,255,255,0.05)", overflow:"hidden"}}>
                               <div style={{height:"100%", width:`${pct}%`, background:color, borderRadius:4, transition:"width .3s"}}/>
