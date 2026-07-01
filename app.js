@@ -3983,7 +3983,8 @@ No repitas los datos que ya te mandé. No me pidas registrar nada.`;
 
       const wDates = last7.filter(d=>metricslog?.[d]?.weight);
       const weightChange = wDates.length>=2 ? (parseFloat(metricslog[wDates[wDates.length-1]].weight)-parseFloat(metricslog[wDates[0]].weight)).toFixed(1) : null;
-      const latestMetricDate = Object.keys(metricslog||{}).sort().reverse()[0];
+      // ⚡ Bolt: Use O(N) reduce instead of O(N log N) sort to find the latest date
+      const latestMetricDate = Object.keys(metricslog||{}).reduce((max, d) => (max === undefined || d > max) ? d : max, undefined);
       const lm = latestMetricDate ? metricslog[latestMetricDate] : null;
 
       // Build per-day detail for AI prompt
