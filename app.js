@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W6";
+const APP_VERSION = "v2026.06.23-W7";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -872,16 +872,20 @@ function seedExercises(){
 
 /* ===== GRÁFICO SVG COMPARTIDO ===== */
 function Chart({entries, color=C.lime, height=128}){
-  if(!entries || entries.length < 2) return null;
   const [mode, setMode] = useState("peso"); // "peso" or "esfuerzo"
+  // Excluir calentamientos: distorsionan la tendencia de peso/1RM
+  const workEntries = (entries || []).filter(d => d && d.type !== "warmup");
+  if(workEntries.length < 2) return null;
+  entries = workEntries;
 
   const values = entries.map(d => {
     if (mode === "peso") {
       return parseFloat(d.w) || 0;
     } else {
-      const repsVal = parseInt(d.reps) || 0;
+      // En dropsets, d.reps es el total de todos los drops; para 1RM usa solo el drop principal
+      const repsForRM = (d.drops && d.drops.length > 1) ? (parseInt(d.drops[0].reps) || 0) : (parseInt(d.reps) || 0);
       const rirVal = (d.rir !== undefined && d.rir !== null && !isNaN(parseInt(d.rir))) ? parseInt(d.rir) : 0;
-      return (parseFloat(d.w) || 0) * (1 + (repsVal + rirVal) / 30);
+      return (parseFloat(d.w) || 0) * (1 + (repsForRM + rirVal) / 30);
     }
   });
 
@@ -1537,8 +1541,11 @@ export default function App(){
     let max1RM = 0;
     
     sets.forEach(s => {
+      // Excluir calentamientos: no representan récords reales
+      if (s.type === "warmup") return;
       const sw = parseFloat(s.w);
-      const sreps = parseInt(s.reps);
+      // En dropsets, s.reps es el total de todos los drops; para 1RM usa solo el drop principal
+      const sreps = (s.drops && s.drops.length > 1) ? parseInt(s.drops[0].reps) : parseInt(s.reps);
       if (!isNaN(sw) && !isNaN(sreps) && sreps > 0) {
         if (sw > maxWeight) maxWeight = sw;
         if (sw === newW && sreps > maxRepsForThisWeight) {
@@ -3215,7 +3222,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
   // #20 Weekly Challenges
   const generateWeeklyChallenges = async (fLog, tgt, eLog) => {
-    const thisMonday=(()=>{const d=new Date();d.setDate(d.getDate()-d.getDay()+1);return d.toISOString().slice(0,10);})();
+    const thisMonday=(()=>{const d=new Date();const dow=d.getDay();const diff=(dow===0?-6:1-dow);d.setDate(d.getDate()+diff);return d.toISOString().slice(0,10);})();
     const lastRun=await loadKey("challenges_date","");
     if (lastRun===thisMonday){const saved=await loadKey("challenges",[]);if(saved.length>0){setChallenges(saved);return;}}
     const pattern=analyzeMacroPattern(fLog);
@@ -3520,7 +3527,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     Object.entries(exlog || {}).forEach(([name, sets]) => {
       const todaySets = (sets || []).filter(s => s && s.date && s.date.slice(0, 10) === todayStr && s.type !== "warmup");
       if (todaySets.length > 0) {
-        const sorted = [...todaySets];
+        // exlog guarda las series más nuevas primero; invertir para orden cronológico real
+        const sorted = [...todaySets].reverse();
         const setsText = sorted.map((s, idx) => {
           let txt = `S${idx + 1}: ${s.w}kg×${s.reps}`;
           if (s.rir !== undefined && s.rir !== null) txt += ` @RIR${s.rir}`;
@@ -3689,8 +3697,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
   const sendDailyGreetingIfNeeded = async () => {
     const todayKey = `dailyGreeting_${new Date().toISOString().slice(0, 10)}`;
     if (localStorage.getItem(todayKey)) return; // ya se envió hoy
-    localStorage.setItem(todayKey, '1');
+    if (chatBusy) return; // reintentar más tarde, no marcar como enviado
     const activeSplit = splits.find(s => s.key === activeSplitKey) || splits[0] || DEFAULT_SPLITS[0];
+    // Marcar como enviado solo tras iniciar el envío para no perder el saludo si falla el guard
+    localStorage.setItem(todayKey, '1');
     await sendCoachMessage(`[Análisis automático de apertura] Dame un resumen rápido de mi estado actual: qué músculo me toca hoy según mi split (${activeSplit.name}), cómo voy con mi progresión de fuerza esta semana y si hay algo importante en mi historial que deba tener en cuenta hoy.`);
   };
 
@@ -3768,7 +3778,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
       const nowHour = new Date().getHours();
       const timeBlock = nowHour < 6 ? "madrugada (antes de las 6h)" : nowHour < 12 ? `mañana (${nowHour}:00h)` : nowHour < 15 ? `mediodía (${nowHour}:00h)` : nowHour < 19 ? `tarde (${nowHour}:00h)` : `noche (${nowHour}:00h)`;
-      const trainedToday = todayWorkout && !todayWorkout.includes("Sin entreno") && todayWorkout.trim().length > 10;
+      const trainedToday = todayWorkout && !todayWorkout.includes("Sin entreno") && !todayWorkout.includes("Ninguno registrado") && todayWorkout.trim().length > 10;
       const remKcal = Math.max(0, target.kcal - totals.kcal);
       const remP = Math.max(0, target.p - totals.p);
       const remC = Math.max(0, target.c - totals.c);
@@ -4860,15 +4870,9 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
                       type="number" 
                       value={modalVals.kcal}
                       onChange={e => {
+                        // Solo actualiza kcal; escalar los macros por tecla los ponía en 0 al escribir
                         const val = parseInt(e.target.value)||0;
-                        const oldKcal = modalVals.kcal || 1;
-                        const factor = val / oldKcal;
-                        setModalVals(prev => ({
-                          kcal: val,
-                          p: Math.round(prev.p * factor),
-                          c: Math.round(prev.c * factor),
-                          f: Math.round(prev.f * factor)
-                        }));
+                        setModalVals(prev => ({ ...prev, kcal: val }));
                       }}
                       style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"8px", fontSize:13, color:C.ink, outline:"none", textAlign:"center", fontWeight:600}}
                     />
