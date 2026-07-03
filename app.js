@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W13";
+const APP_VERSION = "v2026.06.23-W14";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -2862,7 +2862,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
   };
 
   // Mantener ref actualizada con el estado más reciente para el backup nocturno
-  nightlyBackupRef.current = { notes, exlog, exercises, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, meals, splits, bodyComp, shoppingList, presetKey, activeSplitKey, customPresets, customSuggestions, chat, experiments, smartGoals, challenges, weeklyInsight, upcomingEvent, supabase, supabaseUser };
+  nightlyBackupRef.current = { log, notes, exlog, exercises, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, meals, splits, bodyComp, shoppingList, presetKey, activeSplitKey, customPresets, customSuggestions, chat, experiments, smartGoals, challenges, weeklyInsight, upcomingEvent, supabase, supabaseUser };
 
   // Backup automático: al abrir la app (si se perdió el de medianoche) y cada 00:00
   useEffect(() => {
@@ -3369,16 +3369,20 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
   const handleCoachActions = (actions) => {
     if (!actions || !actions.length) return;
-    
-    let updatedLog = [...log];
-    let updatedNotes = [...notes];
-    let updatedExlog = { ...exlog };
-    let nextPresets = { ...customPresets };
-    let nextMeals = [...meals];
-    let nextMetricslog = { ...metricslog };
-    let presetKeyToSet = presetKey;
-    let eventToSet = upcomingEvent;
-    let nextSplits = [...splits];
+
+    // Leer el estado MÁS RECIENTE desde el ref, no el closure de sendCoachMessage:
+    // la IA tarda 2-30s y si Bruno registró comida/series/peso mientras tanto,
+    // partir del snapshot viejo las borraba al guardar.
+    const S = nightlyBackupRef.current || {};
+    let updatedLog = [...(S.log ?? log)];
+    let updatedNotes = [...(S.notes ?? notes)];
+    let updatedExlog = { ...(S.exlog ?? exlog) };
+    let nextPresets = { ...(S.customPresets ?? customPresets) };
+    let nextMeals = [...(S.meals ?? meals)];
+    let nextMetricslog = { ...(S.metricslog ?? metricslog) };
+    let presetKeyToSet = S.presetKey ?? presetKey;
+    let eventToSet = S.upcomingEvent ?? upcomingEvent;
+    let nextSplits = [...(S.splits ?? splits)];
     
     let hasLog = false;
     let hasNotes = false;
@@ -3925,19 +3929,24 @@ REGLAS DE ACCIÓN UPDATE_SPLITS:
       const out = await callGemini(nextChat.slice(-12), sys, COACH_SCHEMA);
       const parsed = cleanAndParseJSON(out);
 
+      let hasNewSets = false;
       if (parsed && parsed.actions && parsed.actions.length > 0) {
         handleCoachActions(parsed.actions);
-        const hasNewSets = parsed.actions.some(a => a.type === 'ADD_SET');
-        if (hasNewSets) {
-          setTimeout(() => {
-            sendCoachMessage('[Análisis automático de sesión] Analicé las series que acabo de registrar. Dame una evaluación breve: ¿superé mis registros anteriores? ¿el volumen fue adecuado? ¿qué debo priorizar la próxima sesión de este músculo?');
-          }, 1500);
-        }
+        hasNewSets = parsed.actions.some(a => a.type === 'ADD_SET');
       }
 
       const finalChat = [...nextChat, { role: "assistant", content: (parsed && parsed.chatResponse) || "..." }];
       setChat(finalChat);
       await saveState({ chat: finalChat });
+
+      // Follow-up de análisis: pasar finalChat como customChat para NO reconstruir
+      // desde el `chat` viejo del closure (eso borraba el mensaje del usuario y
+      // la primera respuesta del coach del historial)
+      if (hasNewSets) {
+        setTimeout(() => {
+          sendCoachMessage('[Análisis automático de sesión] Analicé las series que acabo de registrar. Dame una evaluación breve: ¿superé mis registros anteriores? ¿el volumen fue adecuado? ¿qué debo priorizar la próxima sesión de este músculo?', finalChat);
+        }, 1500);
+      }
     } catch(e) {
       console.error(e);
       let content = aiErr(e);
