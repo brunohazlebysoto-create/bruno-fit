@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W10";
+const APP_VERSION = "v2026.06.23-W11";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1068,10 +1068,11 @@ const FALLBACK_TIPS = [
 ];
 
 // ── Funciones estadísticas ──
-function linearRegression(ys) {
+function linearRegression(ys, xsArg) {
   if (!ys || ys.length < 2) return { slope: 0, intercept: ys?.[0] || 0 };
   const n = ys.length;
-  const xs = ys.map((_, i) => i);
+  // xs por defecto = índice; se puede pasar xs reales (ej: días) para pendiente por día
+  const xs = (Array.isArray(xsArg) && xsArg.length === n) ? xsArg : ys.map((_, i) => i);
   const sumX = xs.reduce((a,b)=>a+b,0), sumY = ys.reduce((a,b)=>a+b,0);
   const sumXY = xs.reduce((s,x,i)=>s+x*ys[i],0), sumX2 = xs.reduce((s,x)=>s+x*x,0);
   const slope = (n*sumXY - sumX*sumY) / (n*sumX2 - sumX*sumX);
@@ -1088,8 +1089,15 @@ function calcTDEE(foodlog, metricslog) {
     const dayKcal = (foodlog[d]||[]).reduce((a,e)=>a+(+e.kcal||0),0);
     return s + dayKcal;
   },0) / last21.length;
-  const weightDates = Object.keys(metricslog).filter(d=>metricslog[d]?.weight).sort();
-  if (weightDates.length < 2) return null;
+  const allWeightDates = Object.keys(metricslog).filter(d=>metricslog[d]?.weight).sort();
+  if (allWeightDates.length < 2) return null;
+  // Alinear la ventana de peso con la de comida: usar solo pesos dentro del
+  // mismo período reciente (last21). Antes el cambio de peso abarcaba TODO el
+  // historial (ej: -8kg en 6 meses) mientras las kcal eran de 21 días → TDEE
+  // muy sesgado. Si no hay ≥2 pesos recientes, cae a los 2 últimos.
+  const foodStart = last21[0];
+  const recent = allWeightDates.filter(d => d >= foodStart);
+  const weightDates = recent.length >= 2 ? recent : allWeightDates.slice(-2);
   const firstW = parseFloat(metricslog[weightDates[0]]?.weight) || 0;
   const lastW = parseFloat(metricslog[weightDates[weightDates.length-1]]?.weight) || 0;
   const days = Math.max(1, (new Date(weightDates[weightDates.length-1]) - new Date(weightDates[0])) / 86400000);
@@ -1121,12 +1129,15 @@ function detectPlateaus(exlog) {
   Object.entries(exlog||{}).forEach(([exName, sets])=>{
     if (!sets || sets.length < 9) return;
     const sorted = [...sets].filter(s=>s?.date&&s?.w).sort((a,b)=>a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
-    // Agrupamos por semana
+    // Agrupamos por semana REAL anclada al lunes. Antes se usaba
+    // mes+floor(día/7), que parte una semana en el cambio de mes y crea
+    // "semanas" de 2-3 días (días 29-31) → mesetas falsas o diluidas.
     const byWeek = {};
     sorted.forEach(s=>{
       const d = new Date(s.date);
-      const wk = `${d.getFullYear()}-W${Math.floor(d.getDay()/7)}`;
-      const wkKey = s.date.slice(0,10).slice(0,7) + "-" + Math.floor(parseInt(s.date.slice(8,10))/7);
+      const monday = new Date(d);
+      monday.setDate(d.getDate() - ((d.getDay()+6)%7));
+      const wkKey = getLocalDateStr(monday);
       if(!byWeek[wkKey]) byWeek[wkKey]=[];
       byWeek[wkKey].push(parseFloat(s.w)||0);
     });
@@ -1213,9 +1224,13 @@ function calcWeightTrend(metricslog) {
   const dates = Object.keys(metricslog||{}).filter(d=>metricslog[d]?.weight).sort().slice(-14);
   if (dates.length < 3) return null;
   const weights = dates.map(d=>parseFloat(metricslog[d].weight)||0);
-  const reg = linearRegression(weights);
-  // slope es cambio por día en índice, convertir a kg/semana
-  const kgPerWeek = reg.slope * 7;
+  // Regresión contra DÍAS reales desde la primera medición, no el índice.
+  // Antes la pendiente era por medición: pesarse cada 3-4 días inflaba el
+  // kg/semana ~3.5x y disparaba falsas alarmas de "bajando/subiendo".
+  const t0 = new Date(dates[0]).getTime();
+  const dayOffsets = dates.map(d => (new Date(d).getTime() - t0) / 86400000);
+  const reg = linearRegression(weights, dayOffsets);
+  const kgPerWeek = reg.slope * 7; // slope ya es kg/día
   return { kgPerWeek: Math.round(kgPerWeek*100)/100, trend: kgPerWeek < -0.1 ? "bajando" : kgPerWeek > 0.1 ? "subiendo" : "estancado", dataPoints: dates.length };
 }
 
