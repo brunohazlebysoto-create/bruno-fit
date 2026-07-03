@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W11";
+const APP_VERSION = "v2026.06.23-W12";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1268,7 +1268,7 @@ function calcWeeklyTrainingLoad(exlog) {
         const t = new Date(s.date).getTime();
         if (t >= weekStart && t <= weekEnd) {
           totalSets++;
-          totalVol += (parseFloat(s.w)||0) * (parseInt(s.reps)||0);
+          totalVol += setVolume(s);
         }
       });
     });
@@ -1393,6 +1393,14 @@ const MUSCLE_ACTIVATION_WEIGHTS = [1.0, 0.6, 0.35, 0.2, 0.1];
 // Máximo de series guardadas por ejercicio. Antes 60 (~5-8 sesiones) borraba
 // PRs viejos y rompía la detección de récords. 400 preserva meses de historial.
 const MAX_SETS_PER_EXERCISE = 400;
+
+// Volumen real de una serie (kg). En dropsets suma cada bajada (wᵢ×repsᵢ);
+// usar w×reps daría pesoMáximo×repsTotales, sobreestimando el trabajo.
+function setVolume(s){
+  if (!s) return 0;
+  if (s.drops && s.drops.length > 1) return s.drops.reduce((a,d)=>a+(parseFloat(d.w)||0)*(parseInt(d.reps)||0),0);
+  return (parseFloat(s.w)||0)*(parseInt(s.reps)||0);
+}
 
 function calcSessionMuscleSets(exlog, exercises, dateStr) {
   const allExObjects = Object.values(exercises || {}).flat();
@@ -4056,7 +4064,7 @@ No repitas los datos que ya te mandé. No me pidas registrar nada.`;
 
       const trainedDays = Object.keys(weekWorkouts).sort();
       const totalSets = trainedDays.reduce((s,d)=>s+Object.values(weekWorkouts[d]).reduce((ss,sets)=>ss+sets.length,0),0);
-      const totalTons = trainedDays.reduce((s,d)=>s+Object.values(weekWorkouts[d]).reduce((ss,sets)=>ss+sets.reduce((sss,set)=>sss+(parseFloat(set.w)||0)*(parseFloat(set.reps)||1)/1000,0),0),0);
+      const totalTons = trainedDays.reduce((s,d)=>s+Object.values(weekWorkouts[d]).reduce((ss,sets)=>ss+sets.reduce((sss,set)=>sss+setVolume(set)/1000,0),0),0);
 
       const wDates = last7.filter(d=>metricslog?.[d]?.weight);
       const weightChange = wDates.length>=2 ? (parseFloat(metricslog[wDates[wDates.length-1]].weight)-parseFloat(metricslog[wDates[0]].weight)).toFixed(1) : null;
@@ -4152,7 +4160,7 @@ INSTRUCCIONES PARA EL ANÁLISIS:
       // Build day-grouped exercise sections
       let daysSectionsHTML = trainedDays.map(date => {
         const dayExs = weekWorkouts[date];
-        const dayTons = Object.values(dayExs).reduce((s,sets)=>s+sets.reduce((ss,set)=>ss+(parseFloat(set.w)||0)*(parseFloat(set.reps)||1)/1000,0),0);
+        const dayTons = Object.values(dayExs).reduce((s,sets)=>s+sets.reduce((ss,set)=>ss+setVolume(set)/1000,0),0);
         const rows = Object.entries(dayExs).map(([exName,sets])=>{
           const maxW = Math.max(...sets.map(s=>parseFloat(s.w)||0));
           // Mejor Epley entre las series (no maxW con reps promedio de otras series)
@@ -4369,7 +4377,15 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
 
     if (newPrs.length > 0) {
       setPrAlerts(newPrs);
-      newPrs.forEach(function(prStr) { var m = prStr.match(/^([^:]+).*?([0-9]+(?:\.[0-9]+)?)\s*kg/); if(m) addSmartGoalFromPR(m[1].trim(), parseFloat(m[2])); });
+      // Crear smart goals SOLO desde PRs de peso real levantado. Los PRs de
+      // "Fuerza Estimada (1RM)" traen un 1RM calculado (ej. 105kg desde 90×5),
+      // que generaba metas inalcanzables ("Levanta 110kg") sin relación con lo
+      // que Bruno realmente carga.
+      newPrs.forEach(function(prStr) {
+        if (!prStr.includes("peso máximo levantado")) return;
+        var m = prStr.match(/^([^:]+).*?([0-9]+(?:\.[0-9]+)?)\s*kg/);
+        if(m) addSmartGoalFromPR(m[1].trim(), parseFloat(m[2]));
+      });
     }
 
     const updates = { exlog: updatedExlog };
@@ -6104,7 +6120,7 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr) {
     const proteinToday = Math.round(todayFood.reduce((a, e) => a + (+e.proteina || 0), 0));
     const hydPct = Math.min(1, (water || 0) / 14);
     const totalSets = todaySets.length;
-    const totalVol = Math.round(todaySets.reduce((a, s) => a + ((parseFloat(s.w)||0) * (parseInt(s.reps)||0)), 0));
+    const totalVol = Math.round(todaySets.reduce((a, s) => a + setVolume(s), 0));
 
     let score = 7;
     const factors = [];
@@ -10172,7 +10188,7 @@ function Entreno({
     Object.values(workouts).forEach(sets => {
       sets.forEach(s => {
         if (s.type !== "warmup") {
-          totalVol += (parseFloat(s.w) || 0) * (parseInt(s.reps) || 0);
+          totalVol += setVolume(s);
         }
       });
     });
@@ -11054,7 +11070,7 @@ tr:last-child td{border-bottom:none}
         const priorMuscles = priorEx?.musculos || [];
         const effective = sets.filter(s => s.type !== "warmup");
         if (!effective.length) return null;
-        const vol = Math.round(effective.reduce((a, s) => a + (parseFloat(s.w)||0) * (parseInt(s.reps)||0), 0));
+        const vol = Math.round(effective.reduce((a, s) => a + setVolume(s), 0));
         const overlap = priorMuscles.filter((m, i) => i <= 2 && exMusculos.some(em =>
           em.toLowerCase().includes(m.toLowerCase()) || m.toLowerCase().includes(em.toLowerCase())
         ));
@@ -11436,7 +11452,7 @@ tr:last-child td{border-bottom:none}
                   otherSessionDates.reduce((sum, d) => {
                     const sessVol = Object.values(workoutSessions[d]).flat()
                       .filter(s => s.type !== "warmup")
-                      .reduce((a, s) => a + (parseFloat(s.w)||0)*(parseInt(s.reps)||0), 0);
+                      .reduce((a, s) => a + setVolume(s), 0);
                     return sum + sessVol;
                   }, 0) / otherSessionDates.length
                 ) : 0;
@@ -11556,7 +11572,7 @@ tr:last-child td{border-bottom:none}
                     if (!sess || Object.keys(sess).length === 0) return;
                     days++;
                     Object.values(sess).forEach(exSets => {
-                      exSets.forEach(s => { if(s.type!=="warmup"){ sets++; vol += (parseFloat(s.w)||0)*(parseInt(s.reps)||0); } });
+                      exSets.forEach(s => { if(s.type!=="warmup"){ sets++; vol += setVolume(s); } });
                     });
                   });
                   return {sets, vol:Math.round(vol), days};
