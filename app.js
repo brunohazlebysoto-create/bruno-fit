@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W8";
+const APP_VERSION = "v2026.06.23-W9";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -3202,7 +3202,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
   // #16 Proactive Coach — time-aware messages
   const runProactiveCoach = (fLog, eLog, tgt) => {
-    const now = new Date(), hour = now.getHours(), todayStr = now.toISOString().slice(0,10);
+    const now = new Date(), hour = now.getHours(), todayStr = getLocalDateStr(now);
     const todayLog = fLog[todayStr] || [];
     const todayKcal = todayLog.reduce((s,e)=>s+(+e.kcal||0),0);
     const todayProtein = todayLog.reduce((s,e)=>s+(+e.proteina||0),0);
@@ -3385,7 +3385,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
           updatedNotes = [e, ...updatedNotes];
           hasNotes = true;
           
-          const dStr = new Date().toISOString().slice(0, 10);
+          const dStr = getLocalDateStr(new Date());
           nextMetricslog[dStr] = {
             ...(nextMetricslog[dStr] || {}),
             weight: wVal,
@@ -3539,10 +3539,12 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
   // Resumen del entrenamiento realizado hoy
   const getTodayWorkoutSummary = () => {
-    const todayStr = selectedDateStr || new Date().toISOString().slice(0, 10);
+    const todayStr = selectedDateStr || getLocalDateStr(new Date());
     let summary = [];
     Object.entries(exlog || {}).forEach(([name, sets]) => {
-      const todaySets = (sets || []).filter(s => s && s.date && s.date.slice(0, 10) === todayStr && s.type !== "warmup");
+      // Comparar por fecha LOCAL del set (no la porción UTC del ISO) para no
+      // desfasar entrenamientos de la noche a otro día
+      const todaySets = (sets || []).filter(s => { if (!s || !s.date || s.type === "warmup") return false; try { return getLocalDateStr(new Date(s.date)) === todayStr; } catch(e){ return false; } });
       if (todaySets.length > 0) {
         // exlog guarda las series más nuevas primero; invertir para orden cronológico real
         const sorted = [...todaySets].reverse();
@@ -3970,7 +3972,7 @@ No repitas los datos que ya te mandé. No me pidas registrar nada.`;
     const w = window.open('', '_blank');
     if (w) w.document.write('<html><body style="background:#0c0e0b;color:#cdff4a;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center"><div><p style="font-size:22px;margin-bottom:8px">⏳ Generando reporte…</p><p style="font-size:13px;color:#9aa088">Analizando 8 semanas de entrenamiento con IA</p><p style="font-size:12px;color:#666;margin-top:10px;">Esto puede tardar 30–60 segundos ☕</p></div></body></html>');
     try {
-      const last7 = [...Array(7)].map((_,i)=>{ const d=new Date(); d.setDate(d.getDate()-i); return d.toISOString().slice(0,10); }).reverse();
+      const last7 = [...Array(7)].map((_,i)=>{ const d=new Date(); d.setDate(d.getDate()-i); return getLocalDateStr(d); }).reverse();
       const weekStart = last7[0], weekEnd = last7[6];
       const DAYS_ES = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
       const MONTHS_ES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
@@ -11375,12 +11377,15 @@ tr:last-child td{border-bottom:none}
               {/* Quick sensation */}
               <div style={{display:"flex", gap:5, marginBottom:8}}>
                 {[["😴","Fatigado","rgba(255,61,113,0.1)","rgba(255,61,113,0.3)",C.rose],["💪","Normal","rgba(205,255,74,0.08)","rgba(205,255,74,0.25)",C.lime],["🚀","Óptimo","rgba(74,214,255,0.08)","rgba(74,214,255,0.25)",C.cyan]].map(([emoji,label,bg,border,col]) => {
-                  const todaySensation = (notes||[]).find(n => n.type==="sensacion" && n.date?.slice(0,10)===selectedDateStr);
+                  // Comparar por fecha LOCAL del note (no la porción UTC) para que el
+                  // botón marque activo y el dedup funcione de noche (evita duplicados)
+                  const sameLocalDay = (n) => { try { return getLocalDateStr(new Date(n.date))===selectedDateStr; } catch(e){ return false; } };
+                  const todaySensation = (notes||[]).find(n => n.type==="sensacion" && sameLocalDay(n));
                   const isActive = todaySensation?.text?.toLowerCase().includes(label.toLowerCase());
                   return (
                     <button key={label} onClick={() => {
                       const newNote = { id: uid(), type:"sensacion", date: new Date(selectedDateStr+"T"+new Date().toTimeString().slice(0,8)).toISOString(), text: label };
-                      const filtered = (notes||[]).filter(n => !(n.type==="sensacion" && n.date?.slice(0,10)===selectedDateStr));
+                      const filtered = (notes||[]).filter(n => !(n.type==="sensacion" && sameLocalDay(n)));
                       setNotes && setNotes([newNote, ...filtered]);
                     }} style={{flex:1, background:isActive?bg:"transparent", border:`1px solid ${isActive?border:C.line}`, borderRadius:8, padding:"5px 4px", color:isActive?col:C.muted, fontSize:11, fontWeight:700, cursor:"pointer"}}>
                       {emoji} {label}
@@ -13467,7 +13472,7 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
   const [busy, setBusy] = React.useState(false);
   const [extracted, setExtracted] = React.useState(null);
   const [form, setForm] = React.useState({});
-  const [date, setDate] = React.useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = React.useState(() => getLocalDateStr(new Date()));
   const [saved, setSaved] = React.useState(false);
   const [err, setErr] = React.useState("");
   const [segGrasaOpen, setSegGrasaOpen] = React.useState(false);
@@ -14084,7 +14089,7 @@ function Registro({
   const [cmpDateB, setCmpDateB] = useState("");
   const [cmpPhotoAnalysis, setCmpPhotoAnalysis] = useState("");
   const [cmpPhotoBusy, setCmpPhotoBusy] = useState(false);
-  const [progressPhotoAnalysis, setProgressPhotoAnalysis] = useState(() => metricslog[new Date().toISOString().slice(0,10)]?.photoAnalysis || "");
+  const [progressPhotoAnalysis, setProgressPhotoAnalysis] = useState(() => metricslog[getLocalDateStr(new Date())]?.photoAnalysis || "");
   const [progressPhotoBusy, setProgressPhotoBusy] = useState(false);
   const [progressPhotoErr, setProgressPhotoErr] = useState("");
   const [progressPhotoLoading, setProgressPhotoLoading] = useState(false);
