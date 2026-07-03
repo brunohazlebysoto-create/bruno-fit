@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W9";
+const APP_VERSION = "v2026.06.23-W10";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1156,12 +1156,19 @@ function calcProgressiveOverload(exlog) {
   return suggestions;
 }
 
-function detectMuscleImbalances(exlog) {
+function detectMuscleImbalances(exlog, exercises) {
   let push = 0, pull = 0, quad = 0, hams = 0;
   const cutoff = Date.now() - 7 * 86400000;
+  // Mapa de músculos por ejercicio: prefiere los datos de `exercises` (incluye
+  // ejercicios custom/IA) y cae al MUSCLES estático. Antes solo MUSCLES → los
+  // ejercicios custom no contaban y ocultaban desequilibrios reales.
+  const exMuscleMap = {};
+  Object.values(exercises || {}).flat().forEach(ex => {
+    if (ex?.name && Array.isArray(ex.musculos) && ex.musculos.length) exMuscleMap[ex.name] = ex.musculos;
+  });
   Object.entries(exlog||{}).forEach(([exName, sets])=>{
     if (!sets || sets.length === 0) return;
-    const muscles = MUSCLES[exName] || [];
+    const muscles = exMuscleMap[exName] || MUSCLES[exName] || [];
     const isPush = muscles.some(m => /pectoral|tríceps|tricep|deltoid/i.test(m));
     const isPull = muscles.some(m => /espalda|bíceps|bicep|trapecio|rombo|dorsal/i.test(m));
     const isQuad = muscles.some(m => /cuádriceps|cuadricep/i.test(m));
@@ -1993,7 +2000,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         try {
           setOverloadSuggestions(calcProgressiveOverload(finalExlog));
           setPlateauAlerts(detectPlateaus(finalExlog));
-          setMuscleImbalances(detectMuscleImbalances(finalExlog));
+          setMuscleImbalances(detectMuscleImbalances(finalExlog, finalExercises));
           const trend = calcWeightTrend(localMetricslog);
           setWeightTrend(trend);
           const tdee = calcTDEE(localFoodlog, localMetricslog);
@@ -3180,7 +3187,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
   const runLocalAnalysis = (eLog, fLog, mLog, nts, tgt) => {
     setOverloadSuggestions(calcProgressiveOverload(eLog));
     setPlateauAlerts(detectPlateaus(eLog));
-    setMuscleImbalances(detectMuscleImbalances(eLog));
+    setMuscleImbalances(detectMuscleImbalances(eLog, exercises));
     const trend = calcWeightTrend(mLog);
     setWeightTrend(trend);
     const tdee = calcTDEE(fLog, mLog);
@@ -4048,7 +4055,9 @@ No repitas los datos que ya te mandé. No me pidas registrar nada.`;
           const maxW = Math.max(...sets.map(s=>parseFloat(s.w)||0));
           const allPR = allTimePRs[ex]||0;
           const prevBest = prevBestByEx[ex]||0;
-          const est1rm = maxW>0?Math.round(maxW*(1+(parseFloat(sets[0]?.reps)||8)/30)):0;
+          // 1RM = mejor Epley entre todas las series (cada una con SU peso y SUS reps),
+          // no el peso máximo con las reps de otra serie (inflaba el estimado)
+          const est1rm = Math.round(Math.max(0, ...sets.map(s=>{ const w=parseFloat(s.w)||0; const r=parseInt(s.reps)||0; return (w>0&&r>0)?w*(1+r/30):0; })));
           const prNote = maxW>=allPR&&maxW>0?' ★PR' : maxW>prevBest&&maxW>0?' ↑mejora':'';
           return `  • ${ex}: ${sets.length} series [${sets.map(s=>`${s.w}kg×${s.reps}`).join(', ')}] → 1RM est.${est1rm}kg${prNote}`;
         });
@@ -4131,8 +4140,9 @@ INSTRUCCIONES PARA EL ANÁLISIS:
         const dayTons = Object.values(dayExs).reduce((s,sets)=>s+sets.reduce((ss,set)=>ss+(parseFloat(set.w)||0)*(parseFloat(set.reps)||1)/1000,0),0);
         const rows = Object.entries(dayExs).map(([exName,sets])=>{
           const maxW = Math.max(...sets.map(s=>parseFloat(s.w)||0));
-          const avgReps = Math.round(sets.reduce((s,e)=>s+(parseFloat(e.reps)||8),0)/sets.length);
-          const est1rm = maxW>0?Math.round(maxW*(1+avgReps/30)):'—';
+          // Mejor Epley entre las series (no maxW con reps promedio de otras series)
+          const best1rm = Math.max(0, ...sets.map(s=>{ const w=parseFloat(s.w)||0; const r=parseInt(s.reps)||0; return (w>0&&r>0)?w*(1+r/30):0; }));
+          const est1rm = best1rm>0?Math.round(best1rm):'—';
           const isPR = allTimePRs[exName]&&maxW>=allTimePRs[exName];
           const isImprove = !isPR && prevBestByEx[exName] && maxW > prevBestByEx[exName];
           const badge = isPR?'<span class="pr-badge">★ PR</span>':isImprove?'<span class="imp-badge">↑</span>':'';
@@ -10415,6 +10425,10 @@ function Entreno({
   const buildRoutinePDF = async (splitKey) => {
     if (pdfBusy) return;
     setPdfBusy(true);
+    // Abrir la ventana AHORA (dentro del gesto del click) para que móvil no la
+    // bloquee; el window.open tras el await de 30-60s sí es bloqueado silenciosamente
+    const win = window.open("", "_blank");
+    if (win) { try { win.document.write('<!DOCTYPE html><html><body style="background:#0c0e0b;color:#cdff4a;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center"><div><p style="font-size:20px">⏳ Generando plan con IA…</p><p style="font-size:13px;color:#9aa088">Analizando tu historial · 30-60 seg ☕</p></div></body></html>'); } catch(_){} }
     try {
       const allSplits = splits || DEFAULT_SPLITS;
       const dayObj = allSplits.find(d => d.key === splitKey) || allSplits[0];
@@ -10728,10 +10742,12 @@ tr:last-child td{border-bottom:none}
   </div>
 </div></body></html>`;
 
-      const win = window.open("", "_blank");
-      if (win) { win.document.write(html); win.document.close(); }
+      // Reusar la ventana ya abierta; si el navegador la bloqueó, avisar
+      if (win) { win.document.open(); win.document.write(html); win.document.close(); }
+      else { alert("El navegador bloqueó la ventana del plan. Permite pop-ups para este sitio y vuelve a intentar."); }
 
     } catch(err) {
+      if (win) { try { win.close(); } catch(_){} } // cerrar la ventana de carga al fallar
       alert("Error generando el plan IA: " + (err.message || String(err)));
     } finally {
       setPdfBusy(false);
