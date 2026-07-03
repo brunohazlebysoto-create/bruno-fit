@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W12";
+const APP_VERSION = "v2026.06.23-W13";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -11318,8 +11318,10 @@ tr:last-child td{border-bottom:none}
               const volumeScore = Math.min(3, (totalSetsMonth / 100) * 3);
               const topProgress = Object.keys(exlog || {}).filter(exKey => {
                 const sets = (exlog[exKey] || []).filter(s => {
-                  const dd = new Date(s.date + "T12:00:00");
-                  return dd.getFullYear() === year && dd.getMonth() === month;
+                  // s.date ya es ISO completo; agregarle "T12:00:00" daba Invalid
+                  // Date → NaN → el filtro nunca coincidía y el score era siempre 0
+                  const dd = new Date(s.date);
+                  return !isNaN(dd) && dd.getFullYear() === year && dd.getMonth() === month;
                 });
                 if (sets.length < 2) return false;
                 const sorted = [...sets].sort((a,b) => a.date < b.date ? -1 : 1);
