@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W7";
+const APP_VERSION = "v2026.06.23-W8";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1368,6 +1368,9 @@ function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
 
 // Activation weights by position (primary muscle = 1.0, decreasing)
 const MUSCLE_ACTIVATION_WEIGHTS = [1.0, 0.6, 0.35, 0.2, 0.1];
+// Máximo de series guardadas por ejercicio. Antes 60 (~5-8 sesiones) borraba
+// PRs viejos y rompía la detección de récords. 400 preserva meses de historial.
+const MAX_SETS_PER_EXERCISE = 400;
 
 function calcSessionMuscleSets(exlog, exercises, dateStr) {
   const allExObjects = Object.values(exercises || {}).flat();
@@ -2086,10 +2089,12 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
             if (cloudData.customPresets) {
               setCustomPresets(cloudData.customPresets);
             }
-            setNotes(cloudData.notes || []);
-            setChat(cloudData.chat || []);
-            setExlog(cloudData.exlog || {});
-            setExercises(cloudData.exercises || seedExercises());
+            // Guardar entrenamiento/notas/chat solo si la nube trae datos —
+            // evita que un sync con nube vacía borre el historial local
+            if (Array.isArray(cloudData.notes) && cloudData.notes.length > 0) setNotes(cloudData.notes);
+            if (Array.isArray(cloudData.chat) && cloudData.chat.length > 0) setChat(cloudData.chat);
+            if (cloudData.exlog && Object.keys(cloudData.exlog).length > 0) setExlog(cloudData.exlog);
+            if (cloudData.exercises && Object.keys(cloudData.exercises).length > 0) setExercises(cloudData.exercises);
             setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
             setShoppingList(cloudData.shoppingList || { categorias: [] });
             if (cloudData.meals && Array.isArray(cloudData.meals) && cloudData.meals.length > 0) setMeals(cloudData.meals);
@@ -2111,10 +2116,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
             if (cloudData.customPresets) {
               await saveKey("custom_presets", cloudData.customPresets);
             }
-            await saveKey("notes", cloudData.notes || []);
-            await saveKey("chat", cloudData.chat || []);
-            await saveKey("exlog", cloudData.exlog || {});
-            await saveKey("exercises", cloudData.exercises || seedExercises());
+            if (Array.isArray(cloudData.notes) && cloudData.notes.length > 0) await saveKey("notes", cloudData.notes);
+            if (Array.isArray(cloudData.chat) && cloudData.chat.length > 0) await saveKey("chat", cloudData.chat);
+            if (cloudData.exlog && Object.keys(cloudData.exlog).length > 0) await saveKey("exlog", cloudData.exlog);
+            if (cloudData.exercises && Object.keys(cloudData.exercises).length > 0) await saveKey("exercises", cloudData.exercises);
             await saveKey("body_comp", cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
             await saveKey("shopping_list", cloudData.shoppingList || { categorias: [] });
             if (cloudData.meals && Array.isArray(cloudData.meals) && cloudData.meals.length > 0) await saveKey("meals", cloudData.meals);
@@ -2836,9 +2841,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     const doBackup = async () => {
       const today = new Date().toISOString().slice(0, 10);
       if (localStorage.getItem("last_backup_date") === today) return;
-      localStorage.setItem("last_backup_date", today);
       const st = nightlyBackupRef.current;
-      const snap = { exportedAt: new Date().toISOString(), notes: st.notes, exlog: st.exlog, exercises: st.exercises, foodlog: st.foodlog, waterlog: st.waterlog, suppslog: st.suppslog, metricslog: st.metricslog, suppsInventory: st.suppsInventory, workoutDurations: st.workoutDurations, meals: st.meals, splits: st.splits, bodyComp: st.bodyComp, shoppingList: st.shoppingList, presetKey: st.presetKey, activeSplitKey: st.activeSplitKey, customPresets: st.customPresets, customSuggestions: st.customSuggestions, smartGoals: st.smartGoals, challenges: st.challenges };
+      const snap = { exportedAt: new Date().toISOString(), updatedAt: Date.now(), notes: st.notes, exlog: st.exlog, exercises: st.exercises, foodlog: st.foodlog, waterlog: st.waterlog, suppslog: st.suppslog, metricslog: st.metricslog, suppsInventory: st.suppsInventory, workoutDurations: st.workoutDurations, meals: st.meals, splits: st.splits, bodyComp: st.bodyComp, shoppingList: st.shoppingList, presetKey: st.presetKey, activeSplitKey: st.activeSplitKey, customPresets: st.customPresets, customSuggestions: st.customSuggestions, smartGoals: st.smartGoals, challenges: st.challenges, chat: st.chat, experiments: st.experiments, weeklyInsight: st.weeklyInsight, upcomingEvent: st.upcomingEvent };
       // 1. Descargar JSON
       try {
         const blob = new Blob([JSON.stringify(snap, null, 2)], { type: "application/json" });
@@ -2851,13 +2855,17 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
       } catch (_) {}
-      // 2. Guardar en Supabase si está autenticado
+      // 2. Guardar en Supabase si está autenticado.
+      // full_state debe ser OBJETO (no string): los lectores acceden a
+      // full_state.updatedAt / full_state.exlog directamente.
       if (st.supabase && st.supabaseUser) {
         try {
-          await st.supabase.from("profiles").upsert({ id: st.supabaseUser.id, email: st.supabaseUser.email, full_state: JSON.stringify(snap), last_backup: today, updated_at: new Date().toISOString() });
+          await st.supabase.from("profiles").upsert({ id: st.supabaseUser.id, email: st.supabaseUser.email, full_state: snap, last_backup: today, updated_at: new Date().toISOString() });
         } catch (_) {}
       }
-      // 3. Toast de confirmación
+      // 3. Marcar como hecho solo tras completar (permite reintentar si falla arriba)
+      localStorage.setItem("last_backup_date", today);
+      // 4. Toast de confirmación
       setBackupToast(true);
       setTimeout(() => setBackupToast(false), 5000);
     };
@@ -3024,10 +3032,12 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       // Reemplazar estado React
       setPresetKey(cloudData.presetKey || "definicion");
       setLog(finalLog);
-      setNotes(cloudData.notes || []);
-      setChat(cloudData.chat || []);
-      setExlog(cloudData.exlog || {});
-      setExercises(cloudData.exercises || seedExercises());
+      // Guardar entrenamiento/notas/chat solo si la nube trae datos — evita
+      // borrar el historial local al vincular con un código de cuenta vacía
+      if (Array.isArray(cloudData.notes) && cloudData.notes.length > 0) setNotes(cloudData.notes);
+      if (Array.isArray(cloudData.chat) && cloudData.chat.length > 0) setChat(cloudData.chat);
+      if (cloudData.exlog && Object.keys(cloudData.exlog).length > 0) setExlog(cloudData.exlog);
+      if (cloudData.exercises && Object.keys(cloudData.exercises).length > 0) setExercises(cloudData.exercises);
       setWater(finalWater);
       setSupplements(finalSupplements);
       setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
@@ -3052,10 +3062,11 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       // Guardar todos localmente
       await saveKey("profile", { presetKey: cloudData.presetKey || "definicion" });
       await saveKey(todayKey(), finalLog);
-      await saveKey("notes", cloudData.notes || []);
-      await saveKey("chat", cloudData.chat || []);
-      await saveKey("exlog", cloudData.exlog || {});
-      await saveKey("exercises", cloudData.exercises || seedExercises());
+      // Persistir solo si la nube trae datos (misma guarda que el estado React)
+      if (Array.isArray(cloudData.notes) && cloudData.notes.length > 0) await saveKey("notes", cloudData.notes);
+      if (Array.isArray(cloudData.chat) && cloudData.chat.length > 0) await saveKey("chat", cloudData.chat);
+      if (cloudData.exlog && Object.keys(cloudData.exlog).length > 0) await saveKey("exlog", cloudData.exlog);
+      if (cloudData.exercises && Object.keys(cloudData.exercises).length > 0) await saveKey("exercises", cloudData.exercises);
       await saveKey(waterKey(), finalWater);
       await saveKey(suppsKey(), finalSupplements);
       await saveKey("body_comp", cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
@@ -3099,10 +3110,11 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
       setPresetKey(cloudData.presetKey || "definicion");
       setLog(finalLog);
-      setNotes(cloudData.notes || []);
-      setChat(cloudData.chat || []);
-      setExlog(cloudData.exlog || {});
-      setExercises(cloudData.exercises || seedExercises());
+      // Guardar entrenamiento/notas/chat solo si la nube trae datos
+      if (Array.isArray(cloudData.notes) && cloudData.notes.length > 0) setNotes(cloudData.notes);
+      if (Array.isArray(cloudData.chat) && cloudData.chat.length > 0) setChat(cloudData.chat);
+      if (cloudData.exlog && Object.keys(cloudData.exlog).length > 0) setExlog(cloudData.exlog);
+      if (cloudData.exercises && Object.keys(cloudData.exercises).length > 0) setExercises(cloudData.exercises);
       setWater(finalWater);
       setSupplements(finalSupplements);
       setBodyComp(cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
@@ -3127,10 +3139,11 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       // Guardar todos localmente
       await saveKey("profile", { presetKey: cloudData.presetKey || "definicion" });
       await saveKey(todayKey(), finalLog);
-      await saveKey("notes", cloudData.notes || []);
-      await saveKey("chat", cloudData.chat || []);
-      await saveKey("exlog", cloudData.exlog || {});
-      await saveKey("exercises", cloudData.exercises || seedExercises());
+      // Persistir solo si la nube trae datos (misma guarda que el estado React)
+      if (Array.isArray(cloudData.notes) && cloudData.notes.length > 0) await saveKey("notes", cloudData.notes);
+      if (Array.isArray(cloudData.chat) && cloudData.chat.length > 0) await saveKey("chat", cloudData.chat);
+      if (cloudData.exlog && Object.keys(cloudData.exlog).length > 0) await saveKey("exlog", cloudData.exlog);
+      if (cloudData.exercises && Object.keys(cloudData.exercises).length > 0) await saveKey("exercises", cloudData.exercises);
       await saveKey(waterKey(), finalWater);
       await saveKey(suppsKey(), finalSupplements);
       await saveKey("body_comp", cloudData.bodyComp || { musculo: 64.7, grasaPct: 26.2, visceral: 9 });
@@ -3305,10 +3318,14 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     setSyncStatus("Sincronizando...");
     const today = new Date().toISOString().slice(0,10);
     const updateTime = Date.now();
-    const current = { 
-      presetKey, customPresets, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, 
+    const current = {
+      presetKey, customPresets, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today,
       foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations,
-      updatedAt: updateTime 
+      // Incluir todos los campos que guarda saveState — Force Push reemplaza el
+      // registro completo en la nube; omitirlos los borraba (splits, guidelines, goals…)
+      splits, customSuggestions, exerciseTechNotes, experiments, smartGoals, challenges,
+      weeklyInsight, upcomingEvent, dietGuidelines, trainingGuidelines,
+      updatedAt: updateTime
     };
     try {
       await pushStateToCloud(syncCode, current);
@@ -3393,7 +3410,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
             reps: repsVal,
             type: "work"
           };
-          updatedExlog[exName] = [e, ...(updatedExlog[exName] || [])].slice(0, 60);
+          updatedExlog[exName] = [e, ...(updatedExlog[exName] || [])].slice(0, MAX_SETS_PER_EXERCISE);
           hasExlog = true;
         }
       } else if (act.type === "UPDATE_TARGET" && act.data) {
@@ -4320,7 +4337,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
         };
       });
 
-      updatedExlog[resolvedName] = [...newSets, ...(updatedExlog[resolvedName] || [])].slice(0, 60);
+      updatedExlog[resolvedName] = [...newSets, ...(updatedExlog[resolvedName] || [])].slice(0, MAX_SETS_PER_EXERCISE);
     });
 
     if (newPrs.length > 0) {
@@ -10152,20 +10169,19 @@ function Entreno({
     const norm = (s) => s.toLowerCase().trim();
     const nameNorm = norm(name);
     const nameParts = nameNorm.split(/\s*\/\s*/);
-    const nameWords = nameNorm.split(/\s+/);
     let bestKey = name, bestLen = 0;
     for (const key of Object.keys(el)) {
       if (!el[key] || !el[key].length) continue;
       const keyNorm = norm(key);
       const keyParts = keyNorm.split(/\s*\/\s*/);
-      const keyWords = keyNorm.split(/\s+/);
+      // Solo empareja por igualdad exacta (case/trim) o por segmentos completos de "/"
+      // (alias intencionales tipo "Dominadas / Jalón"). Se eliminó el match por
+      // subconjunto de palabras porque fusionaba ejercicios distintos:
+      // "Press banca" caía en "Press banca inclinado" y mezclaba historiales.
       const match =
         keyNorm === nameNorm || // case-insensitive exact
-        nameParts.some(p => keyParts.includes(p)) || // slash part match
-        keyParts.some(p => nameParts.includes(p)) ||
-        // abbreviated word match: all words of the shorter name exist in the longer key
-        (nameWords.length >= 2 && nameWords.every(w => keyWords.includes(w))) ||
-        (keyWords.length >= 2 && keyWords.every(w => nameWords.includes(w)));
+        nameParts.some(p => keyParts.includes(p)) || // slash part match (segmentos completos)
+        keyParts.some(p => nameParts.includes(p));
       if (match && el[key].length > bestLen) { bestKey = key; bestLen = el[key].length; }
     }
     return bestKey;
@@ -10319,7 +10335,7 @@ function Entreno({
         });
       }
       const canonKey = findExlogKey(n);
-      const next = {...exlog, [canonKey]: [...newSets.reverse(), ...(exlog[canonKey]||[])].slice(0, 60)};
+      const next = {...exlog, [canonKey]: [...newSets.reverse(), ...(exlog[canonKey]||[])].slice(0, MAX_SETS_PER_EXERCISE)};
       setExlog(next);
       setDropRows([{w:"", reps:""}]);
       setSetsCount("1");
@@ -10346,7 +10362,7 @@ function Entreno({
       });
     }
     const canonKey = findExlogKey(n);
-    const next = {...exlog, [canonKey]: [...newSets.reverse(), ...(exlog[canonKey] || [])].slice(0, 60)};
+    const next = {...exlog, [canonKey]: [...newSets.reverse(), ...(exlog[canonKey] || [])].slice(0, MAX_SETS_PER_EXERCISE)};
     setExlog(next);
     setW("");
     setReps("");
@@ -10843,7 +10859,7 @@ tr:last-child td{border-bottom:none}
     // Merge sets from both keys, newest first, max 60
     const merged = [...(exlog[sourceName] || []), ...(exlog[targetName] || [])]
       .sort((a, b) => (a.date > b.date ? -1 : 1))
-      .slice(0, 60);
+      .slice(0, MAX_SETS_PER_EXERCISE);
     const updatedExlog = { ...exlog, [targetName]: merged };
     delete updatedExlog[sourceName];
     // Rename in exercises state (replace sourceName → targetName, deduplicate)
