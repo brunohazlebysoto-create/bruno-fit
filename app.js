@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W14";
+const APP_VERSION = "v2026.06.23-W15";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -15812,7 +15812,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                     <div style={{display:"flex", gap:6, overflowX:"auto", paddingBottom:4}}>
                       {todayPhotos.map((url, idx) => (
                         <div key={idx} style={{position:"relative", flexShrink:0}}>
-                          <img src={url} alt={`foto-${idx}`} style={{height:100, width:75, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`, display:"block"}}/>
+                          <img src={url} alt={`foto-${idx}`} className="thumb" style={{height:100, width:75, border:`1px solid ${C.line}`}}/>
                           <button onClick={() => deletePhoto(idx)} style={{position:"absolute", top:2, right:2, background:"rgba(0,0,0,0.6)", border:"none", borderRadius:"50%", width:18, height:18, color:"#fff", fontSize:10, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0}}>✕</button>
                         </div>
                       ))}

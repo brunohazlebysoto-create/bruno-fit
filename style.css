@@ -54,7 +54,16 @@ body {
   color: var(--text-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
   position: relative;
+  /* Quita el flash gris/azul al tocar en móvil — polish inmediato */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Scroll con inercia en iOS y sin barra fea en móvil */
+* {
+  -webkit-overflow-scrolling: touch;
 }
 
 /* App Responsive Container Layout */
@@ -100,18 +109,23 @@ body {
 
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--bg-color);
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background: var(--line-color);
   border-radius: 99px;
+  transition: background 0.2s ease;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
+  background: var(--accent-primary);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-color) transparent;
 }
 
 /* ===== ANIMACIONES Y CLASES GENERALES ===== */
@@ -173,11 +187,30 @@ textarea:focus, input:focus, select:focus {
 /* Botones genéricos */
 button {
   font-family: var(--font-sans);
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1),
+              filter 0.18s ease,
+              box-shadow 0.18s ease,
+              background-color 0.18s ease,
+              border-color 0.18s ease,
+              opacity 0.18s ease;
   border: none;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
 }
-button:active {
-  transform: scale(0.97);
+/* Hover sutil sin depender del color inline: solo aviva un poco el botón */
+@media (hover: hover) {
+  button:not(:disabled):hover {
+    filter: brightness(1.08);
+  }
+}
+button:not(:disabled):active {
+  transform: scale(0.96);
+  filter: brightness(0.96);
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 
@@ -202,12 +235,19 @@ button:active {
 }
 
 .muscle-heatmap-cell {
-  background-color: var(--panel-bg-sec);
+  background: linear-gradient(160deg, var(--panel-bg-sec) 0%, var(--panel-bg) 100%);
   border: 1px solid var(--line-color);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 8px;
   text-align: center;
-  transition: all 0.3s ease;
+  transition: transform 0.25s cubic-bezier(0.16,1,0.3,1), box-shadow 0.25s ease, border-color 0.25s ease;
+}
+@media (hover: hover) {
+  .muscle-heatmap-cell:hover {
+    transform: translateY(-2px);
+    border-color: rgba(205, 255, 74, 0.3);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.35);
+  }
 }
 
 .muscle-heatmap-cell .muscle-name {
@@ -232,11 +272,19 @@ button:active {
 }
 
 .comp-metric-box {
-  background-color: var(--panel-bg-sec);
+  background: linear-gradient(160deg, var(--panel-bg-sec) 0%, var(--panel-bg) 100%);
   border: 1px solid var(--line-color);
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 12px 10px;
   text-align: center;
+  transition: transform 0.25s cubic-bezier(0.16,1,0.3,1), box-shadow 0.25s ease, border-color 0.25s ease;
+}
+@media (hover: hover) {
+  .comp-metric-box:hover {
+    transform: translateY(-2px);
+    border-color: rgba(74, 214, 255, 0.28);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.35);
+  }
 }
 
 .comp-metric-box .label {
@@ -289,15 +337,26 @@ button:active {
   word-break: break-word;
 }
 
+.chat-bubble {
+  animation: bubbleIn 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes bubbleIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 .chat-bubble.user {
-  background-color: var(--accent-primary);
+  background: linear-gradient(135deg, #d4ff5c 0%, var(--accent-primary) 100%);
   color: #0c0e0b;
   align-self: flex-end;
   border-bottom-right-radius: 4px;
+  box-shadow: 0 4px 14px rgba(205, 255, 74, 0.18);
+  font-weight: 500;
 }
 
 .chat-bubble.assistant {
-  background-color: var(--panel-bg);
+  background: linear-gradient(160deg, var(--panel-bg-sec) 0%, var(--panel-bg) 100%);
   color: var(--text-ink);
   border: 1px solid var(--line-color);
   align-self: flex-start;
@@ -336,10 +395,18 @@ button:active {
   color: var(--text-muted) !important;
 }
 
-/* Transiciones interactivas táctiles */
+/* Transiciones interactivas táctiles (usado en 50+ botones) */
+.btn-active-scale {
+  transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.18s ease, box-shadow 0.18s ease !important;
+}
 .btn-active-scale:active {
-  transform: scale(0.97) !important;
-  transition: var(--transition-fast) !important;
+  transform: scale(0.95) !important;
+  filter: brightness(0.94);
+}
+@media (hover: hover) {
+  .btn-active-scale:not(:disabled):hover {
+    filter: brightness(1.08);
+  }
 }
 
 
@@ -386,4 +453,106 @@ button:active {
 @keyframes confettiFall {
   0%   { transform: translateY(-10px) rotate(0deg); opacity: 1; }
   100% { transform: translateY(105vh) rotate(540deg); opacity: 0; }
+}
+
+/* ===== UTILIDADES DE INTERFAZ REUTILIZABLES ===== */
+
+/* Tarjeta interactiva con elevación al hover — para listas y colecciones */
+.card-interactive {
+  transition: transform 0.25s cubic-bezier(0.16,1,0.3,1), box-shadow 0.25s ease, border-color 0.25s ease;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .card-interactive:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 22px rgba(0,0,0,0.4);
+    border-color: rgba(205,255,74,0.25);
+  }
+}
+.card-interactive:active {
+  transform: translateY(0) scale(0.99);
+}
+
+/* Miniatura de imagen para colecciones internas (galería de fotos, PRs) */
+.thumb {
+  border-radius: 12px;
+  object-fit: cover;
+  background: var(--panel-bg-sec);
+  transition: transform 0.3s cubic-bezier(0.16,1,0.3,1), box-shadow 0.3s ease;
+  display: block;
+}
+@media (hover: hover) {
+  .thumb:hover {
+    transform: scale(1.03);
+    box-shadow: var(--shadow-floating);
+  }
+}
+
+/* Skeleton de carga con shimmer — para estados de espera */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--panel-bg-sec);
+  border-radius: var(--radius-md);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent);
+  animation: shimmer 1.4s infinite;
+}
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+
+/* Chip / badge consistente */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--line-color);
+  background: var(--panel-bg-sec);
+  color: var(--text-muted);
+}
+
+/* Estado vacío centrado para secciones sin datos */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 8px;
+  padding: 32px 20px;
+  color: var(--text-muted);
+}
+.empty-state .empty-icon {
+  opacity: 0.4;
+  margin-bottom: 4px;
+}
+.empty-state .empty-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-ink);
+}
+.empty-state .empty-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 260px;
+}
+
+/* Respeta usuarios con movimiento reducido */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
