@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W16";
+const APP_VERSION = "v2026.06.23-W17";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -10207,6 +10207,139 @@ function PRHistoryModal({ exlog, exercises, onClose }) {
     } catch (_) {}
   };
 
+  const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  const handlePDF = () => {
+    if (records.length === 0) return;
+    // Abrir ventana dentro del gesto del click (evita bloqueo de pop-ups en móvil)
+    const win = window.open("", "_blank");
+
+    const today = new Date().toLocaleDateString("es-ES", { day: "2-digit", month: "long", year: "numeric" });
+
+    // Orden de grupos musculares (grandes primero); el resto, alfabético
+    const MUSCLE_ORDER = ["Pectoral", "Espalda", "Cuádriceps", "Isquios", "Glúteos", "Deltoides", "Bíceps", "Tríceps", "Antebrazo", "Abdominales", "Gemelos"];
+    const groups = {};
+    records.forEach(r => {
+      const g = r.muscle || "Otros";
+      (groups[g] = groups[g] || []).push(r);
+    });
+    const groupNames = Object.keys(groups).sort((a, b) => {
+      const ia = MUSCLE_ORDER.indexOf(a), ib = MUSCLE_ORDER.indexOf(b);
+      if (ia !== -1 && ib !== -1) return ia - ib;
+      if (ia !== -1) return -1;
+      if (ib !== -1) return 1;
+      return a.localeCompare(b, "es");
+    });
+
+    const recClass = (k) => k === "overload" ? "r-up" : k === "variation" ? "r-rot" : "r-hold";
+    const recLbl = (k) => k === "overload" ? "SUBIR" : k === "variation" ? "ROTAR" : "CONSOLIDAR";
+
+    let sections = "";
+    groupNames.forEach(g => {
+      // Dentro de cada grupo, ordenar por PR de peso descendente
+      const rows = groups[g].slice().sort((a, b) => b.prWeight - a.prWeight).map(r => `
+        <tr>
+          <td class="exn">${esc(r.name)}${r.plateau ? ' <span class="warn">estancado</span>' : ""}</td>
+          <td class="num"><strong>${r.prWeight}</strong> kg<div class="sub">${r.prWeightDate ? fdate(r.prWeightDate) : "—"}</div></td>
+          <td class="num">${r.pr1RM} kg</td>
+          <td class="num">${r.lastMaxW}×${r.lastMaxReps}<div class="sub">${fdate(r.lastDate)}</div></td>
+          <td class="num">${r.sessionsCount}</td>
+          <td class="rec">
+            <span class="pill ${recClass(r.recommendation.kind)}">${recLbl(r.recommendation.kind)}</span>
+            <strong>${r.recommendation.weight}kg × ${r.recommendation.reps}</strong>
+            <div class="note">${esc(r.recommendation.note)}</div>
+          </td>
+        </tr>`).join("");
+      sections += `
+      <div class="grp">
+        <div class="gh">${esc(g)} <span class="gc">${groups[g].length} ejercicio${groups[g].length !== 1 ? "s" : ""}</span></div>
+        <table>
+          <thead><tr>
+            <th>Ejercicio</th><th class="num">PR Peso</th><th class="num">1RM est.</th>
+            <th class="num">Última</th><th class="num">Ses.</th><th>Próxima sesión</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    });
+
+    const totalSessions = records.reduce((a, r) => a + r.sessionsCount, 0);
+
+    const html = `<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"/>
+<title>Histórico de PRs · Bruno · ${today}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;color:#111;font-size:10pt;line-height:1.45;background:#fff}
+.page{max-width:800px;margin:0 auto;padding:24px 22px 40px}
+.dh{border-bottom:3px solid #111;padding-bottom:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:flex-end}
+h1{font-size:18pt;font-weight:900;letter-spacing:-.5px;line-height:1.1}
+.sub-h{font-size:9pt;color:#555;margin-top:3px}
+.meta{text-align:right;font-size:9pt;color:#555;line-height:1.7}
+.badge{display:inline-block;background:#111;color:#fff;font-size:8pt;font-weight:700;padding:3px 9px;border-radius:20px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
+.sb{border:1.5px solid #e5e7eb;border-radius:8px;padding:8px 11px}
+.sb .l{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#888}
+.sb .v{font-size:14pt;font-weight:900;color:#111}
+.grp{margin-bottom:15px;page-break-inside:avoid}
+.gh{font-size:10pt;font-weight:900;text-transform:uppercase;letter-spacing:.08em;color:#fff;background:#15803d;padding:5px 12px;border-radius:7px;margin-bottom:6px}
+.gh .gc{font-weight:600;font-size:8pt;opacity:.85;text-transform:none;letter-spacing:0}
+table{width:100%;border-collapse:collapse;font-size:9pt}
+th{text-align:left;font-size:7pt;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;border-bottom:1.5px solid #d1d5db;padding:5px 6px}
+th.num,td.num{text-align:center}
+td{padding:6px;border-bottom:1px solid #f0f1f3;vertical-align:top}
+tr:last-child td{border-bottom:none}
+.exn{font-weight:700;color:#111;width:19%}
+.warn{display:inline-block;font-size:6.5pt;font-weight:800;color:#b45309;background:#fef3c7;border-radius:20px;padding:1px 6px;vertical-align:middle}
+.num strong{font-size:10.5pt}
+.sub{font-size:7pt;color:#9ca3af;font-weight:500}
+.rec{width:31%}
+.rec strong{font-size:9.5pt;color:#111}
+.note{font-size:7.5pt;color:#6b7280;margin-top:2px;line-height:1.35}
+.pill{display:inline-block;font-size:6.5pt;font-weight:800;letter-spacing:.03em;padding:2px 7px;border-radius:20px;margin-right:5px;vertical-align:middle}
+.r-up{background:#dcfce7;color:#15803d}
+.r-rot{background:#fef3c7;color:#b45309}
+.r-hold{background:#dbeafe;color:#1d4ed8}
+.leg{margin-top:12px;border:1.5px solid #e5e7eb;border-radius:8px;padding:9px 12px;page-break-inside:avoid}
+.leg h4{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#888;margin-bottom:5px}
+.leg span{display:inline-block;font-size:8pt;color:#374151;margin-right:14px}
+.leg .pill{margin-right:5px}
+.ft{margin-top:16px;padding-top:9px;border-top:1.5px solid #e5e7eb;display:flex;justify-content:space-between;font-size:7.5pt;color:#9ca3af}
+.pbtn{position:fixed;top:14px;right:14px;background:#15803d;color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:11pt;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+@media print{.pbtn{display:none}@page{size:A4;margin:11mm 11mm 15mm 11mm}}
+</style></head><body>
+<button class="pbtn" onclick="window.print()">🖨 Guardar PDF</button>
+<div class="page">
+  <div class="dh">
+    <div>
+      <h1>Histórico de PRs</h1>
+      <div class="sub-h">Récords personales y recomendación de carga por ejercicio · ${today}</div>
+    </div>
+    <div class="meta"><span class="badge">Bruno Hazleby</span><br>${records.length} ejercicios</div>
+  </div>
+  <div class="stats">
+    <div class="sb"><div class="l">Ejercicios</div><div class="v">${records.length}</div></div>
+    <div class="sb"><div class="l">Grupos musculares</div><div class="v">${groupNames.length}</div></div>
+    <div class="sb"><div class="l">Sesiones registradas</div><div class="v">${totalSessions}</div></div>
+  </div>
+  ${sections}
+  <div class="leg">
+    <h4>Cómo leer la recomendación</h4>
+    <span><span class="pill r-up">SUBIR</span>Llegaste a 8+ reps: aumenta la carga</span>
+    <span><span class="pill r-hold">CONSOLIDAR</span>Mantén el peso y suma repeticiones</span>
+    <span><span class="pill r-rot">ROTAR</span>Estancado: fuerza una rep o cambia de ejercicio</span>
+  </div>
+  <div class="ft">
+    <span>Bruno Fit · Histórico de PRs</span>
+    <span>1RM estimado con fórmula Epley (peso × [1 + reps/30])</span>
+    <span>${today}</span>
+  </div>
+</div></body></html>`;
+
+    if (win) { win.document.open(); win.document.write(html); win.document.close(); }
+    else { alert("El navegador bloqueó la ventana. Permite pop-ups para este sitio y vuelve a intentar."); }
+  };
+
   return (
     <div
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(3px)",
@@ -10243,6 +10376,10 @@ function PRHistoryModal({ exlog, exercises, onClose }) {
             <button className="btn-active-scale" onClick={handleCopy} disabled={records.length === 0}
               style={{ background: copied ? C.lime : C.panel, border: `1px solid ${copied ? C.lime : C.line}`, borderRadius: 10, padding: "0 12px", color: copied ? "#0c0e0b" : C.ink, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
               {copied ? <><Check size={14} /> Copiado</> : <><Copy size={14} /> Copiar</>}
+            </button>
+            <button className="btn-active-scale" onClick={handlePDF} disabled={records.length === 0}
+              style={{ background: C.lime, border: `1px solid ${C.lime}`, borderRadius: 10, padding: "0 12px", color: "#0c0e0b", fontSize: 12, fontWeight: 800, display: "flex", alignItems: "center", gap: 6 }}>
+              <FileText size={14} /> PDF
             </button>
           </div>
         </div>
