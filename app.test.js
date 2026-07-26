@@ -244,3 +244,84 @@ describe('Hoy tab functionalities', () => {
     console.error = originalError;
   });
 });
+
+describe('buildPRHistory', () => {
+  const { buildPRHistory, isCompoundExercise, estimate1RM } = require('./app.js');
+
+  const exercises = {
+    pecho: [{ name: 'Press banca', musculos: ['Pectoral', 'Tríceps'] }],
+    biceps: [{ name: 'Curl bíceps', musculos: ['Bíceps'] }],
+  };
+
+  test('devuelve array vacío sin datos', () => {
+    expect(buildPRHistory({}, {})).toEqual([]);
+    expect(buildPRHistory(null, null)).toEqual([]);
+  });
+
+  test('calcula PR de peso y 1RM estimado ignorando calentamientos', () => {
+    const exlog = {
+      'Press banca': [
+        { date: '2026-01-10T10:00:00Z', w: 100, reps: 3, type: 'work' },
+        { date: '2026-01-10T10:05:00Z', w: 40, reps: 15, type: 'warmup' }, // ignorado
+        { date: '2026-01-05T10:00:00Z', w: 90, reps: 8, type: 'work' },
+      ],
+    };
+    const [rec] = buildPRHistory(exlog, exercises);
+    expect(rec.name).toBe('Press banca');
+    expect(rec.muscle).toBe('Pectoral');
+    expect(rec.prWeight).toBe(100); // el calentamiento no cuenta aunque tenga más reps
+    // 1RM: max(100*(1+3/30)=110, 90*(1+8/30)=114) = 114
+    expect(rec.pr1RM).toBeCloseTo(114, 1);
+    expect(rec.sessionsCount).toBe(2);
+    expect(rec.totalSets).toBe(2);
+  });
+
+  test('recomienda subir carga cuando la última sesión tiene 8+ reps (compuesto +2.5kg)', () => {
+    const exlog = {
+      'Press banca': [{ date: '2026-02-01T10:00:00Z', w: 80, reps: 8, type: 'work' }],
+    };
+    const [rec] = buildPRHistory(exlog, exercises);
+    expect(rec.recommendation.kind).toBe('overload');
+    expect(rec.recommendation.weight).toBe(82.5);
+  });
+
+  test('aislado sube solo +1kg', () => {
+    const exlog = {
+      'Curl bíceps': [{ date: '2026-02-01T10:00:00Z', w: 20, reps: 10, type: 'work' }],
+    };
+    const [rec] = buildPRHistory(exlog, exercises);
+    expect(rec.recommendation.kind).toBe('overload');
+    expect(rec.recommendation.weight).toBe(21);
+  });
+
+  test('detecta estancamiento con mismo peso 3 sesiones y reps bajas → rotar', () => {
+    const exlog = {
+      'Curl bíceps': [
+        { date: '2026-03-03T10:00:00Z', w: 20, reps: 5, type: 'work' },
+        { date: '2026-03-02T10:00:00Z', w: 20, reps: 5, type: 'work' },
+        { date: '2026-03-01T10:00:00Z', w: 20, reps: 5, type: 'work' },
+      ],
+    };
+    const [rec] = buildPRHistory(exlog, exercises);
+    expect(rec.plateau).toBe(true);
+    expect(rec.recommendation.kind).toBe('variation');
+    expect(rec.recommendation.weight).toBe(20);
+  });
+
+  test('ordena por fecha del último entrenamiento (más reciente primero)', () => {
+    const exlog = {
+      'Press banca': [{ date: '2026-01-01T10:00:00Z', w: 80, reps: 6, type: 'work' }],
+      'Curl bíceps': [{ date: '2026-05-01T10:00:00Z', w: 20, reps: 6, type: 'work' }],
+    };
+    const recs = buildPRHistory(exlog, exercises);
+    expect(recs[0].name).toBe('Curl bíceps');
+    expect(recs[1].name).toBe('Press banca');
+  });
+
+  test('isCompoundExercise y estimate1RM', () => {
+    expect(isCompoundExercise('Sentadilla trasera')).toBe(true);
+    expect(isCompoundExercise('Curl de bíceps')).toBe(false);
+    expect(estimate1RM(100, 0)).toBe(0);
+    expect(estimate1RM(100, 10)).toBeCloseTo(133.33, 1);
+  });
+});

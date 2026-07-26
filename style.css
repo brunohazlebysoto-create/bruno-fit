@@ -507,6 +507,12 @@ button:disabled {
   100% { transform: translateX(100%); }
 }
 
+/* Entrada de hojas/modales desde abajo */
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* Chip / badge consistente */
 .chip {
   display: inline-flex;

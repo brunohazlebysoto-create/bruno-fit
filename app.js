@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W15";
+const APP_VERSION = "v2026.06.23-W16";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1165,6 +1165,112 @@ function calcProgressiveOverload(exlog) {
     if (maxReps >= 8) suggestions[exName] = { currentMax: maxW, suggested: maxW + increment, reason: `${maxReps} reps con ${maxW}kg → sube` };
   });
   return suggestions;
+}
+
+// Detecta si un ejercicio es compuesto (para decidir el incremento de carga)
+function isCompoundExercise(exName) {
+  return /sentadill|peso muert|press banca|press militar|dominad|jal[oó]n|remo|prensa|hip thrust|zancad|fondos/i.test(exName || "");
+}
+
+// 1RM estimado (Epley) — coherente con el resto de la app: w * (1 + reps/30)
+function estimate1RM(w, reps) {
+  const weight = parseFloat(w) || 0;
+  const r = parseInt(reps) || 0;
+  if (weight <= 0 || r <= 0) return 0;
+  return weight * (1 + r / 30);
+}
+
+// Construye el histórico consolidado de PRs por ejercicio + recomendación de
+// carga para la próxima sesión. Pura y testeable: no toca estado ni DOM.
+// exlog: { [exName]: [{date, w, reps, rir, type}, ...] }
+// exercises: { [grupo]: [{name, musculos:[...]}] } (para el músculo principal)
+function buildPRHistory(exlog, exercises) {
+  const exMuscleMap = {};
+  Object.values(exercises || {}).flat().forEach(ex => {
+    if (ex?.name && Array.isArray(ex.musculos)) exMuscleMap[ex.name] = ex.musculos;
+  });
+
+  const records = [];
+
+  Object.entries(exlog || {}).forEach(([exName, sets]) => {
+    const working = (sets || []).filter(s => s && s.date && (parseFloat(s.w) || 0) > 0 && s.type !== "warmup");
+    if (working.length === 0) return;
+
+    // PR de peso máximo y PR de 1RM estimado (con sus fechas)
+    let prWeight = 0, prWeightDate = null, pr1RM = 0, pr1RMDate = null;
+    working.forEach(s => {
+      const w = parseFloat(s.w) || 0;
+      if (w > prWeight) { prWeight = w; prWeightDate = s.date; }
+      const rm = estimate1RM(s.w, s.reps);
+      if (rm > pr1RM) { pr1RM = rm; pr1RMDate = s.date; }
+    });
+
+    // Agrupa por día para reconstruir las sesiones (fecha local YYYY-MM-DD)
+    const byDate = {};
+    working.forEach(s => {
+      const dk = String(s.date).slice(0, 10);
+      (byDate[dk] = byDate[dk] || []).push(s);
+    });
+    const sessionDates = Object.keys(byDate).sort().reverse();
+    const sessions = sessionDates.map(dk => {
+      const daySets = byDate[dk];
+      const maxW = Math.max(...daySets.map(s => parseFloat(s.w) || 0));
+      const maxReps = Math.max(...daySets.filter(s => (parseFloat(s.w) || 0) === maxW).map(s => parseInt(s.reps) || 0));
+      return { date: dk, maxW, maxReps, nSets: daySets.length };
+    });
+
+    const last = sessions[0];
+    const compound = isCompoundExercise(exName);
+    const inc = compound ? 2.5 : 1;
+
+    // ¿Estancamiento? mismo peso máximo en las últimas 3+ sesiones
+    let plateau = false;
+    if (sessions.length >= 3) {
+      const last3 = sessions.slice(0, 3).map(s => s.maxW);
+      plateau = last3.every(w => w === last3[0]);
+    }
+
+    // Recomendación de carga para la próxima sesión
+    let rec;
+    if (plateau) {
+      if (last.maxReps >= 8) {
+        rec = { kind: "overload", weight: last.maxW + inc, reps: "6-8",
+          note: `Estancado en ${last.maxW}kg pero con ${last.maxReps} reps: sube a ${last.maxW + inc}kg.` };
+      } else {
+        rec = { kind: "variation", weight: last.maxW, reps: `${last.maxReps + 1}+`,
+          note: `Estancado ${sessions.slice(0,3).length} sesiones en ${last.maxW}kg. Fuerza una rep extra o rota a una variación.` };
+      }
+    } else if (last.maxReps >= 8) {
+      rec = { kind: "overload", weight: last.maxW + inc, reps: "6-8",
+        note: `${last.maxReps} reps con ${last.maxW}kg: sube a ${last.maxW + inc}kg y baja a 6-8 reps.` };
+    } else if (last.maxReps <= 4) {
+      rec = { kind: "hold", weight: last.maxW, reps: `${last.maxReps + 1}-6`,
+        note: `Consolida ${last.maxW}kg sumando reps (objetivo ${last.maxReps + 1}-6) antes de subir carga.` };
+    } else {
+      rec = { kind: "hold", weight: last.maxW, reps: "8",
+        note: `Mantén ${last.maxW}kg y apunta a llegar a 8 reps para habilitar la subida.` };
+    }
+
+    records.push({
+      name: exName,
+      muscle: (exMuscleMap[exName] || [])[0] || "",
+      prWeight,
+      prWeightDate,
+      pr1RM: Math.round(pr1RM * 10) / 10,
+      pr1RMDate,
+      sessionsCount: sessions.length,
+      totalSets: working.length,
+      lastDate: last.date,
+      lastMaxW: last.maxW,
+      lastMaxReps: last.maxReps,
+      plateau,
+      recommendation: rec,
+    });
+  });
+
+  // Ordena por fecha del último entrenamiento (más reciente primero)
+  records.sort((a, b) => (a.lastDate < b.lastDate ? 1 : a.lastDate > b.lastDate ? -1 : 0));
+  return records;
 }
 
 function detectMuscleImbalances(exlog, exercises) {
@@ -10063,6 +10169,149 @@ function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions
   );
 }
 
+/* ===== MODAL: HISTÓRICO DE PRs + RECOMENDACIÓN DE CARGA ===== */
+function PRHistoryModal({ exlog, exercises, onClose }) {
+  const [q, setQ] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const records = useMemo(() => buildPRHistory(exlog, exercises), [exlog, exercises]);
+
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    if (!term) return records;
+    return records.filter(r =>
+      r.name.toLowerCase().includes(term) || (r.muscle || "").toLowerCase().includes(term)
+    );
+  }, [records, q]);
+
+  const recColor = (kind) => kind === "overload" ? C.lime : kind === "variation" ? C.amber : C.cyan;
+  const recLabel = (kind) => kind === "overload" ? "SUBIR CARGA" : kind === "variation" ? "ROTAR / FORZAR REP" : "CONSOLIDAR";
+
+  const buildReport = () => {
+    const fecha = new Date().toLocaleDateString("es", { day: "2-digit", month: "long", year: "numeric" });
+    let out = `📋 HISTÓRICO DE PRs Y RECOMENDACIÓN DE CARGA — Bruno\nGenerado: ${fecha}\nEjercicios registrados: ${records.length}\n\n`;
+    records.forEach(r => {
+      out += `● ${r.name}${r.muscle ? ` [${r.muscle}]` : ""}\n`;
+      out += `   PR peso: ${r.prWeight}kg${r.prWeightDate ? ` (${fdate(r.prWeightDate)})` : ""} · PR 1RM est.: ${r.pr1RM}kg\n`;
+      out += `   ${r.sessionsCount} sesión(es) · Última: ${r.lastMaxW}kg × ${r.lastMaxReps} reps (${fdate(r.lastDate)})${r.plateau ? " ⚠️ estancado" : ""}\n`;
+      out += `   → Próxima: ${r.recommendation.weight}kg × ${r.recommendation.reps} reps — ${r.recommendation.note}\n\n`;
+    });
+    return out;
+  };
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(buildReport());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (_) {}
+  };
+
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(3px)",
+        display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 9999 }}
+      onClick={onClose}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{ background: C.bg, borderTop: `1px solid ${C.line}`, borderRadius: "20px 20px 0 0",
+          width: "100%", maxWidth: 560, maxHeight: "90vh", display: "flex", flexDirection: "column",
+          boxShadow: "0 -8px 40px rgba(0,0,0,0.5)", animation: "slideUp 0.3s cubic-bezier(0.16,1,0.3,1)" }}
+      >
+        {/* Header */}
+        <div style={{ padding: "16px 18px 12px", borderBottom: `1px solid ${C.line}`, flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Target size={18} color={C.lime} />
+              <span className="disp" style={{ fontSize: 18, color: C.ink }}>Histórico de PRs</span>
+            </div>
+            <button className="btn-active-scale" onClick={onClose}
+              style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: "50%", width: 30, height: 30, color: C.muted, display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>
+              <X size={16} />
+            </button>
+          </div>
+          <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 10, lineHeight: 1.4 }}>
+            Todos tus ejercicios con su PR de peso, 1RM estimado y la carga recomendada para la próxima sesión.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              value={q} onChange={e => setQ(e.target.value)}
+              placeholder="Buscar ejercicio o músculo…"
+              style={{ flex: 1, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 12px", color: C.ink, fontSize: 13, outline: "none" }}
+            />
+            <button className="btn-active-scale" onClick={handleCopy} disabled={records.length === 0}
+              style={{ background: copied ? C.lime : C.panel, border: `1px solid ${copied ? C.lime : C.line}`, borderRadius: 10, padding: "0 12px", color: copied ? "#0c0e0b" : C.ink, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+              {copied ? <><Check size={14} /> Copiado</> : <><Copy size={14} /> Copiar</>}
+            </button>
+          </div>
+        </div>
+
+        {/* Lista */}
+        <div style={{ overflowY: "auto", padding: "12px 14px 24px", flex: 1 }}>
+          {records.length === 0 ? (
+            <div className="empty-state">
+              <Dumbbell size={40} className="empty-icon" color={C.muted} />
+              <div className="empty-title">Aún no hay entrenamientos</div>
+              <div className="empty-desc">Registra series en tus ejercicios y aquí verás tu histórico de PRs y las recomendaciones de carga.</div>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-desc">Ningún ejercicio coincide con «{q}».</div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {filtered.map((r, i) => {
+                const col = recColor(r.recommendation.kind);
+                return (
+                  <div key={r.name + i} className="card-interactive" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 14, padding: 12, cursor: "default" }}>
+                    {/* Fila superior: nombre + músculo */}
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: C.ink, lineHeight: 1.2, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
+                      {r.muscle ? <span className="chip" style={{ flexShrink: 0 }}>{r.muscle}</span> : null}
+                    </div>
+
+                    {/* PRs */}
+                    <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                      <div style={{ flex: 1, minWidth: 90, background: C.panel2, borderRadius: 10, padding: "7px 9px" }}>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: ".04em" }}>PR Peso</div>
+                        <div style={{ fontSize: 16, fontWeight: 900, color: C.lime }}>{r.prWeight}<span style={{ fontSize: 10, fontWeight: 600 }}>kg</span></div>
+                        {r.prWeightDate ? <div style={{ fontSize: 9, color: C.muted }}>{fdate(r.prWeightDate)}</div> : null}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 90, background: C.panel2, borderRadius: 10, padding: "7px 9px" }}>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: ".04em" }}>1RM est.</div>
+                        <div style={{ fontSize: 16, fontWeight: 900, color: C.cyan }}>{r.pr1RM}<span style={{ fontSize: 10, fontWeight: 600 }}>kg</span></div>
+                        <div style={{ fontSize: 9, color: C.muted }}>{r.sessionsCount} ses · {r.totalSets} series</div>
+                      </div>
+                    </div>
+
+                    {/* Última sesión */}
+                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}>
+                      <CalendarDays size={12} color={C.muted} />
+                      Última: <strong style={{ color: C.ink }}>{r.lastMaxW}kg × {r.lastMaxReps}</strong> ({fdate(r.lastDate)})
+                      {r.plateau ? <span style={{ color: C.amber, fontWeight: 700 }}>· estancado</span> : null}
+                    </div>
+
+                    {/* Recomendación próxima sesión */}
+                    <div style={{ background: `${col}14`, border: `1px solid ${col}44`, borderRadius: 10, padding: "8px 10px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                        <TrendingUp size={13} color={col} />
+                        <span style={{ fontSize: 9.5, fontWeight: 800, color: col, textTransform: "uppercase", letterSpacing: ".05em" }}>{recLabel(r.recommendation.kind)}</span>
+                        <span style={{ fontSize: 13, fontWeight: 900, color: C.ink, marginLeft: "auto" }}>{r.recommendation.weight}kg × {r.recommendation.reps}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.4 }}>{r.recommendation.note}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ===== TAB ENTRENAMIENTO ===== */
 function Entreno({
   exlog, setExlog, exercises, setExercises, geminiKey, handleAnalyzeWorkout, importWorkoutData,
@@ -10088,6 +10337,7 @@ function Entreno({
   const [exMgrSearch, setExMgrSearch] = useState("");
   const [exSearch, setExSearch] = useState("");
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [showPRHistory, setShowPRHistory] = useState(false);
 
   const getRecentSensationsText = () => {
     const sevenDaysAgo = Date.now() - 7 * 86400000;
@@ -11150,7 +11400,20 @@ tr:last-child td{border-bottom:none}
 
   return (
     <div className="pop">
-      <div className="disp" style={{fontSize:24, color:C.lime, marginBottom:10}}>ENTRENAMIENTO · SPLIT</div>
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, marginBottom:10}}>
+        <div className="disp" style={{fontSize:24, color:C.lime}}>ENTRENAMIENTO · SPLIT</div>
+        <button
+          className="btn-active-scale"
+          onClick={() => setShowPRHistory(true)}
+          style={{display:"flex", alignItems:"center", gap:6, background:C.panel, border:`1px solid ${C.lime}66`, borderRadius:10, padding:"7px 12px", color:C.lime, fontSize:12, fontWeight:800, flexShrink:0}}
+        >
+          <Target size={15}/> Histórico PRs
+        </button>
+      </div>
+
+      {showPRHistory && (
+        <PRHistoryModal exlog={exlog} exercises={exercises} onClose={() => setShowPRHistory(false)} />
+      )}
 
       {topProgress.length > 0 && (
         <div style={{display:"flex", gap:6, marginBottom:12, overflowX:"auto"}}>
@@ -16835,5 +17098,5 @@ if (container) {
 
 // Para testing (Jest / Node.js)
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { loadKey, default: App };
+  module.exports = { loadKey, buildPRHistory, isCompoundExercise, estimate1RM, default: App };
 }
