@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W17";
+const APP_VERSION = "v2026.06.23-W18";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1216,7 +1216,8 @@ function buildPRHistory(exlog, exercises) {
       const daySets = byDate[dk];
       const maxW = Math.max(...daySets.map(s => parseFloat(s.w) || 0));
       const maxReps = Math.max(...daySets.filter(s => (parseFloat(s.w) || 0) === maxW).map(s => parseInt(s.reps) || 0));
-      return { date: dk, maxW, maxReps, nSets: daySets.length };
+      const e1rm = Math.round(daySets.reduce((best, s) => Math.max(best, estimate1RM(s.w, s.reps)), 0) * 10) / 10;
+      return { date: dk, maxW, maxReps, nSets: daySets.length, e1rm };
     });
 
     const last = sessions[0];
@@ -1265,6 +1266,8 @@ function buildPRHistory(exlog, exercises) {
       lastMaxReps: last.maxReps,
       plateau,
       recommendation: rec,
+      // Histórico cronológico (antiguo → reciente) para el gráfico de evolución
+      history: sessions.slice().reverse().map(s => ({ date: s.date, maxW: s.maxW, e1rm: s.e1rm })),
     });
   });
 
@@ -10209,6 +10212,34 @@ function PRHistoryModal({ exlog, exercises, onClose }) {
 
   const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+  // Sparkline SVG de la evolución del peso máximo por sesión (últimas 12)
+  const sparkline = (history, w = 108, h = 30) => {
+    const pts = (history || []).slice(-12).map(p => p.maxW).filter(v => typeof v === "number" && v > 0);
+    if (pts.length < 2) {
+      return `<svg width="${w}" height="${h}"><text x="2" y="${h / 2 + 3}" font-size="7" fill="#9ca3af">Sin evolución</text></svg>`;
+    }
+    const pad = 3;
+    const min = Math.min(...pts), max = Math.max(...pts);
+    const range = max - min || 1;
+    const n = pts.length;
+    const xAt = (i) => pad + (i * (w - 2 * pad)) / (n - 1);
+    const yAt = (v) => h - pad - ((v - min) / range) * (h - 2 * pad);
+    const coords = pts.map((v, i) => [xAt(i), yAt(v)]);
+    const line = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const area = `M${coords[0][0].toFixed(1)},${(h - pad).toFixed(1)} ` +
+      coords.map(([x, y]) => `L${x.toFixed(1)},${y.toFixed(1)}`).join(" ") +
+      ` L${coords[n - 1][0].toFixed(1)},${(h - pad).toFixed(1)} Z`;
+    const up = pts[n - 1] >= pts[0];
+    const col = up ? "#15803d" : "#b45309";
+    const fill = up ? "rgba(21,128,61,0.12)" : "rgba(180,83,9,0.12)";
+    const [lx, ly] = coords[n - 1];
+    return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
+      `<path d="${area}" fill="${fill}" stroke="none"/>` +
+      `<path d="${line}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>` +
+      `<circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="2.2" fill="${col}"/>` +
+      `</svg>`;
+  };
+
   const handlePDF = () => {
     if (records.length === 0) return;
     // Abrir ventana dentro del gesto del click (evita bloqueo de pop-ups en móvil)
@@ -10237,11 +10268,18 @@ function PRHistoryModal({ exlog, exercises, onClose }) {
     let sections = "";
     groupNames.forEach(g => {
       // Dentro de cada grupo, ordenar por PR de peso descendente
-      const rows = groups[g].slice().sort((a, b) => b.prWeight - a.prWeight).map(r => `
+      const rows = groups[g].slice().sort((a, b) => b.prWeight - a.prWeight).map(r => {
+        const first = (r.history || [])[0];
+        const lastH = (r.history || [])[r.history.length - 1];
+        const delta = first && lastH ? Math.round((lastH.maxW - first.maxW) * 10) / 10 : 0;
+        const deltaTxt = (r.history || []).length >= 2
+          ? `<div class="sub ${delta > 0 ? "up" : delta < 0 ? "down" : ""}">${delta > 0 ? "+" : ""}${delta}kg</div>` : "";
+        return `
         <tr>
           <td class="exn">${esc(r.name)}${r.plateau ? ' <span class="warn">estancado</span>' : ""}</td>
           <td class="num"><strong>${r.prWeight}</strong> kg<div class="sub">${r.prWeightDate ? fdate(r.prWeightDate) : "—"}</div></td>
           <td class="num">${r.pr1RM} kg</td>
+          <td class="spark">${sparkline(r.history)}${deltaTxt}</td>
           <td class="num">${r.lastMaxW}×${r.lastMaxReps}<div class="sub">${fdate(r.lastDate)}</div></td>
           <td class="num">${r.sessionsCount}</td>
           <td class="rec">
@@ -10249,14 +10287,15 @@ function PRHistoryModal({ exlog, exercises, onClose }) {
             <strong>${r.recommendation.weight}kg × ${r.recommendation.reps}</strong>
             <div class="note">${esc(r.recommendation.note)}</div>
           </td>
-        </tr>`).join("");
+        </tr>`;
+      }).join("");
       sections += `
       <div class="grp">
         <div class="gh">${esc(g)} <span class="gc">${groups[g].length} ejercicio${groups[g].length !== 1 ? "s" : ""}</span></div>
         <table>
           <thead><tr>
             <th>Ejercicio</th><th class="num">PR Peso</th><th class="num">1RM est.</th>
-            <th class="num">Última</th><th class="num">Ses.</th><th>Próxima sesión</th>
+            <th class="spark">Evolución (peso)</th><th class="num">Última</th><th class="num">Ses.</th><th>Próxima sesión</th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
@@ -10289,11 +10328,16 @@ th{text-align:left;font-size:7pt;font-weight:700;text-transform:uppercase;letter
 th.num,td.num{text-align:center}
 td{padding:6px;border-bottom:1px solid #f0f1f3;vertical-align:top}
 tr:last-child td{border-bottom:none}
-.exn{font-weight:700;color:#111;width:19%}
+.exn{font-weight:700;color:#111;width:17%}
 .warn{display:inline-block;font-size:6.5pt;font-weight:800;color:#b45309;background:#fef3c7;border-radius:20px;padding:1px 6px;vertical-align:middle}
 .num strong{font-size:10.5pt}
 .sub{font-size:7pt;color:#9ca3af;font-weight:500}
-.rec{width:31%}
+.sub.up{color:#15803d;font-weight:700}
+.sub.down{color:#b45309;font-weight:700}
+.spark{width:120px;text-align:center;vertical-align:middle}
+.spark svg{display:block;margin:0 auto}
+th.spark{text-align:center}
+.rec{width:27%}
 .rec strong{font-size:9.5pt;color:#111}
 .note{font-size:7.5pt;color:#6b7280;margin-top:2px;line-height:1.35}
 .pill{display:inline-block;font-size:6.5pt;font-weight:800;letter-spacing:.03em;padding:2px 7px;border-radius:20px;margin-right:5px;vertical-align:middle}

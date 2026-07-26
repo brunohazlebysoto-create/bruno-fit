@@ -318,6 +318,22 @@ describe('buildPRHistory', () => {
     expect(recs[1].name).toBe('Press banca');
   });
 
+  test('incluye history cronológico (antiguo→reciente) con maxW y e1rm para el gráfico', () => {
+    const exlog = {
+      'Press banca': [
+        { date: '2026-01-01T10:00:00Z', w: 80, reps: 6, type: 'work' },
+        { date: '2026-02-01T10:00:00Z', w: 85, reps: 5, type: 'work' },
+        { date: '2026-03-01T10:00:00Z', w: 90, reps: 4, type: 'work' },
+      ],
+    };
+    const [rec] = buildPRHistory(exlog, exercises);
+    expect(rec.history).toHaveLength(3);
+    expect(rec.history.map(h => h.maxW)).toEqual([80, 85, 90]); // orden cronológico ascendente
+    expect(rec.history[0].date).toBe('2026-01-01');
+    expect(typeof rec.history[2].e1rm).toBe('number');
+    expect(rec.history[2].e1rm).toBeGreaterThan(0);
+  });
+
   test('isCompoundExercise y estimate1RM', () => {
     expect(isCompoundExercise('Sentadilla trasera')).toBe(true);
     expect(isCompoundExercise('Curl de bíceps')).toBe(false);
