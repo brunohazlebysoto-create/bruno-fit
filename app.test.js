@@ -452,3 +452,144 @@ describe('loadRecommendation', () => {
     expect(loadRecommendation('Press banca', 80, 6, false).kind).toBe('hold');
   });
 });
+
+describe('perfil corporal y objetivos derivados', () => {
+  const {
+    calcLeanMass, calcBMRMifflin, calcBMRKatch, calcBMR, calcNutritionTargets,
+    calcWaterGoalGlasses, calcWeightEMASeries, getTrendWeight, DEFAULT_BODY_PROFILE,
+  } = require('./app.js');
+
+  test('calcLeanMass descuenta la grasa', () => {
+    expect(calcLeanMass(100, 25)).toBe(75);
+    expect(calcLeanMass(93.9, 26.2)).toBeCloseTo(69.3, 1);
+  });
+
+  test('calcLeanMass devuelve 0 sin dato fiable de grasa', () => {
+    expect(calcLeanMass(90, 0)).toBe(0);
+    expect(calcLeanMass(90, undefined)).toBe(0);
+    expect(calcLeanMass(0, 20)).toBe(0);
+  });
+
+  test('Mifflin distingue sexo', () => {
+    const base = { edad: 34, alturaCm: 180, weight: 90 };
+    const h = calcBMRMifflin({ ...base, sexo: 'hombre' });
+    const m = calcBMRMifflin({ ...base, sexo: 'mujer' });
+    expect(h).toBe(10 * 90 + 6.25 * 180 - 5 * 34 + 5);
+    expect(h - m).toBe(166); // +5 vs -161
+  });
+
+  test('Katch-McArdle usa masa magra', () => {
+    expect(calcBMRKatch(70)).toBe(Math.round(370 + 21.6 * 70));
+    expect(calcBMRKatch(0)).toBe(0);
+  });
+
+  test('calcBMR prefiere Katch si hay % de grasa, si no Mifflin', () => {
+    const conGrasa = calcBMR(DEFAULT_BODY_PROFILE, { weight: 90, grasaPct: 20 });
+    expect(conGrasa.method).toBe('Katch-McArdle');
+    expect(conGrasa.leanKg).toBe(72);
+
+    const sinGrasa = calcBMR(DEFAULT_BODY_PROFILE, { weight: 90 });
+    expect(sinGrasa.method).toBe('Mifflin-St Jeor');
+    expect(sinGrasa.bmr).toBeGreaterThan(0);
+  });
+
+  test('los macros cuadran con las kcal y la proteína sale de la masa magra', () => {
+    const t = calcNutritionTargets(
+      { ...DEFAULT_BODY_PROFILE, objetivo: 'definicion', ritmoKgSemana: -0.5 },
+      { weight: 93.9, grasaPct: 26.2 }
+    );
+    expect(t.kcal).toBe(t.p * 4 + t.c * 4 + t.f * 9); // consistencia interna
+    // definición = 2.6 g por kg de masa magra
+    expect(t.p).toBe(Math.round(t.leanKg * 2.6));
+    expect(t.protPorKgLean).toBeCloseTo(2.6, 1);
+    expect(t.bmrMethod).toBe('Katch-McArdle');
+  });
+
+  test('bajar de peso reduce el objetivo calórico (los presets fijos no lo hacían)', () => {
+    const antes = calcNutritionTargets(DEFAULT_BODY_PROFILE, { weight: 95, grasaPct: 26 });
+    const despues = calcNutritionTargets(DEFAULT_BODY_PROFILE, { weight: 85, grasaPct: 22 });
+    expect(despues.kcal).toBeLessThan(antes.kcal);
+    expect(despues.bmr).toBeLessThan(antes.bmr);
+  });
+
+  test('el objetivo cambia el ritmo y el déficit', () => {
+    const def = calcNutritionTargets({ ...DEFAULT_BODY_PROFILE, objetivo: 'definicion', ritmoKgSemana: -0.5 }, { weight: 90, grasaPct: 22 });
+    const vol = calcNutritionTargets({ ...DEFAULT_BODY_PROFILE, objetivo: 'volumen', ritmoKgSemana: 0.25 }, { weight: 90, grasaPct: 22 });
+    expect(def.deficitDiario).toBeLessThan(0);
+    expect(vol.deficitDiario).toBeGreaterThan(0);
+    expect(vol.kcal).toBeGreaterThan(def.kcal);
+  });
+
+  test('nunca baja del BMR ni de 1500 kcal', () => {
+    const t = calcNutritionTargets(
+      { ...DEFAULT_BODY_PROFILE, ritmoKgSemana: -2 }, // ritmo agresivo
+      { weight: 60, grasaPct: 12 }
+    );
+    expect(t.kcal).toBeGreaterThanOrEqual(1500);
+    expect(t.kcal).toBeGreaterThanOrEqual(t.bmr);
+  });
+
+  test('usa el TDEE real si es plausible e ignora el disparatado', () => {
+    const m = { weight: 90, grasaPct: 22 };
+    const est = calcNutritionTargets(DEFAULT_BODY_PROFILE, m).tdeeEstimado;
+    const plausible = calcNutritionTargets(DEFAULT_BODY_PROFILE, m, { tdeeReal: Math.round(est * 1.1) });
+    expect(plausible.usandoTdeeReal).toBe(true);
+    const absurdo = calcNutritionTargets(DEFAULT_BODY_PROFILE, m, { tdeeReal: 900 });
+    expect(absurdo.usandoTdeeReal).toBe(false);
+  });
+
+  test('sin peso no hay objetivos', () => {
+    expect(calcNutritionTargets(DEFAULT_BODY_PROFILE, {})).toBeNull();
+  });
+
+  test('el agua escala con el peso y el entreno', () => {
+    expect(calcWaterGoalGlasses(60)).toBeLessThan(calcWaterGoalGlasses(100));
+    expect(calcWaterGoalGlasses(90, true)).toBeGreaterThan(calcWaterGoalGlasses(90, false));
+    expect(calcWaterGoalGlasses(0)).toBe(14); // fallback
+  });
+
+  test('la EMA suaviza el ruido diario del peso', () => {
+    const log = {
+      '2026-07-01': { weight: 90 },
+      '2026-07-02': { weight: 93 }, // pico por retención de agua
+      '2026-07-03': { weight: 90 },
+    };
+    const serie = calcWeightEMASeries(log);
+    expect(serie).toHaveLength(3);
+    expect(serie[0].ema).toBe(90);
+    // la EMA absorbe el pico: queda muy por debajo de los 93 crudos
+    expect(serie[1].ema).toBeLessThan(92);
+    expect(serie[1].raw).toBe(93);
+    expect(getTrendWeight(log)).toBeCloseTo(serie[2].ema, 2);
+  });
+
+  test('la EMA ignora fechas sin peso', () => {
+    expect(calcWeightEMASeries({ '2026-07-01': { grasaPct: 20 } })).toEqual([]);
+    expect(getTrendWeight({})).toBeNull();
+  });
+});
+
+describe('Panel de perfil corporal en Registro', () => {
+  beforeAll(() => {
+    localStorage.setItem('onboarding_shown', '1');
+  });
+
+  test('muestra el perfil editable y los objetivos calculados', async () => {
+    const originalError = console.error;
+    console.error = jest.fn();
+    const App = require('./app').default;
+
+    await act(async () => { render(<App />); });
+
+    const regTab = screen.getAllByText('Registro')[0].closest('button');
+    await act(async () => { regTab.click(); });
+
+    expect(screen.getAllByText('Perfil corporal y objetivos').length).toBeGreaterThan(0);
+    // Los tres bloques del cálculo derivado
+    expect(screen.getAllByText('BMR').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('TDEE').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Aplicar estos objetivos').length).toBeGreaterThan(0);
+
+    console.error = originalError;
+  });
+});

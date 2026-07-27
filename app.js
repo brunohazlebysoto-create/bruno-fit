@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W22";
+const APP_VERSION = "v2026.06.23-W23";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -476,8 +476,17 @@ const aiErr = (e) => {
   }
   return "⚠️ Error IA: " + msg;
 };
-const getProfileStr = (weight = 93.9, musculo = 64.7, grasaPct = 26.2, visceral = 9) => {
-  return `Bruno: hombre, 34 años, 180 cm, ${weight} kg. Objetivo: definición (bajar grasa manteniendo músculo; ${musculo} kg de músculo, ${grasaPct}% grasa, visceral grado ${visceral}). Dieta hiperproteica.`;
+const getProfileStr = (weight = 93.9, musculo = 64.7, grasaPct = 26.2, visceral = 9, profile = null) => {
+  // El perfil (sexo/edad/altura/objetivo) viene del perfil editable del usuario;
+  // los valores por defecto se mantienen por compatibilidad con llamadas antiguas.
+  const p = { ...DEFAULT_BODY_PROFILE, ...(profile || {}) };
+  const objetivoTxt = p.objetivo === "volumen"
+    ? "volumen (ganar músculo minimizando grasa)"
+    : p.objetivo === "mantenimiento"
+      ? "mantenimiento (recomposición corporal)"
+      : "definición (bajar grasa manteniendo músculo)";
+  const lean = calcLeanMass(weight, grasaPct);
+  return `Bruno: ${p.sexo}, ${p.edad} años, ${p.alturaCm} cm, ${weight} kg. Objetivo: ${objetivoTxt}; ${musculo} kg de músculo, ${grasaPct}% grasa${lean ? `, ${lean} kg de masa magra` : ""}, visceral grado ${visceral}. Dieta hiperproteica.`;
 };
 
 const cleanAndParseJSON = (str) => {
@@ -1098,9 +1107,16 @@ function calcTDEE(foodlog, metricslog) {
   const foodStart = last21[0];
   const recent = allWeightDates.filter(d => d >= foodStart);
   const weightDates = recent.length >= 2 ? recent : allWeightDates.slice(-2);
-  const firstW = parseFloat(metricslog[weightDates[0]]?.weight) || 0;
-  const lastW = parseFloat(metricslog[weightDates[weightDates.length-1]]?.weight) || 0;
-  const days = Math.max(1, (new Date(weightDates[weightDates.length-1]) - new Date(weightDates[0])) / 86400000);
+  // Usar el peso SUAVIZADO (EMA) en los extremos, no la lectura cruda: un día
+  // con retención de agua en la primera o última medición distorsionaba el TDEE
+  // en cientos de kcal. Si no hay serie EMA, cae al valor crudo.
+  const emaByDate = {};
+  calcWeightEMASeries(metricslog).forEach(pt => { emaByDate[pt.date] = pt.ema; });
+  const dFirst = weightDates[0];
+  const dLast = weightDates[weightDates.length-1];
+  const firstW = emaByDate[dFirst] ?? (parseFloat(metricslog[dFirst]?.weight) || 0);
+  const lastW = emaByDate[dLast] ?? (parseFloat(metricslog[dLast]?.weight) || 0);
+  const days = Math.max(1, (new Date(dLast) - new Date(dFirst)) / 86400000);
   const deltaKcalPerDay = ((lastW - firstW) * 7700) / days;
   return Math.round(avgKcal - deltaKcalPerDay);
 }
@@ -1122,6 +1138,161 @@ function calcBodyProjection(currentWeight, currentGrasaPct, tdee, targetKcal, we
     g = Math.max(5, Math.min(50, (newFatKg / w) * 100));
   }
   return points;
+}
+
+/* ===== PERFIL CORPORAL Y OBJETIVOS DERIVADOS =====
+   Antes edad/altura/sexo estaban hardcodeados y los objetivos de kcal/macros
+   eran presets fijos: cambiar de peso o de % de grasa no movía ningún número.
+   Estas funciones derivan BMR → TDEE → kcal → macros del perfil real. */
+
+const DEFAULT_BODY_PROFILE = {
+  sexo: "hombre",          // "hombre" | "mujer"
+  edad: 34,
+  alturaCm: 180,
+  objetivo: "definicion",  // "definicion" | "mantenimiento" | "volumen"
+  actividad: 1.45,         // factor NEAT/actividad diaria (sin contar el entreno)
+  ritmoKgSemana: -0.5,     // ritmo de cambio de peso deseado (kg/semana)
+};
+
+// Factores de actividad seleccionables en la UI
+const ACTIVITY_LEVELS = [
+  { key: 1.2,   label: "Sedentario",   desc: "Trabajo de oficina, sin caminar" },
+  { key: 1.375, label: "Ligero",       desc: "Algo de movimiento diario" },
+  { key: 1.45,  label: "Moderado",     desc: "De pie a ratos, camina algo" },
+  { key: 1.55,  label: "Activo",       desc: "En movimiento gran parte del día" },
+  { key: 1.725, label: "Muy activo",   desc: "Trabajo físico" },
+];
+
+// Objetivos: ritmo por defecto y g de proteína por kg de MASA MAGRA.
+// En déficit se sube la proteína para proteger el músculo.
+const GOAL_PRESETS = {
+  definicion:    { label: "Definición",    ritmo: -0.5, protLean: 2.6, fatPctKcal: 0.25 },
+  mantenimiento: { label: "Mantenimiento", ritmo: 0,    protLean: 2.3, fatPctKcal: 0.28 },
+  volumen:       { label: "Volumen",       ritmo: 0.25, protLean: 2.2, fatPctKcal: 0.25 },
+};
+
+const KCAL_PER_KG = 7700; // ~7700 kcal por kg de peso corporal
+
+// Masa magra (kg) a partir del peso y el % de grasa
+function calcLeanMass(weight, grasaPct) {
+  const w = parseFloat(weight) || 0;
+  const g = parseFloat(grasaPct);
+  if (w <= 0) return 0;
+  if (isNaN(g) || g <= 0 || g >= 70) return 0; // sin dato fiable de grasa
+  return Math.round(w * (1 - g / 100) * 10) / 10;
+}
+
+// BMR Mifflin-St Jeor (usa peso, altura, edad y sexo)
+function calcBMRMifflin({ sexo, edad, alturaCm, weight }) {
+  const w = parseFloat(weight) || 0;
+  const h = parseFloat(alturaCm) || 0;
+  const a = parseFloat(edad) || 0;
+  if (w <= 0 || h <= 0 || a <= 0) return 0;
+  const base = 10 * w + 6.25 * h - 5 * a;
+  return Math.round(base + (sexo === "mujer" ? -161 : 5));
+}
+
+// BMR Katch-McArdle (usa masa magra — más preciso si conoces tu % de grasa)
+function calcBMRKatch(leanKg) {
+  const l = parseFloat(leanKg) || 0;
+  if (l <= 0) return 0;
+  return Math.round(370 + 21.6 * l);
+}
+
+// BMR preferente: Katch-McArdle si hay % de grasa fiable, si no Mifflin
+function calcBMR(profile, metrics) {
+  const p = { ...DEFAULT_BODY_PROFILE, ...(profile || {}) };
+  const m = metrics || {};
+  const lean = calcLeanMass(m.weight, m.grasaPct);
+  if (lean > 0) {
+    return { bmr: calcBMRKatch(lean), method: "Katch-McArdle", leanKg: lean };
+  }
+  return { bmr: calcBMRMifflin({ ...p, weight: m.weight }), method: "Mifflin-St Jeor", leanKg: 0 };
+}
+
+/**
+ * Objetivos de nutrición derivados del perfil + composición corporal.
+ * opts.tdeeReal → TDEE observado (calcTDEE); si viene, manda sobre la estimación.
+ * Devuelve kcal/macros y toda la trazabilidad del cálculo.
+ */
+function calcNutritionTargets(profile, metrics, opts = {}) {
+  const p = { ...DEFAULT_BODY_PROFILE, ...(profile || {}) };
+  const m = metrics || {};
+  const weight = parseFloat(m.weight) || 0;
+  if (weight <= 0) return null;
+
+  const goal = GOAL_PRESETS[p.objetivo] || GOAL_PRESETS.definicion;
+  const { bmr, method, leanKg } = calcBMR(p, m);
+  if (!bmr) return null;
+
+  const tdeeEstimado = Math.round(bmr * (parseFloat(p.actividad) || 1.45));
+  const tdeeReal = parseInt(opts.tdeeReal) || 0;
+  // El TDEE observado (de comida + peso real) es más fiable que la estimación,
+  // pero se ignora si se desvía >35% (suele ser dato sucio o registro incompleto).
+  const usarReal = tdeeReal > 0 && Math.abs(tdeeReal - tdeeEstimado) / tdeeEstimado <= 0.35;
+  const tdee = usarReal ? tdeeReal : tdeeEstimado;
+
+  const ritmo = p.ritmoKgSemana != null ? parseFloat(p.ritmoKgSemana) : goal.ritmo;
+  const deltaDiario = (ritmo * KCAL_PER_KG) / 7;
+  // Suelo de seguridad: nunca por debajo del BMR ni de 1500 kcal
+  const kcal = Math.max(Math.round(bmr), 1500, Math.round(tdee + deltaDiario));
+
+  // Proteína sobre masa magra (si la hay); si no, 2.0 g/kg de peso corporal
+  const proteina = leanKg > 0
+    ? Math.round(leanKg * goal.protLean)
+    : Math.round(weight * 2.0);
+  // Grasa: % de las kcal, con mínimo hormonal de 0.6 g/kg de peso
+  const grasa = Math.max(Math.round(weight * 0.6), Math.round((kcal * goal.fatPctKcal) / 9));
+  // Carbohidratos: el resto (mínimo 50 g)
+  const carbo = Math.max(50, Math.round((kcal - proteina * 4 - grasa * 9) / 4));
+  // kcal recalculadas para que cuadren exactamente con los macros
+  const kcalFinal = proteina * 4 + carbo * 4 + grasa * 9;
+
+  return {
+    kcal: kcalFinal, p: proteina, c: carbo, f: grasa,
+    bmr, bmrMethod: method, leanKg,
+    tdee, tdeeEstimado, tdeeReal: tdeeReal || null, usandoTdeeReal: usarReal,
+    ritmoKgSemana: ritmo, deficitDiario: Math.round(kcalFinal - tdee),
+    protPorKgLean: leanKg > 0 ? Math.round((proteina / leanKg) * 10) / 10 : null,
+    objetivo: p.objetivo, label: goal.label,
+  };
+}
+
+/**
+ * Objetivo de hidratación: ~35 ml por kg + extra si se entrenó ese día.
+ * Antes era una constante de 14 vasos para todo el mundo.
+ */
+function calcWaterGoalGlasses(weight, trainedToday = false, glassMl = 250) {
+  const w = parseFloat(weight) || 0;
+  if (w <= 0) return 14;
+  const ml = w * 35 + (trainedToday ? 600 : 0);
+  return Math.max(6, Math.min(24, Math.round(ml / glassMl)));
+}
+
+/**
+ * Peso de tendencia (media móvil exponencial). El peso diario oscila ±1-2 kg
+ * por agua/comida; la EMA filtra ese ruido y deja ver el cambio real.
+ * Devuelve la serie [{date, raw, ema}] en orden cronológico.
+ */
+function calcWeightEMASeries(metricslog, alpha = 0.25) {
+  const dates = Object.keys(metricslog || {})
+    .filter(d => parseFloat(metricslog[d]?.weight) > 0)
+    .sort();
+  const out = [];
+  let ema = null;
+  dates.forEach(d => {
+    const raw = parseFloat(metricslog[d].weight) || 0;
+    if (raw <= 0) return;
+    ema = ema == null ? raw : alpha * raw + (1 - alpha) * ema;
+    out.push({ date: d, raw, ema: Math.round(ema * 100) / 100 });
+  });
+  return out;
+}
+
+// Último peso de tendencia (null si no hay datos suficientes)
+function getTrendWeight(metricslog, alpha = 0.25) {
+  const s = calcWeightEMASeries(metricslog, alpha);
+  return s.length ? s[s.length - 1].ema : null;
 }
 
 function detectPlateaus(exlog) {
@@ -1876,6 +2047,14 @@ export default function App(){
   const [syncStatus, setSyncStatus] = useState("Desconectado");
 
   const [bodyComp, setBodyComp] = useState({ musculo: 64.7, grasaPct: 26.2, visceral: 9 });
+  // Perfil corporal editable (antes edad/altura/sexo estaban hardcodeados).
+  // Clave de storage propia para no chocar con la persistencia de "profile".
+  const [bodyProfile, setBodyProfile] = useState(DEFAULT_BODY_PROFILE);
+  const updateBodyProfile = (patch) => {
+    const next = { ...DEFAULT_BODY_PROFILE, ...bodyProfile, ...patch };
+    setBodyProfile(next);
+    saveKey("body_profile", next);
+  };
   const [shoppingList, setShoppingList] = useState({ categorias: [] });
   const [meals, setMeals] = useState(DEFAULT_MEALS);
   const [customSuggestions, setCustomSuggestions] = useState([]);
@@ -2056,6 +2235,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       // Cargar fallbacks locales
       const prof = await loadKey("profile", { presetKey: "definicion" });
       const localPresetKey = prof.presetKey || "definicion";
+      const localBodyProfile = await loadKey("body_profile", null);
+      if (localBodyProfile && typeof localBodyProfile === "object") {
+        setBodyProfile({ ...DEFAULT_BODY_PROFILE, ...localBodyProfile });
+      }
       let localNotes = await loadKey("notes", []);
       if (!Array.isArray(localNotes)) localNotes = [];
       let localChat = await loadKey("chat", []);
@@ -3588,7 +3771,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     const muscleList = Object.entries(muscleVol).map(([m,d])=>`${m}: ${d.setsPerWeek} ser/sem [${d.status}]`).join(', ');
     const overloadList = Object.entries(overloadSuggestions||{}).slice(0,5).map(([ex,s])=>`${ex}: ${s.currentMax}kg→${s.suggested}kg`).join(', ') || 'sin sugerencias';
     const imbalanceList = (muscleImbalances||[]).join(' | ') || 'ninguno';
-    const sys = `Eres el Agente Entrenador de BrunoFit — especialista en periodización de fuerza e hipertrofia. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Analiza los datos objetivos y genera recomendaciones precisas y accionables. Usa terminología técnica en español. Basa TODOS los números en los datos provistos. Responde SOLO en JSON que cumpla el esquema.`;
+    const sys = `Eres el Agente Entrenador de BrunoFit — especialista en periodización de fuerza e hipertrofia. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral, bodyProfile)} Analiza los datos objetivos y genera recomendaciones precisas y accionables. Usa terminología técnica en español. Basa TODOS los números en los datos provistos. Responde SOLO en JSON que cumpla el esquema.`;
     const userMsg = `ANÁLISIS DE ENTRENAMIENTO — ÚLTIMAS 8 SEMANAS:\nCarga semanal: ${loadSummary}\nEstancamientos: ${plateauList}\nBalance muscular: ${muscleList}\nSobrecarga sugerida: ${overloadList}\nDesequilibrios push/pull: ${imbalanceList}\nDeload: ${deloadCheck.recommended?`RECOMENDADO — ${deloadCheck.reason} (urgencia: ${deloadCheck.urgency})`:'no necesario aún'}\nSemanas sin deload: ${deloadCheck.weeksSinceDeload}\nSplits: ${(splits||[]).map(s=>`${s.key}: ${s.name}`).join(' | ')}`;
     try {
       const raw = await callGemini([{role:"user",content:userMsg}], sys, TRAINER_AGENT_SCHEMA);
@@ -3817,6 +4000,22 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
   const activeMetrics = getMetricsForDate(selectedDateStr) || {
     weight: START_W, musculo: 64.7, grasaPct: 26.2, visceral: 9,
     brazoDer: "", brazoIzq: "", musloDer: "", musloIzq: "", pantorrillaDer: "", pantorrillaIzq: "", cintura: "", pecho: ""
+  };
+
+  // Objetivos sugeridos a partir del perfil + composición corporal real.
+  // Se recalculan solos al cambiar el peso, el % de grasa o el perfil.
+  const nutritionTargets = React.useMemo(
+    () => calcNutritionTargets(bodyProfile, activeMetrics, { tdeeReal: tdeeEstimate }),
+    [bodyProfile, activeMetrics.weight, activeMetrics.grasaPct, tdeeEstimate]
+  );
+
+  // Aplicar los objetivos calculados al preset activo. Es una acción explícita
+  // del usuario: nunca se sobrescriben sus macros sin que lo pida.
+  const applyNutritionTargets = () => {
+    if (!nutritionTargets) return;
+    updateAllMacrosAndAdjustMeals(
+      nutritionTargets.kcal, nutritionTargets.p, nutritionTargets.c, nutritionTargets.f
+    );
   };
 
   // ⚡ Bolt: Memoize totals calculation to prevent unnecessary reduce operations on every render
@@ -4146,7 +4345,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       const fitdaysComp = getFitdaysCompositionText();
       const fotoAnalysisCtx = getFotoAnalysisContext();
 
-      const sys = `Eres el coach nutricional y de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)}${dietGuidelines ? `\nDIRECTRICES DIETÉTICAS PERSONALIZADAS DE BRUNO (respétalas siempre): ${dietGuidelines}` : ""}${trainingGuidelines ? `\nDIRECTRICES DE ENTRENAMIENTO PERSONALIZADAS DE BRUNO (respétalas siempre): ${trainingGuidelines}` : ""}
+      const sys = `Eres el coach nutricional y de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral, bodyProfile)}${dietGuidelines ? `\nDIRECTRICES DIETÉTICAS PERSONALIZADAS DE BRUNO (respétalas siempre): ${dietGuidelines}` : ""}${trainingGuidelines ? `\nDIRECTRICES DE ENTRENAMIENTO PERSONALIZADAS DE BRUNO (respétalas siempre): ${trainingGuidelines}` : ""}
 MOMENTO ACTUAL: ${timeBlock}. ADAPTA tu respuesta a este contexto horario — no sugieras desayuno si es de noche, ni cena si es de mañana. ${mealContext}
 Plan nutricional activo: ${target.kcal} kcal (${target.label}), P:${target.p}g / C:${target.c}g / G:${target.f}g.
 Métricas antropométricas y corporales: ${metricsSummary}
@@ -4846,10 +5045,11 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
           <Onboarding setView={setView} />
         )}
         {view === "hoy" && (
-          <Hoy 
-            target={target} 
-            totals={totals} 
-            log={log} 
+          <Hoy
+            target={target}
+            activeMetrics={activeMetrics}
+            totals={totals}
+            log={log}
             setLog={(l) => { setLog(l); saveState({ log: l }); }} 
             loaded={loaded} 
             water={water} 
@@ -4932,6 +5132,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             setPrAlerts={setPrAlerts}
             checkNewPR={checkNewPR}
             activeMetrics={activeMetrics}
+            bodyProfile={bodyProfile}
             overloadSuggestions={overloadSuggestions}
             plateauAlerts={plateauAlerts}
             muscleImbalances={muscleImbalances}
@@ -4955,6 +5156,10 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             selectedDateStr={selectedDateStr}
             saveWeight={(w) => saveState({ weight: w })}
             activeMetrics={activeMetrics}
+            bodyProfile={bodyProfile}
+            updateBodyProfile={updateBodyProfile}
+            nutritionTargets={nutritionTargets}
+            onApplyTargets={applyNutritionTargets}
             foodlog={foodlog}
             waterlog={waterlog}
             exlog={exlog}
@@ -4976,8 +5181,9 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
           />
         )}
         {view === "plan" && (
-          <Plan 
+          <Plan
             presetKey={presetKey}
+            bodyProfile={bodyProfile}
             setPresetKey={(k) => saveState({ presetKey: k })}
             customPresets={customPresets}
             setCustomPresets={(cp, switchToPersonal) => {
@@ -4997,8 +5203,9 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
           />
         )}
         {view === "perfil" && (
-          <Perfil 
+          <Perfil
             activeMetrics={activeMetrics}
+            bodyProfile={bodyProfile}
             geminiKey={geminiKey}
             saveGeminiKey={saveGeminiKey}
             aiModel={aiModel}
@@ -6785,9 +6992,9 @@ function Hoy({
   proactiveMsg, aiNotifications, setAiNotifications, macroAdjustSuggestion, setMacroAdjustSuggestion, saveState, customPresets,
   weeklyInsight, smartGoals, challenges, updateChallengeProgress, upcomingEvent, experiments, setExperiments, splits,
   setView, setShowNutritionModal, setModalVals, addFoodInputText, setAddFoodInputText, customSuggestions,
-  exlog, notes, foodlog, sendCoachMessage
+  exlog, notes, foodlog, sendCoachMessage, activeMetrics
 }){
-  const [text, setText] = useState(""); 
+  const [text, setText] = useState("");
   const [busy, setBusy] = useState(false); 
   const [err, setErr] = useState("");
   const [newSuppInput, setNewSuppInput] = useState("");
@@ -6938,7 +7145,6 @@ function Hoy({
     })();
   }, []);
 
-  const waterGoal = 14; // Default to 14 glasses (3.5L)
   const liters = (water * 0.25).toFixed(2);
   const rem = {
     kcal: Math.max(0, target.kcal - totals.kcal),
@@ -6958,6 +7164,9 @@ function Hoy({
     ),
     [exlog, selectedDateStr]
   );
+  // Objetivo de hidratación según peso corporal (~35 ml/kg) + extra si hoy
+  // hubo entreno. Antes era una constante de 14 vasos para cualquier peso.
+  const waterGoal = calcWaterGoalGlasses(activeMetrics?.weight, !isRestDay);
   const readiness = React.useMemo(
     () => predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr),
     [exlog, notes, water, foodlog, selectedDateStr]
@@ -8590,6 +8799,7 @@ function Coach({
 /* ===== TAB PERFIL Y AJUSTES ===== */
 function Perfil({
   activeMetrics,
+  bodyProfile,
   geminiKey,
   saveGeminiKey,
   aiModel,
@@ -8747,7 +8957,13 @@ function Perfil({
           </div>
           <div>
             <div style={{ fontSize: 16, fontWeight: 800, color: "var(--text-ink)" }}>Bruno Eduardo</div>
-            <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Hombre • 34 años • 180 cm</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              {(() => {
+                const bp = { ...DEFAULT_BODY_PROFILE, ...(bodyProfile || {}) };
+                const sexoTxt = bp.sexo === "mujer" ? "Mujer" : "Hombre";
+                return `${sexoTxt} • ${bp.edad} años • ${bp.alturaCm} cm`;
+              })()}
+            </div>
           </div>
         </div>
 
@@ -10647,7 +10863,8 @@ function Entreno({
   exlog, setExlog, exercises, setExercises, geminiKey, handleAnalyzeWorkout, importWorkoutData,
   activeSplitKey, setActiveSplitKey, selectedDateStr, setSelectedDateStr, calMonth, setCalMonth,
   workoutDurations, setWorkoutDurations, exerciseTechNotes, setExerciseTechNotes, prAlerts, setPrAlerts, checkNewPR, activeMetrics,
-  overloadSuggestions, plateauAlerts, muscleImbalances, splits, setSplits, notes, setNotes, chat
+  overloadSuggestions, plateauAlerts, muscleImbalances, splits, setSplits, notes, setNotes, chat,
+  bodyProfile
 }){
   const sel = activeSplitKey;
   const setSel = setActiveSplitKey;
@@ -11903,7 +12120,7 @@ tr:last-child td{border-bottom:none}
 
     try{
       const sensations = getRecentSensationsText();
-      const sys = `Eres el entrenador personal de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Entrega recomendaciones concretas de sobrecarga progresiva y técnica de ejecución. Corto y directo. Si Bruno reporta cansancio, dolor, molestias o fatiga, ajusta proactivamente.`;
+      const sys = `Eres el entrenador personal de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral, bodyProfile)} Entrega recomendaciones concretas de sobrecarga progresiva y técnica de ejecución. Corto y directo. Si Bruno reporta cansancio, dolor, molestias o fatiga, ajusta proactivamente.`;
       const out = await callGemini([{role:"user", content:`Ejercicio: ${ex.name}. Músculos: ${exMusculos.join(", ") || "?"}.\nHistorial reciente (nuevo a viejo, con 1RM estimado): ${hist}.\nSensaciones recientes: ${sensations}.${fatigueCtx}\nAnaliza el rendimiento considerando el contexto de fatiga y da pautas de carga para el próximo entrenamiento.`}], sys);
       setProg(p => ({...p, [ex.name]: out}));
     } catch(e){
@@ -11924,7 +12141,7 @@ tr:last-child td{border-bottom:none}
     }).join(" | ");
     try{ 
       const sensations = getRecentSensationsText();
-      const sys = `Eres el entrenador de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Orden del entrenamiento: mantener el orden asignado del split. Respuestas estructuradas y breves. Si Bruno reporta cansancio, dolores o fatiga acumulada en sus sensaciones recientes, adapta de forma proactiva la rutina sugerida hoy reduciendo volumen o intensidad.`;
+      const sys = `Eres el entrenador de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral, bodyProfile)} Orden del entrenamiento: mantener el orden asignado del split. Respuestas estructuradas y breves. Si Bruno reporta cansancio, dolores o fatiga acumulada en sus sensaciones recientes, adapta de forma proactiva la rutina sugerida hoy reduciendo volumen o intensidad.`;
       const out = await callGemini([{role:"user", content:`Día del Split ${sel}: ${dayObj.name}. Músculos: ${dayMuscles.join(", ")}. Historial reciente: ${hist}.\nSensaciones/Notas recientes de Bruno: ${sensations}.\nPlanifica las series, pesos de calentamiento, y series de trabajo sugeridas hoy.`}], sys);
       setDaySug(out); 
       saveKey("last_day_sug", out);
@@ -11938,7 +12155,7 @@ tr:last-child td{border-bottom:none}
     setWkBusy(true); 
     setWk("");
     try{ 
-      const sys = `Eres el entrenador deportivo de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral)} Organiza la semana de Bruno de forma realista.`;
+      const sys = `Eres el entrenador deportivo de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral, bodyProfile)} Organiza la semana de Bruno de forma realista.`;
       const out = await callGemini([{role:"user", content:"Organiza una distribución semanal de 7 días para sus 4 entrenamientos + descansos. Incluye consejos prácticos para optimizar la recuperación y adaptar el entrenamiento ante imprevistos cotidianos."}], sys);
       setWk(out); 
       saveKey("last_wk_sug", out);
@@ -14780,7 +14997,7 @@ function Registro({
   foodlog, waterlog, exlog,
   projections, tdeeEstimate, analyzeAndReconfigure, experiments, setExperiments,
   dietGuidelines, setDietGuidelines, trainingGuidelines, setTrainingGuidelines, onSaveGuidelines,
-  sendCoachMessage, setView
+  sendCoachMessage, setView, bodyProfile, updateBodyProfile, nutritionTargets, onApplyTargets
 }){
   const [type, setType] = useState("peso");
   const [statsPeriod, setStatsPeriod] = useState(7); // 7 or 30 days
@@ -15095,19 +15312,12 @@ function Registro({
       }
       if (!isPdf) setErrComp(""); // limpiar aviso PDF si era imagen
       
-      const prompt = "Analiza esta foto o documento (InBody, PDF o foto de balanza/reporte) de composición corporal y extrae de forma precisa: peso total (kg), masa muscular (kg), porcentaje de grasa (%) y opcionalmente nivel de grasa visceral (escala 1-20, aproximado si no sale, pon 9 si no hay datos).";
-      const sys = "Eres un analista de datos de salud experto. Extrae los números indicados en el archivo (foto o PDF) y responde estrictamente con el formato JSON.";
-      const schema = {
-        type: "OBJECT",
-        properties: {
-          peso: { type: "NUMBER" },
-          musculo: { type: "NUMBER" },
-          grasaPct: { type: "NUMBER" },
-          visceral: { type: "INTEGER" }
-        },
-        required: ["peso", "musculo", "grasaPct"]
-      };
-      
+      // Se usa el FITDAYS_SCHEMA completo (no un esquema reducido de 4 campos):
+      // así se conservan agua, masa ósea, segmental, WHR, IMC, etc. en vez de
+      // descartarlos. Los campos ausentes simplemente no vienen.
+      const prompt = "Analiza esta foto o documento (InBody, Fitdays, PDF o foto de balanza/reporte) de composición corporal y extrae TODOS los valores que aparezcan. Obligatorios: peso total (kg) y porcentaje de grasa (%). Extrae también masa muscular, músculo esquelético, agua, proteína, masa ósea, IMC, BMR, grasa visceral y los valores segmentales si figuran. No inventes datos que no estén en el documento.";
+      const sys = "Eres un analista de datos de salud experto. Extrae los números del archivo (foto o PDF) y responde estrictamente con el formato JSON. CRÍTICO: 'Masa Esquelética' = huesos (~4.9 kg) → masaOsea; 'Músculo esquelético' = SMM (~42 kg) → smmKg. Omite los campos que no aparezcan en el documento.";
+
       const out = await callGemini([
         {
           role: "user",
@@ -15116,16 +15326,40 @@ function Registro({
             { type: "text", text: prompt }
           ]
         }
-      ], sys, schema);
-      
-      const o = cleanAndParseJSON(out);
-      
+      ], sys, FITDAYS_SCHEMA);
+
+      const parsedRaw = cleanAndParseJSON(out);
+      // Normaliza al shape que espera el resto del componente, conservando
+      // todos los campos extra para guardarlos en metricslog.
+      const o = {
+        ...parsedRaw,
+        peso: parsedRaw.peso,
+        // masaMuscular es el campo de Fitdays; si no viene, cae a músculo esquelético
+        musculo: parsedRaw.masaMuscular ?? parsedRaw.musculo ?? parsedRaw.smmKg,
+        grasaPct: parsedRaw.grasaPct,
+        visceral: parsedRaw.visceral,
+      };
+      if (o.peso == null || o.grasaPct == null) {
+        throw new Error("Faltan peso o % de grasa en el documento");
+      }
+
+      // Si el documento no trae masa muscular, se mantiene la última conocida
+      // en vez de dejarla indefinida.
+      if (o.musculo == null) o.musculo = activeMetrics.musculo;
       const nextComp = { musculo: o.musculo, grasaPct: o.grasaPct, visceral: o.visceral || activeMetrics.visceral || 9 };
       setBodyComp(nextComp);
       
       const currentMetric = metricslog[selectedDateStr] || {};
+      // Conserva todos los campos extra que haya extraído la IA (agua, masa
+      // ósea, IMC, segmental, WHR…) además de los cuatro principales.
+      const extras = {};
+      Object.keys(FITDAYS_SCHEMA.properties).forEach(k => {
+        if (k === "peso" || k === "musculo") return; // ya mapeados abajo
+        if (parsedRaw[k] != null) extras[k] = parsedRaw[k];
+      });
       const nextMetricObj = {
         ...currentMetric,
+        ...extras,
         weight: o.peso,
         musculo: o.musculo,
         grasaPct: o.grasaPct,
@@ -15338,16 +15572,25 @@ function Registro({
   const goalPct = Math.max(0, Math.min(100, ((startW - lastW) / ((startW - GOAL_W) || 1)) * 100));
   const toGoal = (lastW - GOAL_W);
 
+  // Peso de tendencia (EMA): filtra el ruido diario de agua/comida
+  const emaSeries = calcWeightEMASeries(metricslog);
+  const trendW = emaSeries.length ? emaSeries[emaSeries.length - 1].ema : null;
+
   let velocityText = "Sin datos de tendencia";
   let projectionText = "";
   if (weights.length >= 2) {
+    // Ritmo por regresión lineal sobre los pesos registrados (calcWeightTrend),
+    // en vez de comparar solo la primera y la última medición: dos lecturas
+    // sueltas con retención de agua daban ritmos irreales.
+    const reg = calcWeightTrend(metricslog);
     const firstWEntry = weights[0];
     const lastWEntry = weights[weights.length - 1];
     const tDiffMs = new Date(lastWEntry.date) - new Date(firstWEntry.date);
     const wDiff = firstWEntry.w - lastWEntry.w;
     const weeks = tDiffMs / (1000 * 60 * 60 * 24 * 7);
-    if (weeks > 0.05) {
-      const ratePerWeek = wDiff / weeks;
+    if (reg || weeks > 0.05) {
+      // reg.kgPerWeek < 0 = bajando → ratePerWeek positivo significa "perdiendo"
+      const ratePerWeek = reg ? -reg.kgPerWeek : (wDiff / weeks);
       if (ratePerWeek > 0.02) {
         velocityText = `-${ratePerWeek.toFixed(2)} kg/semana`;
         const weeksToGoal = toGoal / ratePerWeek;
@@ -15500,7 +15743,7 @@ function Registro({
     });
 
     try{
-      const sys = `Eres el coach personal de Bruno. ${getProfileStr(metricsToUse.weight, metricsToUse.musculo, metricsToUse.grasaPct, metricsToUse.visceral)}
+      const sys = `Eres el coach personal de Bruno. ${getProfileStr(metricsToUse.weight, metricsToUse.musculo, metricsToUse.grasaPct, metricsToUse.visceral, bodyProfile)}
 Objetivo principal: reducción de grasa corporal manteniendo masa muscular. Dieta hiperproteica.
 Responde en español con análisis específico y 3-5 sugerencias concretas y accionables basadas en los datos reales. Formato: 1 párrafo de análisis + lista de sugerencias numeradas.`;
       const userMsg = `DATOS DE BRUNO para análisis completo:
@@ -15743,6 +15986,17 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           <span>{toGoal > 0 ? `faltan ${toGoal.toFixed(1)} kg` : "¡Objetivo alcanzado!"}</span>
         </div>
         <div style={{borderTop:`1px solid ${C.line}`, marginTop:10, paddingTop:8, fontSize:11.5, color:C.muted}}>
+          {trendW != null && (
+            <div style={{display:"flex", justifyContent:"space-between", marginBottom:4}}>
+              <span title="Media móvil que filtra el ruido diario de agua y comida">Peso de tendencia:</span>
+              <span style={{color:C.ink, fontWeight:700}}>
+                {trendW.toFixed(1)} kg
+                {Math.abs(lastW - trendW) >= 0.3 && (
+                  <span style={{color:C.muted, fontWeight:500, fontSize:10.5}}> (báscula {lastW.toFixed(1)})</span>
+                )}
+              </span>
+            </div>
+          )}
           <div style={{display:"flex", justifyContent:"space-between", marginBottom:4}}>
             <span>Tendencia:</span>
             <span style={{color:C.cyan, fontWeight:700}}>{velocityText}</span>
@@ -15899,9 +16153,126 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         <div style={{fontSize:10, color:C.muted, marginTop:6}}>💡 El Coach usará estas reglas en todas sus respuestas</div>
       </div>
 
+      {/* ===== PERFIL CORPORAL Y OBJETIVOS AUTOMÁTICOS ===== */}
+      {updateBodyProfile && (() => {
+        const bp = { ...DEFAULT_BODY_PROFILE, ...(bodyProfile || {}) };
+        const nt = nutritionTargets;
+        const num = (k, label, unit, min, max) => (
+          <div style={{flex:1, minWidth:78}}>
+            <div style={{fontSize:9.5, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em", marginBottom:3}}>{label}</div>
+            <div style={{display:"flex", alignItems:"center", gap:4}}>
+              <input
+                type="number" inputMode="decimal" value={bp[k]}
+                onChange={e => {
+                  const v = parseFloat(e.target.value);
+                  if (!isNaN(v) && v >= min && v <= max) updateBodyProfile({ [k]: v });
+                  else if (e.target.value === "") updateBodyProfile({ [k]: "" });
+                }}
+                style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 8px", color:C.ink, fontSize:13, fontWeight:700, outline:"none", minWidth:0}}
+              />
+              {unit && <span style={{fontSize:10, color:C.muted}}>{unit}</span>}
+            </div>
+          </div>
+        );
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:14, marginBottom:12}}>
+            <div style={{display:"flex", alignItems:"center", gap:7, fontSize:12.5, fontWeight:800, color:C.ink, marginBottom:3}}>
+              <Target size={15} color={C.lime}/> Perfil corporal y objetivos
+            </div>
+            <div style={{fontSize:10.5, color:C.muted, marginBottom:10, lineHeight:1.45}}>
+              Tus calorías y macros se calculan con estos datos y tu composición real. Al cambiar de peso o de % de grasa, se recalculan solos.
+            </div>
+
+            {/* Sexo */}
+            <div style={{display:"flex", gap:6, marginBottom:8}}>
+              {[["hombre","Hombre"],["mujer","Mujer"]].map(([v,l]) => (
+                <button key={v} className="btn-active-scale" onClick={() => updateBodyProfile({ sexo: v })}
+                  style={{flex:1, background: bp.sexo===v ? "rgba(205,255,74,0.12)" : "transparent", border:`1px solid ${bp.sexo===v ? C.lime : C.line}`, borderRadius:8, padding:"6px 4px", color: bp.sexo===v ? C.lime : C.muted, fontSize:11.5, fontWeight:700}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+
+            {/* Edad / altura / ritmo */}
+            <div style={{display:"flex", gap:8, marginBottom:10, flexWrap:"wrap"}}>
+              {num("edad", "Edad", "años", 10, 100)}
+              {num("alturaCm", "Altura", "cm", 120, 230)}
+              {num("ritmoKgSemana", "Ritmo", "kg/sem", -1.5, 1.5)}
+            </div>
+
+            {/* Objetivo */}
+            <div style={{fontSize:9.5, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em", marginBottom:4}}>Objetivo</div>
+            <div style={{display:"flex", gap:6, marginBottom:10}}>
+              {Object.entries(GOAL_PRESETS).map(([k, g]) => (
+                <button key={k} className="btn-active-scale"
+                  onClick={() => updateBodyProfile({ objetivo: k, ritmoKgSemana: g.ritmo })}
+                  style={{flex:1, background: bp.objetivo===k ? "rgba(74,214,255,0.12)" : "transparent", border:`1px solid ${bp.objetivo===k ? C.cyan : C.line}`, borderRadius:8, padding:"6px 3px", color: bp.objetivo===k ? C.cyan : C.muted, fontSize:11, fontWeight:700}}>
+                  {g.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Nivel de actividad */}
+            <div style={{fontSize:9.5, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em", marginBottom:4}}>Actividad diaria (sin contar el entreno)</div>
+            <div style={{display:"flex", gap:5, marginBottom:12, flexWrap:"wrap"}}>
+              {ACTIVITY_LEVELS.map(a => (
+                <button key={a.key} className="btn-active-scale" title={a.desc}
+                  onClick={() => updateBodyProfile({ actividad: a.key })}
+                  style={{flex:"1 1 auto", background: bp.actividad===a.key ? "rgba(205,255,74,0.12)" : "transparent", border:`1px solid ${bp.actividad===a.key ? C.lime : C.line}`, borderRadius:8, padding:"5px 7px", color: bp.actividad===a.key ? C.lime : C.muted, fontSize:10.5, fontWeight:700}}>
+                  {a.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Resultado del cálculo */}
+            {nt ? (
+              <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:12, padding:12}}>
+                <div style={{display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:10}}>
+                  {[["BMR", nt.bmr, "kcal"], ["TDEE", nt.tdee, "kcal"], ["Objetivo", nt.kcal, "kcal"]].map(([l, v, u], i) => (
+                    <div key={l} style={{textAlign:"center"}}>
+                      <div style={{fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase"}}>{l}</div>
+                      <div style={{fontSize:16, fontWeight:900, color: i===2 ? C.lime : C.ink}}>{v.toLocaleString("es")}</div>
+                      <div style={{fontSize:9, color:C.muted}}>{u}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{display:"flex", gap:6, marginBottom:9}}>
+                  {[["Proteína", nt.p, C.lime], ["Carbos", nt.c, C.cyan], ["Grasas", nt.f, C.amber]].map(([l, v, col]) => (
+                    <div key={l} style={{flex:1, background:C.bg, borderRadius:8, padding:"6px 8px", textAlign:"center"}}>
+                      <div style={{fontSize:9, color:C.muted, fontWeight:700}}>{l}</div>
+                      <div style={{fontSize:14, fontWeight:900, color:col}}>{v}<span style={{fontSize:9, fontWeight:600}}>g</span></div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{fontSize:10, color:C.muted, lineHeight:1.5, marginBottom:10}}>
+                  BMR por <b style={{color:C.ink}}>{nt.bmrMethod}</b>
+                  {nt.leanKg > 0 && <> · masa magra <b style={{color:C.ink}}>{nt.leanKg} kg</b> · proteína <b style={{color:C.ink}}>{nt.protPorKgLean} g/kg magra</b></>}
+                  <br/>
+                  {nt.usandoTdeeReal
+                    ? <>TDEE <b style={{color:C.cyan}}>medido</b> de tu comida y peso real.</>
+                    : <>TDEE estimado (actividad ×{bp.actividad}). Con 21+ días de registro se usará tu TDEE real.</>}
+                  {" "}Balance diario: <b style={{color: nt.deficitDiario < 0 ? C.amber : C.lime}}>{nt.deficitDiario > 0 ? "+" : ""}{nt.deficitDiario} kcal</b> ({nt.ritmoKgSemana > 0 ? "+" : ""}{nt.ritmoKgSemana} kg/sem).
+                </div>
+                {onApplyTargets && (
+                  <button className="btn-active-scale" onClick={onApplyTargets}
+                    style={{width:"100%", padding:"10px 0", borderRadius:10, border:"none", background:C.lime, color:"#0c0e0b", fontWeight:800, fontSize:12.5, display:"flex", alignItems:"center", justifyContent:"center", gap:6}}>
+                    <Check size={14}/> Aplicar estos objetivos
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div style={{fontSize:11, color:C.muted, background:C.panel2, borderRadius:10, padding:"10px 12px"}}>
+                Registra tu peso para calcular tus objetivos automáticamente.
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* ===== INFORME DE COMPOSICIÓN CORPORAL ===== */}
       {(() => {
-        const H = 1.80, AGE = 34;
+        const _bp = { ...DEFAULT_BODY_PROFILE, ...(bodyProfile || {}) };
+        const H = (parseFloat(_bp.alturaCm) || 180) / 100, AGE = parseFloat(_bp.edad) || 34;
         const W = lastW || 93.9;
         const M = activeMetrics.musculo || 64.7;
         const G = activeMetrics.grasaPct || 26.2;
@@ -15910,7 +16281,9 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         const fatKg   = W * G / 100;
         const leanKg  = W - fatKg;
         const bmi     = W / (H * H);
-        const bmr     = Math.round(10 * W + 6.25 * 180 - 5 * AGE + 5);
+        // BMR real del perfil: Katch-McArdle si hay % de grasa, si no Mifflin
+        const bmr     = calcBMR(_bp, { weight: W, grasaPct: G }).bmr
+                        || calcBMRMifflin({ ...(_bp), weight: W });
         const skelM   = M * 0.615; // músculo esquelético ≈ 61.5% del total
         const smi     = skelM / (H * H);
         const waterEst  = leanKg * 0.73;
@@ -16905,7 +17278,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
 }
 
 /* ===== TAB PLAN / DIETA Y LISTA DE COMPRAS ===== */
-function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppingList, setShoppingList, geminiKey, meals, setMeals, activeMetrics, setShowNutritionModal, setModalVals}){
+function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppingList, setShoppingList, geminiKey, meals, setMeals, activeMetrics, setShowNutritionModal, setModalVals, bodyProfile}){
   const target = customPresets[presetKey] || customPresets.personalizado || DEFAULT_PRESETS.personalizado;
   // Local state for macro editor — avoids async-lag with controlled inputs
   const [editVals, setEditVals] = React.useState({ kcal: target.kcal, p: target.p, c: target.c, f: target.f });
@@ -17102,7 +17475,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
     setAiMealsBusy(true);
     setMealsAiErr("");
     try {
-      const prompt = `Plan de comidas actual: ${JSON.stringify(meals)}. Objetivo de hoy: ${target.label} (${target.kcal} kcal, ${target.p}g P, ${target.c}g C, ${target.f}g G). Perfil de Bruno: hombre, 34 años, 180 cm, 93.9 kg. Solicitud de cambio del usuario: "${mealsPrompt.trim()}". Genera la distribución de comidas adaptada respetando su perfil y el esquema requerido.`;
+      const prompt = `Plan de comidas actual: ${JSON.stringify(meals)}. Objetivo de hoy: ${target.label} (${target.kcal} kcal, ${target.p}g P, ${target.c}g C, ${target.f}g G). Perfil de Bruno: ${getProfileStr(activeMetrics?.weight, activeMetrics?.musculo, activeMetrics?.grasaPct, activeMetrics?.visceral, bodyProfile)} Solicitud de cambio del usuario: "${mealsPrompt.trim()}". Genera la distribución de comidas adaptada respetando su perfil y el esquema requerido.`;
       const out = await callGemini([{ role: "user", content: prompt }], MEALS_SYS, MEALS_SCHEMA);
       const parsed = cleanAndParseJSON(out);
       if (!parsed.meals || parsed.meals.length === 0) {
@@ -17701,5 +18074,12 @@ if (container) {
 
 // Para testing (Jest / Node.js)
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { loadKey, buildPRHistory, buildDaySummary, loadRecommendation, localDateKey, isCompoundExercise, estimate1RM, default: App };
+  module.exports = {
+    loadKey, buildPRHistory, buildDaySummary, loadRecommendation, localDateKey,
+    isCompoundExercise, estimate1RM,
+    calcLeanMass, calcBMRMifflin, calcBMRKatch, calcBMR, calcNutritionTargets,
+    calcWaterGoalGlasses, calcWeightEMASeries, getTrendWeight,
+    DEFAULT_BODY_PROFILE, GOAL_PRESETS,
+    default: App
+  };
 }
