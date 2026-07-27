@@ -406,4 +406,49 @@ describe('buildDaySummary', () => {
     expect(s.exercises[0].name).toBe('Press banca'); // se hizo antes
     expect(s.exercises[1].name).toBe('Sentadilla');
   });
+
+  test('cada ejercicio trae recomendación + progreso vs sesión anterior', () => {
+    const day = '2026-07-27';
+    const exlog = {
+      'Press banca': [
+        { date: day + 'T10:00:00', w: 92.5, reps: 8, type: 'work' }, // hoy: 8 reps → subir
+        { date: '2026-07-20T10:00:00', w: 90, reps: 8, type: 'work' }, // anterior: 90kg
+      ],
+    };
+    const s = buildDaySummary(exlog, exercises, day);
+    const ex = s.exercises[0];
+    expect(ex.prevMaxW).toBe(90);
+    expect(ex.deltaVsPrev).toBe(2.5); // 92.5 - 90
+    expect(ex.recommendation.kind).toBe('overload');
+    expect(ex.recommendation.weight).toBe(95); // compuesto +2.5
+  });
+
+  test('primera sesión de un ejercicio no tiene progreso previo', () => {
+    const day = '2026-07-27';
+    const exlog = { 'Press banca': [{ date: day + 'T10:00:00', w: 80, reps: 6, type: 'work' }] };
+    const ex = buildDaySummary(exlog, exercises, day).exercises[0];
+    expect(ex.prevMaxW).toBeNull();
+    expect(ex.deltaVsPrev).toBeNull();
+    expect(ex.recommendation.kind).toBe('hold');
+  });
+});
+
+describe('loadRecommendation', () => {
+  const { loadRecommendation } = require('./app.js');
+
+  test('8+ reps → subir carga (compuesto +2.5, aislado +1)', () => {
+    expect(loadRecommendation('Press banca', 80, 8, false).kind).toBe('overload');
+    expect(loadRecommendation('Press banca', 80, 8, false).weight).toBe(82.5);
+    expect(loadRecommendation('Curl', 20, 10, false).weight).toBe(21);
+  });
+
+  test('estancado con reps bajas → rotar/forzar rep', () => {
+    const r = loadRecommendation('Curl', 20, 5, true, 3);
+    expect(r.kind).toBe('variation');
+    expect(r.weight).toBe(20);
+  });
+
+  test('reps intermedias → consolidar', () => {
+    expect(loadRecommendation('Press banca', 80, 6, false).kind).toBe('hold');
+  });
 });

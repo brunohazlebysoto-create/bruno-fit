@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W20";
+const APP_VERSION = "v2026.06.23-W21";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1180,6 +1180,31 @@ function estimate1RM(w, reps) {
   return weight * (1 + r / 30);
 }
 
+// Recomendación de carga para la próxima sesión de un ejercicio, a partir del
+// mejor set (peso × reps) y si viene estancado. Devuelve {kind, weight, reps, note}.
+// kind: "overload" (subir) | "hold" (consolidar) | "variation" (rotar/forzar rep)
+function loadRecommendation(exName, maxW, maxReps, plateau, plateauCount = 3) {
+  const inc = isCompoundExercise(exName) ? 2.5 : 1;
+  if (plateau) {
+    if (maxReps >= 8) {
+      return { kind: "overload", weight: maxW + inc, reps: "6-8",
+        note: `Estancado en ${maxW}kg pero con ${maxReps} reps: sube a ${maxW + inc}kg.` };
+    }
+    return { kind: "variation", weight: maxW, reps: `${maxReps + 1}+`,
+      note: `Estancado ${plateauCount} sesiones en ${maxW}kg. Fuerza una rep extra o rota a una variación.` };
+  }
+  if (maxReps >= 8) {
+    return { kind: "overload", weight: maxW + inc, reps: "6-8",
+      note: `${maxReps} reps con ${maxW}kg: sube a ${maxW + inc}kg y baja a 6-8 reps.` };
+  }
+  if (maxReps <= 4) {
+    return { kind: "hold", weight: maxW, reps: `${maxReps + 1}-6`,
+      note: `Consolida ${maxW}kg sumando reps (objetivo ${maxReps + 1}-6) antes de subir carga.` };
+  }
+  return { kind: "hold", weight: maxW, reps: "8",
+    note: `Mantén ${maxW}kg y apunta a llegar a 8 reps para habilitar la subida.` };
+}
+
 // Construye el histórico consolidado de PRs por ejercicio + recomendación de
 // carga para la próxima sesión. Pura y testeable: no toca estado ni DOM.
 // exlog: { [exName]: [{date, w, reps, rir, type}, ...] }
@@ -1221,8 +1246,6 @@ function buildPRHistory(exlog, exercises) {
     });
 
     const last = sessions[0];
-    const compound = isCompoundExercise(exName);
-    const inc = compound ? 2.5 : 1;
 
     // ¿Estancamiento? mismo peso máximo en las últimas 3+ sesiones
     let plateau = false;
@@ -1232,25 +1255,7 @@ function buildPRHistory(exlog, exercises) {
     }
 
     // Recomendación de carga para la próxima sesión
-    let rec;
-    if (plateau) {
-      if (last.maxReps >= 8) {
-        rec = { kind: "overload", weight: last.maxW + inc, reps: "6-8",
-          note: `Estancado en ${last.maxW}kg pero con ${last.maxReps} reps: sube a ${last.maxW + inc}kg.` };
-      } else {
-        rec = { kind: "variation", weight: last.maxW, reps: `${last.maxReps + 1}+`,
-          note: `Estancado ${sessions.slice(0,3).length} sesiones en ${last.maxW}kg. Fuerza una rep extra o rota a una variación.` };
-      }
-    } else if (last.maxReps >= 8) {
-      rec = { kind: "overload", weight: last.maxW + inc, reps: "6-8",
-        note: `${last.maxReps} reps con ${last.maxW}kg: sube a ${last.maxW + inc}kg y baja a 6-8 reps.` };
-    } else if (last.maxReps <= 4) {
-      rec = { kind: "hold", weight: last.maxW, reps: `${last.maxReps + 1}-6`,
-        note: `Consolida ${last.maxW}kg sumando reps (objetivo ${last.maxReps + 1}-6) antes de subir carga.` };
-    } else {
-      rec = { kind: "hold", weight: last.maxW, reps: "8",
-        note: `Mantén ${last.maxW}kg y apunta a llegar a 8 reps para habilitar la subida.` };
-    }
+    const rec = loadRecommendation(exName, last.maxW, last.maxReps, plateau, Math.min(3, sessions.length));
 
     records.push({
       name: exName,
@@ -1593,12 +1598,37 @@ function buildDaySummary(exlog, exercises, dateStr, opts = {}) {
     const topReps = work.filter(s => (parseFloat(s.w) || 0) === topW).reduce((a, s) => Math.max(a, parseInt(s.reps) || 0), 0);
     const e1rm = Math.round(work.reduce((b, s) => Math.max(b, estimate1RM(s.w, s.reps)), 0) * 10) / 10;
 
+    // ── Historial por sesión (peso máx de trabajo por día), reciente→antiguo ──
+    const byDatePrev = {};
+    (allSets || []).forEach(s => {
+      if (!s || !s.date || s.type === "warmup") return;
+      const dk = localDateKey(s.date);
+      if (!dk) return;
+      const w = parseFloat(s.w) || 0;
+      byDatePrev[dk] = Math.max(byDatePrev[dk] || 0, w);
+    });
+    const sessionDates = Object.keys(byDatePrev).sort().reverse();
+
     // ¿PR hoy? peso máximo de hoy supera el máximo histórico previo
-    const histMax = (allSets || [])
-      .filter(s => s && s.date && s.type !== "warmup" && localDateKey(s.date) !== dateStr)
-      .reduce((m, s) => Math.max(m, parseFloat(s.w) || 0), 0);
+    const histMax = sessionDates.filter(d => d !== dateStr).reduce((m, d) => Math.max(m, byDatePrev[d]), 0);
     const isPR = histMax > 0 && topW > histMax;
     if (isPR) prCount++;
+
+    // Sesión anterior (la más reciente antes de hoy) y progreso vs ella
+    const prevDate = sessionDates.find(d => d < dateStr) || null;
+    const prevMaxW = prevDate ? byDatePrev[prevDate] : null;
+    const deltaVsPrev = prevMaxW != null ? Math.round((topW - prevMaxW) * 10) / 10 : null;
+
+    // Estancamiento: mismo peso máximo en las últimas 3+ sesiones (incluida hoy)
+    let plateau = false, plateauCount = 0;
+    if (sessionDates.length >= 3) {
+      const last3 = sessionDates.slice(0, 3).map(d => byDatePrev[d]);
+      plateau = last3.every(w => w === last3[0]);
+      plateauCount = 3;
+    }
+
+    // Recomendación para la próxima sesión de ESTE ejercicio (según hoy)
+    const recommendation = loadRecommendation(exName, topW, topReps, plateau, plateauCount);
 
     totalWorkSets += work.length;
     totalWarmup += warm.length;
@@ -1613,6 +1643,8 @@ function buildDaySummary(exlog, exercises, dateStr, opts = {}) {
       volume: Math.round(volume),
       topW, topReps, e1rm,
       histMax, isPR,
+      prevMaxW, deltaVsPrev, plateau,
+      recommendation,
       earliest: Math.min(...daySets.map(s => { try { return new Date(s.date).getTime(); } catch (e) { return 0; } })),
     });
   });
@@ -10834,6 +10866,11 @@ function Entreno({
           <td class="num">${s.rir === "-" || s.rir == null ? "—" : s.rir}</td>
         </tr>`;
       }).join("");
+      const recCls = ex.recommendation.kind === "overload" ? "up" : ex.recommendation.kind === "variation" ? "rot" : "hold";
+      const recLbl = ex.recommendation.kind === "overload" ? "SUBIR" : ex.recommendation.kind === "variation" ? "ROTAR" : "CONSOLIDAR";
+      const prog = ex.deltaVsPrev != null
+        ? `<span class="prog ${ex.deltaVsPrev > 0 ? "up" : ex.deltaVsPrev < 0 ? "down" : "eq"}">${ex.deltaVsPrev > 0 ? "↑ +" + ex.deltaVsPrev + "kg" : ex.deltaVsPrev < 0 ? "↓ " + ex.deltaVsPrev + "kg" : "= igual"} vs anterior (${ex.prevMaxW}kg)</span>`
+        : `<span style="color:#9ca3af">1ª sesión registrada</span>`;
       exBlocks += `
       <div class="ex">
         <div class="exh">
@@ -10844,7 +10881,8 @@ function Entreno({
           <thead><tr><th>Serie</th><th>Tipo</th><th class="num">Carga</th><th class="num">Reps</th><th class="num">RIR</th></tr></thead>
           <tbody>${setRows}</tbody>
         </table>
-        <div class="exf">${ex.workSetsCount} series de trabajo · ${ex.volume.toLocaleString("es")} kg vol · 1RM est. ${ex.e1rm} kg</div>
+        <div class="exf">${ex.workSetsCount} series · ${ex.volume.toLocaleString("es")} kg vol · 1RM est. ${ex.e1rm} kg · ${prog}</div>
+        <div class="exrec"><span class="rp ${recCls}">${recLbl}</span><span class="rtxt"><b>Próxima: ${ex.recommendation.weight}kg × ${ex.recommendation.reps} reps.</b> ${esc(ex.recommendation.note)}</span></div>
       </div>`;
     });
 
@@ -10915,6 +10953,17 @@ tr:last-child td{border-bottom:none}
 .rw td{color:#b45309}
 .tp{font-size:8pt;color:#9ca3af}
 .exf{font-size:7.5pt;color:#6b7280;padding:6px 11px;background:#fafafa;border-top:1px solid #f0f1f3}
+.prog{font-weight:800}
+.prog.up{color:#15803d}
+.prog.down{color:#b45309}
+.prog.eq{color:#6b7280}
+.exrec{display:flex;align-items:flex-start;gap:7px;padding:7px 11px;background:#fafafa;border-top:1px solid #f0f1f3}
+.rp{font-size:6.5pt;font-weight:800;letter-spacing:.03em;padding:2px 7px;border-radius:20px;flex-shrink:0;margin-top:1px}
+.rp.up{background:#dcfce7;color:#15803d}
+.rp.rot{background:#fef3c7;color:#b45309}
+.rp.hold{background:#dbeafe;color:#1d4ed8}
+.rtxt{font-size:8pt;color:#4b5563;line-height:1.35}
+.rtxt b{color:#111}
 .mrow{display:flex;align-items:center;gap:8px;margin-bottom:6px}
 .mn{font-size:9pt;font-weight:700;width:88px;flex-shrink:0}
 .mbar{flex:1;height:8px;background:#f0f1f3;border-radius:20px;overflow:hidden}
@@ -17620,5 +17669,5 @@ if (container) {
 
 // Para testing (Jest / Node.js)
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { loadKey, buildPRHistory, buildDaySummary, localDateKey, isCompoundExercise, estimate1RM, default: App };
+  module.exports = { loadKey, buildPRHistory, buildDaySummary, loadRecommendation, localDateKey, isCompoundExercise, estimate1RM, default: App };
 }
