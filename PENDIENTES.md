@@ -4,44 +4,17 @@ Backlog derivado de la auditoría de cómo la app registra peso y datos
 biométricos, y cómo eso ajusta (o no) los requerimientos nutricionales y de
 entrenamiento.
 
-**Estado:** 6 de 24 ideas implementadas (ver "Ya implementado" al final).
+**Estado:** 11 de 24 ideas implementadas (ver "Ya implementado" al final).
 Las referencias `app.js:NNN` son orientativas — el archivo cambia.
 
 ---
 
+> Las 5 ideas que estaban en "Prioridad alta" ya están implementadas
+> (carb cycling, deload por composición, pérdida de fuerza en déficit,
+> carga calibrada a la fase calórica y refeed/diet break). Ver el detalle
+> al final.
+
 ## Prioridad alta
-
-### 1. Calorías y carbos según día de entreno vs descanso
-Los splits ya declaran `fuel: "Carbo alto" | "Carbo medio"` (`app.js:22-30`)
-pero hoy es **solo texto decorativo**. Convertirlo en carb cycling real: más
-carbohidratos en días de pierna/empuje pesado, menos en descanso, manteniendo
-la media semanal en el objetivo.
-*Depende de:* objetivos por fórmula (ya implementado).
-
-### 2. La composición corporal debe influir en el entrenamiento
-`detectDeloadNeed(exlog, notes, _metricslog)` (`app.js:1401`) recibe el tercer
-argumento y **nunca lo usa** — el guion bajo lo delata. Un peso bajando rápido
-(>1% semanal) combinado con notas de fatiga es señal fuerte de deload.
-Añadir la tendencia de peso como entrada real de la decisión.
-
-### 3. Detección de pérdida de fuerza por déficit
-Cruzar `buildPRHistory` (histórico de PRs, ya existente) con `calcWeightTrend`:
-si los 1RM estimados caen mientras el peso baja rápido, avisar de que hay que
-frenar el déficit o subir proteína. Hoy ambos análisis viven aislados.
-
-### 4. Volumen de entrenamiento calibrado a la fase calórica
-En déficit agresivo la prioridad es **mantener** carga (menos volumen, misma
-intensidad); en superávit, empujar volumen. Ligar `loadRecommendation` y las
-sugerencias de sobrecarga al balance calórico real (`nutritionTargets.deficitDiario`).
-
-### 5. Refeed / diet break automáticos
-Si se acumulan N semanas en déficit o la tendencia se estanca pese a adherencia,
-proponer subir a mantenimiento unos días. Hoy solo aparece como consejo suelto
-en el texto de la IA, sin lógica que lo dispare.
-
----
-
-## Prioridad media
 
 ### 6. Ajuste por adaptación metabólica
 Si el peso no baja pese a cumplir las calorías, recalcular el TDEE a la baja de
@@ -120,6 +93,11 @@ score serio (idea 8). Requiere UI de captura o integración externa.
 | Peso de tendencia (EMA) | `calcWeightEMASeries` / `getTrendWeight`; se muestra en la UI y **`calcTDEE` ya lo usa** en los extremos en vez de lecturas crudas |
 | Agua según peso | `calcWaterGoalGlasses`: ~35 ml/kg + 600 ml si se entrenó, en vez de 14 vasos fijos |
 | Import de foto completo | `onPhotoComp` usa el `FITDAYS_SCHEMA` completo (~30 campos: agua, masa ósea, IMC, WHR, segmental) en vez de un esquema reducido de 4 campos |
+| **Carb cycling real** | `calcCarbCycleTargets` + `classifyFuelDay`: el `fuel` de los splits ya no es decorativo. Más carbos en día de entreno (los "alto" reciben más), menos en descanso, con la **media semanal cuadrada** al objetivo. Proteína y grasa fijas: el swing lo llevan los carbos. Los anillos de macros de Hoy siguen el objetivo del día |
+| **Deload por composición** | `detectDeloadNeed` ya **usa** `metricslog` (antes era `_metricslog` ignorado): perder >1%/sem de peso escala la urgencia, >1.5%/sem la escala doble |
+| **Pérdida de fuerza en déficit** | `detectStrengthLossUnderDeficit`: cruza la tendencia de 1RM por ejercicio con la de peso. Alerta solo si caen 2+ ejercicios **y** se está bajando de peso (evita falsos positivos) |
+| **Carga según fase calórica** | `classifyCaloricPhase` + `loadRecommendation(…, phase)`: en déficit agresivo exige 10 reps antes de subir (vs 8), reduce el incremento a la mitad y no manda rotar ejercicio ante un estancamiento esperable; en superávit sube con 7 reps |
+| **Refeed / diet break** | `detectRefeedNeed`: refeed a las 4 semanas de déficit, diet break a las 8, o antes si el peso se estanca con ≥85% de adherencia. Aparece como notificación y en el panel de objetivos |
 
 ### Nota de diseño
 Los objetivos calculados **no se aplican solos**: se muestran y el usuario pulsa

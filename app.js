@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W23";
+const APP_VERSION = "v2026.06.23-W24";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1354,33 +1354,49 @@ function estimate1RM(w, reps) {
 // Recomendación de carga para la próxima sesión de un ejercicio, a partir del
 // mejor set (peso × reps) y si viene estancado. Devuelve {kind, weight, reps, note}.
 // kind: "overload" (subir) | "hold" (consolidar) | "variation" (rotar/forzar rep)
-function loadRecommendation(exName, maxW, maxReps, plateau, plateauCount = 3) {
-  const inc = isCompoundExercise(exName) ? 2.5 : 1;
+function loadRecommendation(exName, maxW, maxReps, plateau, plateauCount = 3, phase = "desconocida") {
+  const compound = isCompoundExercise(exName);
+  // La fase calórica cambia lo que es razonable pedir:
+  // - déficit agresivo → el objetivo es MANTENER la carga, no progresar; se
+  //   exige más margen de reps antes de subir y el incremento es menor
+  // - superávit → es el momento de empujar, se sube antes
+  const agresivo = phase === "deficit_agresivo";
+  const superavit = phase === "superavit";
+  const repsParaSubir = agresivo ? 10 : superavit ? 7 : 8;
+  const inc = agresivo ? (compound ? 2.5 : 1) * 0.5 : (compound ? 2.5 : 1);
+  const nota = agresivo ? " En déficit agresivo, prioriza mantener la carga." : "";
+
   if (plateau) {
-    if (maxReps >= 8) {
+    if (maxReps >= repsParaSubir) {
       return { kind: "overload", weight: maxW + inc, reps: "6-8",
-        note: `Estancado en ${maxW}kg pero con ${maxReps} reps: sube a ${maxW + inc}kg.` };
+        note: `Estancado en ${maxW}kg pero con ${maxReps} reps: sube a ${maxW + inc}kg.${nota}` };
+    }
+    // En déficit agresivo un estancamiento es esperable: no es señal de rotar
+    if (agresivo) {
+      return { kind: "hold", weight: maxW, reps: `${maxReps}`,
+        note: `Mantener ${maxW}kg en déficit ya es buen resultado: sostener la fuerza es el objetivo ahora.` };
     }
     return { kind: "variation", weight: maxW, reps: `${maxReps + 1}+`,
       note: `Estancado ${plateauCount} sesiones en ${maxW}kg. Fuerza una rep extra o rota a una variación.` };
   }
-  if (maxReps >= 8) {
+  if (maxReps >= repsParaSubir) {
     return { kind: "overload", weight: maxW + inc, reps: "6-8",
-      note: `${maxReps} reps con ${maxW}kg: sube a ${maxW + inc}kg y baja a 6-8 reps.` };
+      note: `${maxReps} reps con ${maxW}kg: sube a ${maxW + inc}kg y baja a 6-8 reps.${nota}` };
   }
   if (maxReps <= 4) {
     return { kind: "hold", weight: maxW, reps: `${maxReps + 1}-6`,
       note: `Consolida ${maxW}kg sumando reps (objetivo ${maxReps + 1}-6) antes de subir carga.` };
   }
-  return { kind: "hold", weight: maxW, reps: "8",
-    note: `Mantén ${maxW}kg y apunta a llegar a 8 reps para habilitar la subida.` };
+  return { kind: "hold", weight: maxW, reps: String(repsParaSubir),
+    note: `Mantén ${maxW}kg y apunta a llegar a ${repsParaSubir} reps para habilitar la subida.${nota}` };
 }
 
 // Construye el histórico consolidado de PRs por ejercicio + recomendación de
 // carga para la próxima sesión. Pura y testeable: no toca estado ni DOM.
 // exlog: { [exName]: [{date, w, reps, rir, type}, ...] }
 // exercises: { [grupo]: [{name, musculos:[...]}] } (para el músculo principal)
-function buildPRHistory(exlog, exercises) {
+function buildPRHistory(exlog, exercises, opts = {}) {
+  const phase = opts.phase || "desconocida";
   const exMuscleMap = {};
   Object.values(exercises || {}).flat().forEach(ex => {
     if (ex?.name && Array.isArray(ex.musculos)) exMuscleMap[ex.name] = ex.musculos;
@@ -1426,7 +1442,7 @@ function buildPRHistory(exlog, exercises) {
     }
 
     // Recomendación de carga para la próxima sesión
-    const rec = loadRecommendation(exName, last.maxW, last.maxReps, plateau, Math.min(3, sessions.length));
+    const rec = loadRecommendation(exName, last.maxW, last.maxReps, plateau, Math.min(3, sessions.length), phase);
 
     records.push({
       name: exName,
@@ -1569,9 +1585,20 @@ function calcWeeklyTrainingLoad(exlog) {
   return weeks;
 }
 
-function detectDeloadNeed(exlog, notes, _metricslog) {
+function detectDeloadNeed(exlog, notes, metricslog) {
   const weeks = calcWeeklyTrainingLoad(exlog);
   const fatigueScore = detectFatigueFromNotes(notes);
+  // Señal de composición corporal: perder peso rápido (>1% del peso por semana)
+  // multiplica la fatiga acumulada y adelanta la necesidad de descarga.
+  // Antes este argumento se recibía y se ignoraba por completo.
+  const wTrend = calcWeightTrend(metricslog);
+  const trendW = getTrendWeight(metricslog);
+  let rapidLossPct = 0;
+  if (wTrend && trendW > 0 && wTrend.kgPerWeek < 0) {
+    rapidLossPct = Math.round((Math.abs(wTrend.kgPerWeek) / trendW) * 1000) / 10; // % semanal
+  }
+  const lossAggressive = rapidLossPct >= 1.0;   // pérdida rápida
+  const lossExtreme = rapidLossPct >= 1.5;      // pérdida muy rápida
   let weeksSinceDeload = 8;
   for (let i = weeks.length - 1; i >= 4; i--) {
     const prev4avg = weeks.slice(i-4, i).reduce((s,w)=>s+w.totalSets,0)/4;
@@ -1591,11 +1618,208 @@ function detectDeloadNeed(exlog, notes, _metricslog) {
   if (weeksSinceDeload >= 7 || fatigueScore >= 3 || consecutiveHighWeeks >= 5) urgency = 'high';
   else if (weeksSinceDeload >= 6 || (consecutiveHighWeeks >= 3 && fatigueScore >= 1)) urgency = 'medium';
   else if (weeksSinceDeload >= 4 || consecutiveHighWeeks >= 3) urgency = 'low';
+
+  // Escalada por pérdida de peso agresiva: en déficit fuerte la recuperación
+  // se degrada, así que la misma carga de entrenamiento pesa más.
+  const ORDER = ['none', 'low', 'medium', 'high'];
+  const bump = (lvl, n) => ORDER[Math.min(ORDER.length - 1, ORDER.indexOf(lvl) + n)];
+  if (lossExtreme) urgency = bump(urgency, 2);
+  else if (lossAggressive && (fatigueScore >= 1 || consecutiveHighWeeks >= 2)) urgency = bump(urgency, 1);
+
   const reasons = [];
   if (weeksSinceDeload >= 4) reasons.push(`${weeksSinceDeload} sem sin deload`);
   if (consecutiveHighWeeks >= 3) reasons.push(`${consecutiveHighWeeks} sem de carga alta consecutivas`);
   if (fatigueScore >= 2) reasons.push(`${fatigueScore} notas de fatiga`);
-  return { recommended: urgency !== 'none', urgency, reason: reasons.join(' + ') || 'Carga moderada', weeksSinceDeload };
+  if (lossAggressive) reasons.push(`bajando ${rapidLossPct}%/sem de peso`);
+  return {
+    recommended: urgency !== 'none', urgency,
+    reason: reasons.join(' + ') || 'Carga moderada',
+    weeksSinceDeload, rapidLossPct,
+  };
+}
+
+/* ===== CICLADO DE CARBOHIDRATOS =====
+   Los splits ya declaran `fuel` ("Carbo alto" / "Carbo medio") pero era texto
+   decorativo. Aquí se convierte en objetivos reales por día: la proteína se
+   mantiene fija (protege el músculo), la grasa apenas se mueve y el swing lo
+   llevan los carbohidratos. La media semanal sigue cuadrando con el objetivo. */
+
+const DAY_FUEL_WEIGHTS = { alto: 1.35, medio: 1.0, descanso: 0 };
+
+// Clasifica un día en "alto" | "medio" | "descanso" según si se entrenó y el fuel del split
+function classifyFuelDay(trained, fuelLabel) {
+  if (!trained) return "descanso";
+  return /alto/i.test(fuelLabel || "") ? "alto" : "medio";
+}
+
+/**
+ * Objetivos del día con carbohidratos ciclados.
+ * base: {kcal,p,c,f} objetivo medio diario
+ * opts.dayType: "alto"|"medio"|"descanso"
+ * opts.trainingDaysPerWeek: nº de días de entreno (para que la media cuadre)
+ * opts.restCutPct: fracción de carbos que se recorta en día de descanso (0-0.5)
+ */
+function calcCarbCycleTargets(base, opts = {}) {
+  if (!base || !(parseFloat(base.c) >= 0)) return null;
+  const dayType = opts.dayType || "medio";
+  const nTrain = Math.max(1, Math.min(7, parseInt(opts.trainingDaysPerWeek) || 4));
+  const nRest = Math.max(0, 7 - nTrain);
+  const restCut = Math.min(0.5, Math.max(0, opts.restCutPct != null ? opts.restCutPct : 0.25));
+
+  const baseC = parseFloat(base.c) || 0;
+  const p = Math.round(parseFloat(base.p) || 0);
+  const f = Math.round(parseFloat(base.f) || 0);
+
+  // Carbos que se quitan de los días de descanso en toda la semana...
+  const pooledC = baseC * restCut * nRest;
+  // ...y se reparten entre los días de entreno según su peso (alto pesa más).
+  // Se asume que los días "alto" son la mitad de los de entreno si no se indica.
+  const nAlto = opts.altoDaysPerWeek != null
+    ? Math.max(0, Math.min(nTrain, parseInt(opts.altoDaysPerWeek)))
+    : Math.round(nTrain / 2);
+  const nMedio = nTrain - nAlto;
+  const totalWeight = nAlto * DAY_FUEL_WEIGHTS.alto + nMedio * DAY_FUEL_WEIGHTS.medio;
+
+  let c;
+  if (dayType === "descanso") {
+    c = Math.round(baseC * (1 - restCut));
+  } else if (totalWeight > 0) {
+    const share = (DAY_FUEL_WEIGHTS[dayType] || 1) / totalWeight;
+    c = Math.round(baseC + pooledC * share);
+  } else {
+    c = Math.round(baseC);
+  }
+  c = Math.max(30, c);
+
+  const kcal = p * 4 + c * 4 + f * 9;
+  const baseKcal = p * 4 + Math.round(baseC) * 4 + f * 9;
+  return {
+    kcal, p, c, f, dayType,
+    label: dayType === "alto" ? "Carbo alto" : dayType === "medio" ? "Carbo medio" : "Carbo bajo (descanso)",
+    deltaKcal: kcal - baseKcal,
+    deltaCarbo: c - Math.round(baseC),
+  };
+}
+
+/* ===== FASE CALÓRICA Y SU EFECTO EN EL ENTRENAMIENTO ===== */
+
+// Clasifica la fase según el balance calórico diario respecto al TDEE
+function classifyCaloricPhase(deficitDiario, tdee) {
+  const d = parseFloat(deficitDiario);
+  const t = parseFloat(tdee) || 0;
+  if (isNaN(d) || t <= 0) return "desconocida";
+  const pct = d / t;
+  if (pct <= -0.20) return "deficit_agresivo";
+  if (pct <= -0.05) return "deficit";
+  if (pct >= 0.05) return "superavit";
+  return "mantenimiento";
+}
+
+/**
+ * Detecta pérdida de fuerza mientras se baja de peso: la señal más importante
+ * de que el déficit es demasiado agresivo o falta proteína.
+ * Cruza la tendencia de 1RM por ejercicio (buildPRHistory) con la de peso.
+ */
+function detectStrengthLossUnderDeficit(exlog, exercises, metricslog, opts = {}) {
+  const minSessions = opts.minSessions || 3;
+  const records = buildPRHistory(exlog, exercises);
+  const wTrend = calcWeightTrend(metricslog);
+  const trendW = getTrendWeight(metricslog);
+
+  const declining = [];
+  records.forEach(r => {
+    const hist = (r.history || []).filter(h => h.e1rm > 0);
+    if (hist.length < minSessions) return;
+    const recent = hist.slice(-3);
+    const first = recent[0].e1rm;
+    const last = recent[recent.length - 1].e1rm;
+    if (first <= 0) return;
+    const dropPct = ((last - first) / first) * 100;
+    if (dropPct <= -3) { // caída relevante (>3% de 1RM estimado)
+      declining.push({ name: r.name, muscle: r.muscle, dropPct: Math.round(dropPct * 10) / 10, from: first, to: last });
+    }
+  });
+
+  const losingWeight = !!wTrend && wTrend.kgPerWeek < -0.1;
+  const lossPctWeek = (wTrend && trendW > 0) ? Math.abs(wTrend.kgPerWeek) / trendW * 100 : 0;
+  const aggressive = lossPctWeek >= 1.0;
+
+  // Se alerta solo si hay caída en 2+ ejercicios y además se está perdiendo peso
+  const detected = declining.length >= 2 && losingWeight;
+  let severity = "none";
+  if (detected) severity = (aggressive || declining.length >= 3) ? "high" : "medium";
+
+  let message = "";
+  if (detected) {
+    const names = declining.slice(0, 3).map(d => d.name).join(", ");
+    message = severity === "high"
+      ? `Estás perdiendo fuerza en ${declining.length} ejercicios (${names}) mientras bajas ${Math.round(lossPctWeek * 10) / 10}%/sem de peso. Frena el déficit hacia mantenimiento y asegura la proteína.`
+      : `Cae el 1RM estimado en ${declining.length} ejercicios (${names}) mientras bajas de peso. Vigila la proteína y evita subir volumen esta semana.`;
+  }
+
+  return {
+    detected, severity, message,
+    decliningExercises: declining,
+    losingWeight, lossPctWeek: Math.round(lossPctWeek * 10) / 10,
+  };
+}
+
+/* ===== REFEED / DIET BREAK =====
+   Si el déficit se acumula semanas o el peso se estanca pese a cumplir las
+   calorías, subir a mantenimiento unos días. Antes solo era un consejo suelto
+   en el texto de la IA, sin nada que lo disparara. */
+
+function detectRefeedNeed(metricslog, foodlog, targets, opts = {}) {
+  const t = targets || {};
+  const tdee = parseFloat(t.tdee) || 0;
+  const deficit = parseFloat(t.deficitDiario);
+  const noData = { recommended: false, reason: "", weeksInDeficit: 0, stalled: false, adherencePct: null };
+  if (!tdee || isNaN(deficit) || deficit >= 0) return noData; // no está en déficit
+
+  // Semanas seguidas comiendo por debajo del TDEE (por media semanal real)
+  const dates = Object.keys(foodlog || {}).filter(d => (foodlog[d] || []).length > 0).sort();
+  if (dates.length < 7) return noData;
+  const kcalOf = (d) => (foodlog[d] || []).reduce((a, e) => a + (+e.kcal || 0), 0);
+
+  const weeks = [];
+  for (let i = 0; i < 8; i++) {
+    const slice = dates.slice(Math.max(0, dates.length - (i + 1) * 7), dates.length - i * 7);
+    if (slice.length < 4) break; // semana incompleta: no cuenta
+    const avg = slice.reduce((a, d) => a + kcalOf(d), 0) / slice.length;
+    weeks.push(avg);
+  }
+  let weeksInDeficit = 0;
+  for (const avg of weeks) {
+    if (avg < tdee * 0.95) weeksInDeficit++;
+    else break;
+  }
+
+  // Adherencia: ¿está comiendo cerca de su objetivo? (si no, el problema es otro)
+  const targetKcal = parseFloat(t.kcal) || 0;
+  const recent = dates.slice(-14);
+  const avgRecent = recent.length ? recent.reduce((a, d) => a + kcalOf(d), 0) / recent.length : 0;
+  const adherencePct = targetKcal > 0 && avgRecent > 0
+    ? Math.round((1 - Math.abs(avgRecent - targetKcal) / targetKcal) * 100) : null;
+  const adherent = adherencePct != null && adherencePct >= 85;
+
+  // Estancamiento del peso pese a cumplir
+  const wTrend = calcWeightTrend(metricslog);
+  const stalled = !!wTrend && Math.abs(wTrend.kgPerWeek) < 0.1 && wTrend.dataPoints >= 4;
+
+  const minWeeks = opts.minWeeks || 8;
+  let recommended = false, reason = "", kind = "";
+  if (stalled && adherent && weeksInDeficit >= 3) {
+    recommended = true; kind = "diet_break";
+    reason = `Peso estancado ${wTrend.dataPoints} mediciones pese a ${adherencePct}% de adherencia y ${weeksInDeficit} semanas en déficit. Sube a mantenimiento (${Math.round(tdee)} kcal) 5-7 días para restaurar el metabolismo.`;
+  } else if (weeksInDeficit >= minWeeks) {
+    recommended = true; kind = "diet_break";
+    reason = `${weeksInDeficit} semanas seguidas en déficit. Programa un diet break de 7 días a mantenimiento (${Math.round(tdee)} kcal) antes de seguir.`;
+  } else if (weeksInDeficit >= 4) {
+    recommended = true; kind = "refeed";
+    reason = `${weeksInDeficit} semanas en déficit. Un refeed de 1-2 días con carbohidratos altos (${Math.round(tdee)} kcal) ayuda a sostener el rendimiento.`;
+  }
+
+  return { recommended, kind, reason, weeksInDeficit, stalled, adherencePct };
 }
 
 // Normaliza cualquier nombre de músculo (incluso anatómico detallado generado por IA,
@@ -1799,7 +2023,7 @@ function buildDaySummary(exlog, exercises, dateStr, opts = {}) {
     }
 
     // Recomendación para la próxima sesión de ESTE ejercicio (según hoy)
-    const recommendation = loadRecommendation(exName, topW, topReps, plateau, plateauCount);
+    const recommendation = loadRecommendation(exName, topW, topReps, plateau, plateauCount, opts.phase || "desconocida");
 
     totalWorkSets += work.length;
     totalWarmup += warm.length;
@@ -1915,6 +2139,8 @@ export default function App(){
   const [weeklyInsight, setWeeklyInsight] = useState(null); // #19 - Correlations
   const [projections, setProjections] = useState([]); // #15 - 12-week projection
   const [tdeeEstimate, setTdeeEstimate] = useState(null); // #12 - Real TDEE
+  const [strengthLossAlert, setStrengthLossAlert] = useState(null); // fuerza cayendo en déficit
+  const [refeedAlert, setRefeedAlert] = useState(null);             // refeed / diet break sugerido
   const [upcomingEvent, setUpcomingEvent] = useState(null); // #13 - Event planning
   const [experiments, setExperiments] = useState([]); // #18 - A/B experiments
   const [overloadSuggestions, setOverloadSuggestions] = useState({}); // #8 - Progressive overload
@@ -3669,6 +3895,31 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     if (fatigueCount >= 2) {
       setAiNotifications(prev => [{ id:"fatigue", type:"warning", icon:"⚡", title:fatigueCount>=3?"Posible Sobreentrenamiento":"Fatiga detectada", message:fatigueCount>=3?"3+ notas de fatiga. Reduce volumen 40% por 3-5 días y sube kcal a mantenimiento.":"2 notas de fatiga esta semana. Descansa bien esta noche.", urgency:fatigueCount>=3?"high":"medium" },...prev.filter(n=>n.id!=="fatigue")].slice(0,8));
     }
+
+    // Pérdida de fuerza mientras se baja de peso: la señal más importante de
+    // que el déficit es demasiado agresivo o falta proteína.
+    const strengthLoss = detectStrengthLossUnderDeficit(eLog, exercises, mLog);
+    setStrengthLossAlert(strengthLoss.detected ? strengthLoss : null);
+    if (strengthLoss.detected) {
+      setAiNotifications(prev => [{
+        id: "strength_loss", type: "warning", icon: "📉",
+        title: strengthLoss.severity === "high" ? "Perdiendo fuerza" : "Fuerza a la baja",
+        message: strengthLoss.message,
+        urgency: strengthLoss.severity === "high" ? "high" : "medium",
+      }, ...prev.filter(n => n.id !== "strength_loss")].slice(0, 8));
+    }
+
+    // Refeed / diet break: semanas acumuladas en déficit o estancamiento
+    // pese a buena adherencia.
+    const refeed = detectRefeedNeed(mLog, fLog, { ...(tgt || {}), tdee, deficitDiario: tgt && tdee ? tgt.kcal - tdee : NaN });
+    setRefeedAlert(refeed.recommended ? refeed : null);
+    if (refeed.recommended) {
+      setAiNotifications(prev => [{
+        id: "refeed", type: "info", icon: refeed.kind === "diet_break" ? "🍽️" : "🍚",
+        title: refeed.kind === "diet_break" ? "Toca diet break" : "Considera un refeed",
+        message: refeed.reason, urgency: "medium",
+      }, ...prev.filter(n => n.id !== "refeed")].slice(0, 8));
+    }
   };
 
   // #16 Proactive Coach — time-aware messages
@@ -4017,6 +4268,30 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       nutritionTargets.kcal, nutritionTargets.p, nutritionTargets.c, nutritionTargets.f
     );
   };
+
+  // Fase calórica actual — condiciona lo que es razonable pedirle al entreno
+  const caloricPhase = React.useMemo(
+    () => nutritionTargets
+      ? classifyCaloricPhase(nutritionTargets.deficitDiario, nutritionTargets.tdee)
+      : "desconocida",
+    [nutritionTargets]
+  );
+
+  // Objetivos del día con carbohidratos ciclados según el split y si se entrena
+  const dayFuelTargets = React.useMemo(() => {
+    const trainedToday = Object.values(exlog || {}).some(sets =>
+      (sets || []).some(s => (s?.date || "").slice(0, 10) === selectedDateStr)
+    );
+    const activeSplit = (splits || DEFAULT_SPLITS).find(s => s.key === activeSplitKey);
+    const dayType = classifyFuelDay(trainedToday, activeSplit?.fuel);
+    const trainingDays = (splits || DEFAULT_SPLITS).length || 4;
+    const altoDays = (splits || DEFAULT_SPLITS).filter(s => /alto/i.test(s.fuel || "")).length;
+    return calcCarbCycleTargets(target, {
+      dayType,
+      trainingDaysPerWeek: trainingDays,
+      altoDaysPerWeek: altoDays,
+    });
+  }, [target, exlog, selectedDateStr, splits, activeSplitKey]);
 
   // ⚡ Bolt: Memoize totals calculation to prevent unnecessary reduce operations on every render
   const totals = useMemo(() => {
@@ -5048,6 +5323,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
           <Hoy
             target={target}
             activeMetrics={activeMetrics}
+            dayFuelTargets={dayFuelTargets}
             totals={totals}
             log={log}
             setLog={(l) => { setLog(l); saveState({ log: l }); }} 
@@ -5133,6 +5409,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             checkNewPR={checkNewPR}
             activeMetrics={activeMetrics}
             bodyProfile={bodyProfile}
+            caloricPhase={caloricPhase}
             overloadSuggestions={overloadSuggestions}
             plateauAlerts={plateauAlerts}
             muscleImbalances={muscleImbalances}
@@ -5159,6 +5436,8 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             bodyProfile={bodyProfile}
             updateBodyProfile={updateBodyProfile}
             nutritionTargets={nutritionTargets}
+            strengthLossAlert={strengthLossAlert}
+            refeedAlert={refeedAlert}
             onApplyTargets={applyNutritionTargets}
             foodlog={foodlog}
             waterlog={waterlog}
@@ -6992,7 +7271,7 @@ function Hoy({
   proactiveMsg, aiNotifications, setAiNotifications, macroAdjustSuggestion, setMacroAdjustSuggestion, saveState, customPresets,
   weeklyInsight, smartGoals, challenges, updateChallengeProgress, upcomingEvent, experiments, setExperiments, splits,
   setView, setShowNutritionModal, setModalVals, addFoodInputText, setAddFoodInputText, customSuggestions,
-  exlog, notes, foodlog, sendCoachMessage, activeMetrics
+  exlog, notes, foodlog, sendCoachMessage, activeMetrics, dayFuelTargets
 }){
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false); 
@@ -7146,11 +7425,14 @@ function Hoy({
   }, []);
 
   const liters = (water * 0.25).toFixed(2);
+  // Objetivo efectivo del día: si hay ciclado de carbohidratos activo, manda el
+  // del día (más carbos entrenando, menos descansando); si no, el objetivo medio.
+  const effTarget = dayFuelTargets || target;
   const rem = {
-    kcal: Math.max(0, target.kcal - totals.kcal),
-    p: Math.max(0, target.p - totals.p),
-    c: Math.max(0, target.c - totals.c),
-    f: Math.max(0, target.f - totals.f)
+    kcal: Math.max(0, effTarget.kcal - totals.kcal),
+    p: Math.max(0, effTarget.p - totals.p),
+    c: Math.max(0, effTarget.c - totals.c),
+    f: Math.max(0, effTarget.f - totals.f)
   };
   const totalGrams = (totals.p + totals.c + totals.f) || 1;
   const pPct = ((totals.p / totalGrams) * 100).toFixed(1);
@@ -7820,12 +8102,15 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
       {/* Tarjetas de macros — anillos SVG */}
       {(() => {
         const PI = Math.PI;
+        // Los anillos siguen el objetivo EFECTIVO del día (con carbos ciclados)
         const macros = [
-          { r: 62, sw: 12, color: C.lime,  label: "Kcal",     val: Math.round(totals.kcal), max: target.kcal, unit: "kcal" },
-          { r: 46, sw: 10, color: C.cyan,  label: "Proteína", val: Math.round(totals.p),    max: target.p,    unit: "g" },
-          { r: 30, sw: 10, color: C.amber, label: "Carbos",   val: Math.round(totals.c),    max: target.c,    unit: "g" },
-          { r: 15, sw: 8,  color: C.rose,  label: "Grasas",   val: Math.round(totals.f),    max: target.f,    unit: "g" },
+          { r: 62, sw: 12, color: C.lime,  label: "Kcal",     val: Math.round(totals.kcal), max: effTarget.kcal, unit: "kcal" },
+          { r: 46, sw: 10, color: C.cyan,  label: "Proteína", val: Math.round(totals.p),    max: effTarget.p,    unit: "g" },
+          { r: 30, sw: 10, color: C.amber, label: "Carbos",   val: Math.round(totals.c),    max: effTarget.c,    unit: "g" },
+          { r: 15, sw: 8,  color: C.rose,  label: "Grasas",   val: Math.round(totals.f),    max: effTarget.f,    unit: "g" },
         ];
+        const fuelCol = dayFuelTargets?.dayType === "alto" ? C.lime
+                      : dayFuelTargets?.dayType === "descanso" ? C.cyan : C.amber;
         return (
           <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:14, display:"flex", gap:16, alignItems:"center"}}>
             <svg width={150} height={150} viewBox="0 0 150 150">
@@ -7843,9 +8128,18 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                 );
               })}
               <text x={75} y={71} textAnchor="middle" style={{fontSize:15, fontWeight:900, fill:C.ink}}>{Math.round(totals.kcal)}</text>
-              <text x={75} y={85} textAnchor="middle" style={{fontSize:10, fill:C.muted}}>/ {target.kcal} kcal</text>
+              <text x={75} y={85} textAnchor="middle" style={{fontSize:10, fill:C.muted}}>/ {effTarget.kcal} kcal</text>
             </svg>
             <div style={{flex:1, display:"flex", flexDirection:"column", gap:7}}>
+              {dayFuelTargets && dayFuelTargets.deltaCarbo !== 0 && (
+                <div title="Ciclado de carbohidratos según tu split: la media semanal se mantiene en tu objetivo"
+                  style={{display:"inline-flex", alignItems:"center", gap:5, alignSelf:"flex-start", background:`${fuelCol}14`, border:`1px solid ${fuelCol}44`, borderRadius:20, padding:"2px 9px", fontSize:10, fontWeight:800, color:fuelCol, marginBottom:1}}>
+                  {dayFuelTargets.label}
+                  <span style={{fontWeight:600, color:C.muted}}>
+                    {dayFuelTargets.deltaCarbo > 0 ? "+" : ""}{dayFuelTargets.deltaCarbo} g carbo
+                  </span>
+                </div>
+              )}
               {macros.map(m => {
                 const pct = Math.min(1, m.max > 0 ? m.val / m.max : 0);
                 return (
@@ -10864,7 +11158,7 @@ function Entreno({
   activeSplitKey, setActiveSplitKey, selectedDateStr, setSelectedDateStr, calMonth, setCalMonth,
   workoutDurations, setWorkoutDurations, exerciseTechNotes, setExerciseTechNotes, prAlerts, setPrAlerts, checkNewPR, activeMetrics,
   overloadSuggestions, plateauAlerts, muscleImbalances, splits, setSplits, notes, setNotes, chat,
-  bodyProfile
+  bodyProfile, caloricPhase
 }){
   const sel = activeSplitKey;
   const setSel = setActiveSplitKey;
@@ -11051,7 +11345,7 @@ function Entreno({
       if (sn) sensation = sn.text;
     } catch (e) {}
 
-    const summary = buildDaySummary(exlog, exercises, selectedDateStr, { durationMin, sensation });
+    const summary = buildDaySummary(exlog, exercises, selectedDateStr, { durationMin, sensation, phase: caloricPhase });
     if (summary.isEmpty) { alert("No hay entrenamiento registrado en este día."); return; }
 
     // Abrir ventana dentro del gesto del click (evita bloqueo de pop-ups en móvil)
@@ -11287,11 +11581,11 @@ tr:last-child td{border-bottom:none}
   // Recomendación + progreso por ejercicio del día seleccionado (misma lógica
   // que el PDF), indexada por nombre para mostrarla al abrir cada ejercicio.
   const dayRecMap = React.useMemo(() => {
-    const summary = buildDaySummary(exlog, exercises, selectedDateStr);
+    const summary = buildDaySummary(exlog, exercises, selectedDateStr, { phase: caloricPhase });
     const map = {};
     (summary.exercises || []).forEach(e => { map[e.name] = e; });
     return map;
-  }, [exlog, exercises, selectedDateStr]);
+  }, [exlog, exercises, selectedDateStr, caloricPhase]);
 
   /* ===== MAPA DE CALOR DE VOLUMEN SEMANAL ===== */
   const vol = useMemo(() => {
@@ -14997,7 +15291,8 @@ function Registro({
   foodlog, waterlog, exlog,
   projections, tdeeEstimate, analyzeAndReconfigure, experiments, setExperiments,
   dietGuidelines, setDietGuidelines, trainingGuidelines, setTrainingGuidelines, onSaveGuidelines,
-  sendCoachMessage, setView, bodyProfile, updateBodyProfile, nutritionTargets, onApplyTargets
+  sendCoachMessage, setView, bodyProfile, updateBodyProfile, nutritionTargets, onApplyTargets,
+  strengthLossAlert, refeedAlert
 }){
   const [type, setType] = useState("peso");
   const [statsPeriod, setStatsPeriod] = useState(7); // 7 or 30 days
@@ -16258,6 +16553,30 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                     style={{width:"100%", padding:"10px 0", borderRadius:10, border:"none", background:C.lime, color:"#0c0e0b", fontWeight:800, fontSize:12.5, display:"flex", alignItems:"center", justifyContent:"center", gap:6}}>
                     <Check size={14}/> Aplicar estos objetivos
                   </button>
+                )}
+
+                {/* Avisos derivados del cruce entre composición y entrenamiento */}
+                {strengthLossAlert && (
+                  <div style={{marginTop:10, background:"rgba(255,177,61,0.10)", border:`1px solid ${C.amber}55`, borderRadius:10, padding:"9px 11px"}}>
+                    <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:3}}>
+                      <TrendingUp size={13} color={C.amber} style={{transform:"scaleY(-1)"}}/>
+                      <span style={{fontSize:10, fontWeight:800, color:C.amber, textTransform:"uppercase", letterSpacing:".05em"}}>
+                        Perdiendo fuerza en déficit
+                      </span>
+                    </div>
+                    <div style={{fontSize:11, color:C.muted, lineHeight:1.45}}>{strengthLossAlert.message}</div>
+                  </div>
+                )}
+                {refeedAlert && (
+                  <div style={{marginTop:8, background:"rgba(74,214,255,0.10)", border:`1px solid ${C.cyan}55`, borderRadius:10, padding:"9px 11px"}}>
+                    <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:3}}>
+                      <Flame size={13} color={C.cyan}/>
+                      <span style={{fontSize:10, fontWeight:800, color:C.cyan, textTransform:"uppercase", letterSpacing:".05em"}}>
+                        {refeedAlert.kind === "diet_break" ? "Diet break recomendado" : "Refeed recomendado"}
+                      </span>
+                    </div>
+                    <div style={{fontSize:11, color:C.muted, lineHeight:1.45}}>{refeedAlert.reason}</div>
+                  </div>
                 )}
               </div>
             ) : (
@@ -18080,6 +18399,8 @@ if (typeof module !== 'undefined' && module.exports) {
     calcLeanMass, calcBMRMifflin, calcBMRKatch, calcBMR, calcNutritionTargets,
     calcWaterGoalGlasses, calcWeightEMASeries, getTrendWeight,
     DEFAULT_BODY_PROFILE, GOAL_PRESETS,
+    calcCarbCycleTargets, classifyFuelDay, classifyCaloricPhase,
+    detectStrengthLossUnderDeficit, detectRefeedNeed, detectDeloadNeed,
     default: App
   };
 }

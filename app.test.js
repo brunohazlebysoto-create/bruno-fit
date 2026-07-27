@@ -593,3 +593,237 @@ describe('Panel de perfil corporal en Registro', () => {
     console.error = originalError;
   });
 });
+
+describe('carb cycling', () => {
+  const { calcCarbCycleTargets, classifyFuelDay } = require('./app.js');
+  const base = { kcal: 2600, p: 200, c: 265, f: 70 };
+
+  test('classifyFuelDay distingue alto, medio y descanso', () => {
+    expect(classifyFuelDay(true, 'Carbo alto')).toBe('alto');
+    expect(classifyFuelDay(true, 'Carbo medio')).toBe('medio');
+    expect(classifyFuelDay(false, 'Carbo alto')).toBe('descanso');
+  });
+
+  test('el día de descanso recorta carbos y el de entreno los sube', () => {
+    const opts = { trainingDaysPerWeek: 4, altoDaysPerWeek: 2 };
+    const rest = calcCarbCycleTargets(base, { ...opts, dayType: 'descanso' });
+    const alto = calcCarbCycleTargets(base, { ...opts, dayType: 'alto' });
+    const medio = calcCarbCycleTargets(base, { ...opts, dayType: 'medio' });
+
+    expect(rest.c).toBeLessThan(base.c);
+    expect(alto.c).toBeGreaterThan(base.c);
+    expect(alto.c).toBeGreaterThan(medio.c); // alto recibe más que medio
+    expect(rest.deltaKcal).toBeLessThan(0);
+    expect(alto.deltaKcal).toBeGreaterThan(0);
+  });
+
+  test('la proteína y la grasa no se mueven: el swing lo llevan los carbos', () => {
+    const opts = { trainingDaysPerWeek: 4, altoDaysPerWeek: 2 };
+    ['alto', 'medio', 'descanso'].forEach(dayType => {
+      const d = calcCarbCycleTargets(base, { ...opts, dayType });
+      expect(d.p).toBe(base.p);
+      expect(d.f).toBe(base.f);
+      expect(d.kcal).toBe(d.p * 4 + d.c * 4 + d.f * 9);
+    });
+  });
+
+  test('la media semanal de carbos se mantiene en el objetivo', () => {
+    const nTrain = 4, nAlto = 2, nMedio = 2, nRest = 3;
+    const opts = { trainingDaysPerWeek: nTrain, altoDaysPerWeek: nAlto };
+    const alto = calcCarbCycleTargets(base, { ...opts, dayType: 'alto' });
+    const medio = calcCarbCycleTargets(base, { ...opts, dayType: 'medio' });
+    const rest = calcCarbCycleTargets(base, { ...opts, dayType: 'descanso' });
+    const semana = alto.c * nAlto + medio.c * nMedio + rest.c * nRest;
+    // tolerancia de ±2% por redondeos a gramos enteros
+    expect(Math.abs(semana - base.c * 7) / (base.c * 7)).toBeLessThan(0.02);
+  });
+
+  test('devuelve null sin base válida', () => {
+    expect(calcCarbCycleTargets(null, { dayType: 'alto' })).toBeNull();
+  });
+});
+
+describe('fase calórica y su efecto en la carga', () => {
+  const { classifyCaloricPhase, loadRecommendation } = require('./app.js');
+
+  test('clasifica la fase por el balance respecto al TDEE', () => {
+    expect(classifyCaloricPhase(-700, 3000)).toBe('deficit_agresivo');
+    expect(classifyCaloricPhase(-300, 3000)).toBe('deficit');
+    expect(classifyCaloricPhase(0, 3000)).toBe('mantenimiento');
+    expect(classifyCaloricPhase(300, 3000)).toBe('superavit');
+    expect(classifyCaloricPhase(NaN, 3000)).toBe('desconocida');
+  });
+
+  test('en déficit agresivo no sube carga con 8 reps (sí lo haría en normal)', () => {
+    const normal = loadRecommendation('Press banca', 80, 8, false, 3, 'mantenimiento');
+    const agresivo = loadRecommendation('Press banca', 80, 8, false, 3, 'deficit_agresivo');
+    expect(normal.kind).toBe('overload');
+    expect(agresivo.kind).toBe('hold'); // exige 10 reps antes de subir
+  });
+
+  test('en superávit sube antes (7 reps bastan)', () => {
+    expect(loadRecommendation('Press banca', 80, 7, false, 3, 'superavit').kind).toBe('overload');
+    expect(loadRecommendation('Press banca', 80, 7, false, 3, 'mantenimiento').kind).toBe('hold');
+  });
+
+  test('en déficit agresivo el incremento es menor', () => {
+    const normal = loadRecommendation('Press banca', 80, 12, false, 3, 'mantenimiento');
+    const agresivo = loadRecommendation('Press banca', 80, 12, false, 3, 'deficit_agresivo');
+    expect(agresivo.weight).toBeLessThan(normal.weight);
+  });
+
+  test('en déficit agresivo un estancamiento no manda rotar ejercicio', () => {
+    const normal = loadRecommendation('Curl', 20, 6, true, 3, 'mantenimiento');
+    const agresivo = loadRecommendation('Curl', 20, 6, true, 3, 'deficit_agresivo');
+    expect(normal.kind).toBe('variation');
+    expect(agresivo.kind).toBe('hold');
+  });
+
+  test('sin fase indicada mantiene el comportamiento anterior', () => {
+    expect(loadRecommendation('Press banca', 80, 8, false).kind).toBe('overload');
+    expect(loadRecommendation('Curl', 20, 5, true, 3).kind).toBe('variation');
+  });
+});
+
+describe('pérdida de fuerza en déficit', () => {
+  const { detectStrengthLossUnderDeficit } = require('./app.js');
+  const exercises = { a: [{ name: 'Press banca', musculos: ['Pectoral'] }, { name: 'Sentadilla', musculos: ['Cuádriceps'] }] };
+
+  // 1RM cayendo en dos ejercicios
+  const exlogDeclining = {
+    'Press banca': [
+      { date: '2026-07-01T10:00:00', w: 100, reps: 6, type: 'work' },
+      { date: '2026-07-08T10:00:00', w: 95, reps: 6, type: 'work' },
+      { date: '2026-07-15T10:00:00', w: 88, reps: 5, type: 'work' },
+    ],
+    'Sentadilla': [
+      { date: '2026-07-01T10:00:00', w: 140, reps: 5, type: 'work' },
+      { date: '2026-07-08T10:00:00', w: 132, reps: 5, type: 'work' },
+      { date: '2026-07-15T10:00:00', w: 125, reps: 4, type: 'work' },
+    ],
+  };
+  // peso bajando rápido
+  const metricsLosing = {
+    '2026-07-01': { weight: 95 }, '2026-07-05': { weight: 94 },
+    '2026-07-10': { weight: 92.8 }, '2026-07-15': { weight: 91.5 },
+  };
+
+  test('detecta caída de fuerza mientras se baja de peso', () => {
+    const r = detectStrengthLossUnderDeficit(exlogDeclining, exercises, metricsLosing);
+    expect(r.detected).toBe(true);
+    expect(r.decliningExercises.length).toBeGreaterThanOrEqual(2);
+    expect(r.losingWeight).toBe(true);
+    expect(r.message).toMatch(/fuerza|1RM/i);
+  });
+
+  test('no alerta si la fuerza cae pero el peso es estable', () => {
+    const stable = { '2026-07-01': { weight: 92 }, '2026-07-08': { weight: 92.1 }, '2026-07-15': { weight: 92 } };
+    expect(detectStrengthLossUnderDeficit(exlogDeclining, exercises, stable).detected).toBe(false);
+  });
+
+  test('no alerta si la fuerza sube aunque baje el peso', () => {
+    const improving = {
+      'Press banca': [
+        { date: '2026-07-01T10:00:00', w: 88, reps: 5, type: 'work' },
+        { date: '2026-07-08T10:00:00', w: 92, reps: 6, type: 'work' },
+        { date: '2026-07-15T10:00:00', w: 97, reps: 6, type: 'work' },
+      ],
+    };
+    expect(detectStrengthLossUnderDeficit(improving, exercises, metricsLosing).detected).toBe(false);
+  });
+
+  test('no alerta sin historial suficiente', () => {
+    const poco = { 'Press banca': [{ date: '2026-07-15T10:00:00', w: 90, reps: 6, type: 'work' }] };
+    expect(detectStrengthLossUnderDeficit(poco, exercises, metricsLosing).detected).toBe(false);
+  });
+});
+
+describe('refeed / diet break', () => {
+  const { detectRefeedNeed } = require('./app.js');
+  const targets = { tdee: 3000, deficitDiario: -400, kcal: 2600 };
+
+  // Genera N días de comida con kcal dadas, terminando hoy
+  const foodlogOf = (days, kcal) => {
+    const out = {};
+    for (let i = 0; i < days; i++) {
+      const d = new Date(2026, 6, 27); d.setDate(d.getDate() - i);
+      out[d.toISOString().slice(0, 10)] = [{ kcal }];
+    }
+    return out;
+  };
+
+  test('no recomienda nada si no está en déficit', () => {
+    const r = detectRefeedNeed({}, foodlogOf(60, 3000), { tdee: 3000, deficitDiario: 0, kcal: 3000 });
+    expect(r.recommended).toBe(false);
+  });
+
+  test('propone refeed tras 4+ semanas en déficit', () => {
+    const r = detectRefeedNeed({}, foodlogOf(35, 2600), targets);
+    expect(r.weeksInDeficit).toBeGreaterThanOrEqual(4);
+    expect(r.recommended).toBe(true);
+    expect(r.kind).toBe('refeed');
+  });
+
+  test('escala a diet break tras 8+ semanas', () => {
+    const r = detectRefeedNeed({}, foodlogOf(60, 2600), targets);
+    expect(r.kind).toBe('diet_break');
+    expect(r.reason).toMatch(/diet break/i);
+  });
+
+  test('propone diet break si el peso se estanca pese a buena adherencia', () => {
+    const stalled = {
+      '2026-07-01': { weight: 92 }, '2026-07-08': { weight: 92.1 },
+      '2026-07-15': { weight: 91.9 }, '2026-07-22': { weight: 92.05 },
+    };
+    const r = detectRefeedNeed(stalled, foodlogOf(25, 2600), targets);
+    expect(r.stalled).toBe(true);
+    expect(r.recommended).toBe(true);
+    expect(r.adherencePct).toBeGreaterThanOrEqual(85);
+  });
+
+  test('sin datos suficientes de comida no recomienda', () => {
+    expect(detectRefeedNeed({}, foodlogOf(3, 2600), targets).recommended).toBe(false);
+  });
+});
+
+describe('deload sensible a la composición corporal', () => {
+  const { detectDeloadNeed } = require('./app.js');
+
+  // Genera entrenamientos constantes en las últimas 8 semanas
+  const exlogSteady = (() => {
+    const out = { 'Press banca': [] };
+    for (let i = 0; i < 56; i += 2) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      out['Press banca'].push({ date: d.toISOString(), w: 80, reps: 8, type: 'work' });
+    }
+    return out;
+  })();
+
+  const metricsOf = (kgPerWeek) => {
+    const out = {};
+    for (let i = 0; i < 5; i++) {
+      const d = new Date(); d.setDate(d.getDate() - i * 7);
+      out[d.toISOString().slice(0, 10)] = { weight: 90 + i * kgPerWeek };
+    }
+    return out;
+  };
+
+  test('expone el ritmo de pérdida y ya no ignora metricslog', () => {
+    const r = detectDeloadNeed(exlogSteady, [], metricsOf(1.4)); // baja ~1.4 kg/sem
+    expect(r.rapidLossPct).toBeGreaterThan(1);
+  });
+
+  test('una pérdida muy rápida eleva la urgencia frente a peso estable', () => {
+    const estable = detectDeloadNeed(exlogSteady, [], metricsOf(0));
+    const rapida = detectDeloadNeed(exlogSteady, [], metricsOf(1.6));
+    const ORDER = ['none', 'low', 'medium', 'high'];
+    expect(ORDER.indexOf(rapida.urgency)).toBeGreaterThan(ORDER.indexOf(estable.urgency));
+    expect(rapida.reason).toMatch(/%\/sem/);
+  });
+
+  test('sigue funcionando sin datos de peso', () => {
+    const r = detectDeloadNeed(exlogSteady, [], {});
+    expect(r).toHaveProperty('urgency');
+    expect(r.rapidLossPct).toBe(0);
+  });
+});
