@@ -334,10 +334,76 @@ describe('buildPRHistory', () => {
     expect(rec.history[2].e1rm).toBeGreaterThan(0);
   });
 
-  test('isCompoundExercise y estimate1RM', () => {
+  test('isCompoundExercise y estimate1RM (PR)', () => {
     expect(isCompoundExercise('Sentadilla trasera')).toBe(true);
     expect(isCompoundExercise('Curl de bíceps')).toBe(false);
     expect(estimate1RM(100, 0)).toBe(0);
     expect(estimate1RM(100, 10)).toBeCloseTo(133.33, 1);
+  });
+});
+
+describe('buildDaySummary', () => {
+  const { buildDaySummary, localDateKey } = require('./app.js');
+
+  const exercises = {
+    pecho: [{ name: 'Press banca', musculos: ['Pectoral', 'Tríceps'] }],
+    pierna: [{ name: 'Sentadilla', musculos: ['Cuádriceps', 'Glúteos'] }],
+  };
+
+  test('día sin entrenamiento devuelve isEmpty', () => {
+    const s = buildDaySummary({}, exercises, '2026-07-27');
+    expect(s.isEmpty).toBe(true);
+    expect(s.exercises).toEqual([]);
+  });
+
+  test('localDateKey usa la fecha local, no la UTC cruda', () => {
+    // Cualquier ISO válido produce YYYY-MM-DD de 10 caracteres
+    expect(localDateKey('2026-07-27T10:00:00Z')).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(localDateKey('fecha-invalida')).toBe('');
+  });
+
+  test('consolida series del día: trabajo, calentamiento, volumen y PR', () => {
+    const day = '2026-07-27';
+    const exlog = {
+      'Press banca': [
+        { date: day + 'T10:00:00', w: 40, reps: 12, type: 'warmup' }, // calentamiento
+        { date: day + 'T10:05:00', w: 90, reps: 8, type: 'work' },
+        { date: day + 'T10:10:00', w: 90, reps: 6, type: 'work' },
+        { date: '2026-07-20T10:00:00', w: 85, reps: 8, type: 'work' }, // histórico previo (max 85)
+      ],
+      'Sentadilla': [
+        { date: day + 'T10:20:00', w: 100, reps: 5, type: 'work' },
+      ],
+    };
+    const s = buildDaySummary(exlog, exercises, day, { durationMin: 60, sensation: 'Óptimo' });
+    expect(s.isEmpty).toBe(false);
+    expect(s.totals.exercises).toBe(2);
+    expect(s.totals.workSets).toBe(3);       // 2 press + 1 sentadilla (sin calentamiento)
+    expect(s.totals.warmupSets).toBe(1);
+    // Volumen del día: 40*12 + 90*8 + 90*6 + 100*5 = 480+720+540+500 = 2240
+    expect(s.totals.volume).toBe(2240);
+    // PR: hoy 90kg en Press banca supera el histórico previo de 85kg
+    expect(s.totals.prCount).toBe(1);
+    const press = s.exercises.find(e => e.name === 'Press banca');
+    expect(press.isPR).toBe(true);
+    expect(press.topW).toBe(90);
+    // El mini-análisis siempre tiene contenido
+    expect(Array.isArray(s.analysis)).toBe(true);
+    expect(s.analysis.length).toBeGreaterThan(2);
+    // Menciona la duración cuando se pasa
+    expect(s.analysis.join(' ')).toMatch(/60 min/);
+    // Menciona la sensación
+    expect(s.analysis.join(' ')).toMatch(/Óptimo/);
+  });
+
+  test('ordena ejercicios por orden de ejecución (más temprano primero)', () => {
+    const day = '2026-07-27';
+    const exlog = {
+      'Sentadilla': [{ date: day + 'T11:00:00', w: 100, reps: 5, type: 'work' }],
+      'Press banca': [{ date: day + 'T10:00:00', w: 90, reps: 5, type: 'work' }],
+    };
+    const s = buildDaySummary(exlog, exercises, day);
+    expect(s.exercises[0].name).toBe('Press banca'); // se hizo antes
+    expect(s.exercises[1].name).toBe('Sentadilla');
   });
 });

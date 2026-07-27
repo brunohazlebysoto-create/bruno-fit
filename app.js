@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W18";
+const APP_VERSION = "v2026.06.23-W19";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1561,6 +1561,123 @@ function calcSessionMuscleSets(exlog, exercises, dateStr) {
       return { muscle, sets: d.sets, weightedSets, freshSets, fatiguePct, exNames: d.exNames };
     })
     .sort((a, b) => b.weightedSets - a.weightedSets);
+}
+
+// Fecha local YYYY-MM-DD desde un ISO (coherente con el resto de la app)
+function localDateKey(iso) {
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  } catch (e) { return ""; }
+}
+
+// Consolida el registro de entrenamiento de un día + un mini-análisis basado
+// en reglas (instantáneo, sin IA). Pura y testeable.
+// opts: { durationMin, sensation }
+function buildDaySummary(exlog, exercises, dateStr, opts = {}) {
+  const allExObjects = Object.values(exercises || {}).flat();
+  const muscleOf = (name) => (allExObjects.find(e => e.name === name)?.musculos || [])[0] || "";
+
+  const exList = [];
+  let totalWorkSets = 0, totalWarmup = 0, totalVolume = 0, prCount = 0;
+
+  Object.entries(exlog || {}).forEach(([exName, allSets]) => {
+    const daySets = (allSets || []).filter(s => s && s.date && localDateKey(s.date) === dateStr);
+    if (!daySets.length) return;
+
+    const work = daySets.filter(s => s.type !== "warmup");
+    const warm = daySets.filter(s => s.type === "warmup");
+    const volume = daySets.reduce((a, s) => a + setVolume(s), 0);
+    const topW = work.length ? Math.max(...work.map(s => parseFloat(s.w) || 0)) : 0;
+    const topReps = work.filter(s => (parseFloat(s.w) || 0) === topW).reduce((a, s) => Math.max(a, parseInt(s.reps) || 0), 0);
+    const e1rm = Math.round(work.reduce((b, s) => Math.max(b, estimate1RM(s.w, s.reps)), 0) * 10) / 10;
+
+    // ¿PR hoy? peso máximo de hoy supera el máximo histórico previo
+    const histMax = (allSets || [])
+      .filter(s => s && s.date && s.type !== "warmup" && localDateKey(s.date) !== dateStr)
+      .reduce((m, s) => Math.max(m, parseFloat(s.w) || 0), 0);
+    const isPR = histMax > 0 && topW > histMax;
+    if (isPR) prCount++;
+
+    totalWorkSets += work.length;
+    totalWarmup += warm.length;
+    totalVolume += volume;
+
+    exList.push({
+      name: exName,
+      muscle: muscleOf(exName),
+      sets: daySets.map(s => ({ w: parseFloat(s.w) || 0, reps: parseInt(s.reps) || 0, rir: s.rir ?? "-", type: s.type || "work" })),
+      workSetsCount: work.length,
+      warmupCount: warm.length,
+      volume: Math.round(volume),
+      topW, topReps, e1rm,
+      histMax, isPR,
+      earliest: Math.min(...daySets.map(s => { try { return new Date(s.date).getTime(); } catch (e) { return 0; } })),
+    });
+  });
+
+  exList.sort((a, b) => a.earliest - b.earliest); // orden cronológico de ejecución
+
+  const muscles = calcSessionMuscleSets(exlog, exercises, dateStr);
+
+  // Media histórica de volumen (hasta 8 sesiones previas) para comparar
+  const sessionVolByDay = {};
+  Object.values(exlog || {}).flat().forEach(s => {
+    if (!s || !s.date || s.type === "warmup") return;
+    const dk = localDateKey(s.date);
+    if (!dk) return;
+    sessionVolByDay[dk] = (sessionVolByDay[dk] || 0) + setVolume(s);
+  });
+  const otherDays = Object.keys(sessionVolByDay).filter(d => d !== dateStr).sort().slice(-8);
+  const avgHistVol = otherDays.length ? Math.round(otherDays.reduce((a, d) => a + sessionVolByDay[d], 0) / otherDays.length) : 0;
+  const volDiffPct = avgHistVol > 0 && totalVolume > 0 ? Math.round(((totalVolume - avgHistVol) / avgHistVol) * 100) : null;
+
+  // ── Mini-análisis basado en reglas ──
+  const analysis = [];
+  const roundVol = Math.round(totalVolume);
+  analysis.push(`Registraste ${totalWorkSets} series efectivas en ${exList.length} ejercicio${exList.length !== 1 ? "s" : ""}, moviendo ${roundVol.toLocaleString("es")} kg de volumen total.`);
+
+  if (volDiffPct !== null) {
+    if (volDiffPct >= 10) analysis.push(`Volumen ${volDiffPct}% por encima de tu media reciente (${avgHistVol.toLocaleString("es")} kg): sesión exigente, cuida la recuperación.`);
+    else if (volDiffPct <= -10) analysis.push(`Volumen ${Math.abs(volDiffPct)}% por debajo de tu media (${avgHistVol.toLocaleString("es")} kg): sesión más ligera o de descarga.`);
+    else analysis.push(`Volumen en línea con tu media reciente (${avgHistVol.toLocaleString("es")} kg): buena consistencia.`);
+  }
+
+  if (muscles.length) {
+    const top = muscles.slice(0, 2).map(m => m.muscle);
+    analysis.push(`El foco muscular fue ${top.join(" y ")}${muscles.length > 2 ? `, con trabajo secundario en ${muscles.slice(2, 4).map(m => m.muscle).join(", ")}` : ""}.`);
+    const fatigued = muscles.find(m => m.fatiguePct >= 40);
+    if (fatigued) analysis.push(`${fatigued.muscle} acumuló ${fatigued.fatiguePct}% de pre-fatiga por el orden de ejercicios: considera moverlo antes la próxima vez.`);
+  }
+
+  const prExs = exList.filter(e => e.isPR);
+  if (prExs.length) analysis.push(`🏆 ${prExs.length} PR de peso: ${prExs.map(e => `${e.name} ${e.topW}kg`).join(", ")}. ¡Excelente!`);
+  else analysis.push(`Sin PRs de peso hoy: el progreso también se construye acumulando volumen de calidad.`);
+
+  // Recomendación de sobrecarga para la próxima
+  const overloadReady = exList.filter(e => e.topReps >= 8).map(e => {
+    const inc = isCompoundExercise(e.name) ? 2.5 : 1;
+    return `${e.name} → ${e.topW + inc}kg`;
+  });
+  if (overloadReady.length) analysis.push(`Próxima sesión, sube carga en: ${overloadReady.slice(0, 4).join(", ")} (llegaste a 8+ reps).`);
+
+  const dur = parseInt(opts.durationMin) || 0;
+  if (dur > 0) {
+    const density = totalVolume > 0 ? Math.round(totalVolume / dur) : 0;
+    analysis.push(`Duración ${dur} min · densidad ${density.toLocaleString("es")} kg/min.`);
+  }
+  if (opts.sensation) analysis.push(`Sensación reportada: ${opts.sensation}.`);
+
+  return {
+    dateStr,
+    exercises: exList,
+    muscles,
+    totals: { exercises: exList.length, workSets: totalWorkSets, warmupSets: totalWarmup, volume: roundVol, prCount },
+    avgHistVol, volDiffPct,
+    analysis,
+    isEmpty: exList.length === 0,
+  };
 }
 
 export default function App(){
@@ -10673,6 +10790,163 @@ function Entreno({
   const last = (n) => { const key = findExlogKey(n); const a = (exlog || {})[key]; return a && a.length ? a[0] : null; };
   const chartData = (n) => { const key = findExlogKey(n); return ((exlog || {})[key] || []).slice().sort((a,b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0)); };
 
+  // Exporta el registro del día seleccionado + mini-análisis como PDF imprimible
+  const exportDayPDF = () => {
+    const durationMin = (workoutDurations || {})[selectedDateStr] || 0;
+    let sensation = "";
+    try {
+      const sn = (notes || []).find(n => n.type === "sensacion" && getLocalDateStr(new Date(n.date)) === selectedDateStr);
+      if (sn) sensation = sn.text;
+    } catch (e) {}
+
+    const summary = buildDaySummary(exlog, exercises, selectedDateStr, { durationMin, sensation });
+    if (summary.isEmpty) { alert("No hay entrenamiento registrado en este día."); return; }
+
+    // Abrir ventana dentro del gesto del click (evita bloqueo de pop-ups en móvil)
+    const win = window.open("", "_blank");
+
+    const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const dateLong = (() => {
+      try {
+        const d = new Date(selectedDateStr + "T12:00:00").toLocaleDateString("es-ES", { weekday: "long", day: "2-digit", month: "long", year: "numeric" });
+        return d.charAt(0).toUpperCase() + d.slice(1); // solo la inicial en mayúscula
+      } catch (e) { return selectedDateStr; }
+    })();
+    const gen = new Date().toLocaleDateString("es-ES", { day: "2-digit", month: "long", year: "numeric" });
+
+    // Bloques de ejercicios con sus series
+    let exBlocks = "";
+    summary.exercises.forEach((ex, i) => {
+      const setRows = ex.sets.map((s, j) => {
+        const isW = s.type === "warmup";
+        const tipo = isW ? "Calent." : s.type === "dropset" ? "Dropset" : "Trabajo";
+        return `<tr class="${isW ? "rw" : ""}">
+          <td>${isW ? "—" : j + 1 - ex.warmupCount > 0 ? j + 1 - ex.warmupCount : "—"}</td>
+          <td class="tp">${tipo}</td>
+          <td class="num"><strong>${s.w}</strong> kg</td>
+          <td class="num">${s.reps}</td>
+          <td class="num">${s.rir === "-" || s.rir == null ? "—" : s.rir}</td>
+        </tr>`;
+      }).join("");
+      exBlocks += `
+      <div class="ex">
+        <div class="exh">
+          <span class="exn">${i + 1}. ${esc(ex.name)}</span>
+          <span class="exm">${ex.muscle ? esc(ex.muscle) : ""}${ex.isPR ? ' <span class="pr">★ PR ' + ex.topW + 'kg</span>' : ""}</span>
+        </div>
+        <table>
+          <thead><tr><th>Serie</th><th>Tipo</th><th class="num">Carga</th><th class="num">Reps</th><th class="num">RIR</th></tr></thead>
+          <tbody>${setRows}</tbody>
+        </table>
+        <div class="exf">${ex.workSetsCount} series de trabajo · ${ex.volume.toLocaleString("es")} kg vol · 1RM est. ${ex.e1rm} kg</div>
+      </div>`;
+    });
+
+    // Barras de músculos trabajados
+    const maxMW = summary.muscles[0]?.weightedSets || 1;
+    const muscleBars = summary.muscles.map(m => {
+      const pct = Math.round((m.weightedSets / maxMW) * 100);
+      return `<div class="mrow">
+        <span class="mn">${esc(m.muscle)}</span>
+        <span class="mbar"><span class="mfill" style="width:${pct}%"></span></span>
+        <span class="mv">${m.weightedSets} ser${m.fatiguePct >= 25 ? ` · 💤${m.fatiguePct}%` : ""}</span>
+      </div>`;
+    }).join("");
+
+    const analysisItems = summary.analysis.map(a => `<li>${esc(a)}</li>`).join("");
+    const diffBadge = summary.volDiffPct !== null
+      ? `<span class="dpct ${summary.volDiffPct >= 0 ? "up" : "down"}">${summary.volDiffPct >= 0 ? "+" : ""}${summary.volDiffPct}% vs media</span>` : "";
+
+    const html = `<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"/>
+<title>Sesión ${selectedDateStr} · Bruno</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;color:#111;font-size:10pt;line-height:1.45;background:#fff}
+.page{max-width:800px;margin:0 auto;padding:24px 22px 40px}
+.dh{border-bottom:3px solid #111;padding-bottom:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:flex-end}
+h1{font-size:18pt;font-weight:900;letter-spacing:-.5px;line-height:1.1}
+.sub-h{font-size:9pt;color:#555;margin-top:3px}
+.meta{text-align:right;font-size:9pt;color:#555;line-height:1.7}
+.badge{display:inline-block;background:#111;color:#fff;font-size:8pt;font-weight:700;padding:3px 9px;border-radius:20px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px}
+.sb{border:1.5px solid #e5e7eb;border-radius:8px;padding:8px 10px}
+.sb .l{font-size:7pt;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#888}
+.sb .v{font-size:13pt;font-weight:900;color:#111}
+.sb .v small{font-size:8pt;font-weight:600;color:#888}
+.dpct{font-size:7.5pt;font-weight:800;padding:1px 5px;border-radius:20px;vertical-align:middle}
+.dpct.up{background:#dcfce7;color:#15803d}
+.dpct.down{background:#fee2e2;color:#b91c1c}
+.sec{font-size:10pt;font-weight:900;text-transform:uppercase;letter-spacing:.08em;color:#fff;background:#111;padding:5px 12px;border-radius:7px;margin:16px 0 9px}
+.an{background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:9px;padding:11px 14px 11px 12px;margin-bottom:4px}
+.an ul{list-style:none}
+.an li{font-size:9.5pt;color:#14532d;padding:3px 0 3px 16px;position:relative;line-height:1.4}
+.an li::before{content:"›";position:absolute;left:2px;color:#16a34a;font-weight:800}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+.ex{border:1.5px solid #e5e7eb;border-radius:9px;overflow:hidden;margin-bottom:10px;page-break-inside:avoid}
+.exh{background:#f3f4f6;padding:7px 11px;border-bottom:1.5px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.exn{font-size:10.5pt;font-weight:800}
+.exm{font-size:8pt;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.03em}
+.pr{color:#a16207;background:#fef9c3;border-radius:20px;padding:1px 7px;font-size:7.5pt}
+table{width:100%;border-collapse:collapse;font-size:9pt}
+th{text-align:left;font-size:6.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;border-bottom:1.5px solid #e5e7eb;padding:4px 10px}
+th.num,td.num{text-align:center}
+td{padding:4px 10px;border-bottom:1px solid #f3f4f6}
+tr:last-child td{border-bottom:none}
+.rw td{color:#b45309}
+.tp{font-size:8pt;color:#9ca3af}
+.exf{font-size:7.5pt;color:#6b7280;padding:6px 11px;background:#fafafa;border-top:1px solid #f0f1f3}
+.mrow{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.mn{font-size:9pt;font-weight:700;width:88px;flex-shrink:0}
+.mbar{flex:1;height:8px;background:#f0f1f3;border-radius:20px;overflow:hidden}
+.mfill{display:block;height:100%;background:#16a34a;border-radius:20px}
+.mv{font-size:8pt;color:#6b7280;width:96px;text-align:right;flex-shrink:0}
+.ft{margin-top:18px;padding-top:9px;border-top:1.5px solid #e5e7eb;display:flex;justify-content:space-between;font-size:7.5pt;color:#9ca3af}
+.pbtn{position:fixed;top:14px;right:14px;background:#16a34a;color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:11pt;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+@media print{.pbtn{display:none}@page{size:A4;margin:11mm 11mm 15mm 11mm}}
+</style></head><body>
+<button class="pbtn" onclick="window.print()">🖨 Guardar PDF</button>
+<div class="page">
+  <div class="dh">
+    <div>
+      <h1>${esc(dateLong)}</h1>
+      <div class="sub-h">Registro de entrenamiento y análisis de la sesión</div>
+    </div>
+    <div class="meta"><span class="badge">Bruno Hazleby</span><br>Generado ${gen}</div>
+  </div>
+  <div class="stats">
+    <div class="sb"><div class="l">Ejercicios</div><div class="v">${summary.totals.exercises}</div></div>
+    <div class="sb"><div class="l">Series de trabajo</div><div class="v">${summary.totals.workSets}</div></div>
+    <div class="sb"><div class="l">Volumen ${diffBadge}</div><div class="v">${summary.totals.volume.toLocaleString("es")} <small>kg</small></div></div>
+    <div class="sb"><div class="l">${durationMin > 0 ? "Duración" : "PRs hoy"}</div><div class="v">${durationMin > 0 ? durationMin + ' <small>min</small>' : "★ " + summary.totals.prCount}</div></div>
+  </div>
+
+  <div class="sec">Mini-análisis de la sesión</div>
+  <div class="an"><ul>${analysisItems}</ul></div>
+
+  <div class="grid2" style="margin-top:16px">
+    <div>
+      <div class="sec" style="margin-top:0">Ejercicios registrados</div>
+      ${exBlocks}
+    </div>
+    <div>
+      <div class="sec" style="margin-top:0">Músculos trabajados</div>
+      <div style="border:1.5px solid #e5e7eb;border-radius:9px;padding:12px 14px">${muscleBars || '<div style="font-size:9pt;color:#9ca3af">Sin datos musculares</div>'}</div>
+      ${sensation ? `<div style="margin-top:10px;border:1.5px solid #e5e7eb;border-radius:9px;padding:10px 13px"><div style="font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-bottom:3px">Sensación reportada</div><div style="font-size:11pt;font-weight:700">${esc(sensation)}</div></div>` : ""}
+    </div>
+  </div>
+
+  <div class="ft">
+    <span>Bruno Fit · Registro de sesión</span>
+    <span>Volumen = Σ(carga × reps) · 1RM estimado (Epley)</span>
+    <span>${gen}</span>
+  </div>
+</div></body></html>`;
+
+    if (win) { win.document.open(); win.document.write(html); win.document.close(); }
+    else { alert("El navegador bloqueó la ventana. Permite pop-ups para este sitio y vuelve a intentar."); }
+  };
+
   useEffect(() => {
     (async () => {
       const savedDaySug = await loadKey("last_day_sug", "");
@@ -11875,6 +12149,16 @@ tr:last-child td{border-bottom:none}
                 <span>Detalle de Sesión</span>
                 <span style={{color:C.lime}}>{formatSelectedDateLong(selectedDateStr)}</span>
               </div>
+
+              {selectedDayWorkouts && Object.keys(selectedDayWorkouts).length > 0 && (
+                <button
+                  className="btn-active-scale"
+                  onClick={exportDayPDF}
+                  style={{width:"100%", marginBottom:10, padding:"10px 0", borderRadius:10, border:`1px solid ${C.limeGreen||C.lime}`, background:"rgba(22,163,74,0.10)", color:C.limeGreen||C.lime, fontWeight:800, fontSize:12.5, display:"flex", alignItems:"center", justifyContent:"center", gap:7}}
+                >
+                  <FileText size={15}/> Exportar sesión a PDF + análisis
+                </button>
+              )}
 
               {/* Quick sensation */}
               <div style={{display:"flex", gap:5, marginBottom:8}}>
@@ -17279,5 +17563,5 @@ if (container) {
 
 // Para testing (Jest / Node.js)
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { loadKey, buildPRHistory, isCompoundExercise, estimate1RM, default: App };
+  module.exports = { loadKey, buildPRHistory, buildDaySummary, localDateKey, isCompoundExercise, estimate1RM, default: App };
 }
