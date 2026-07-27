@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W25";
+const APP_VERSION = "v2026.06.23-W26";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1170,6 +1170,8 @@ const DEFAULT_BODY_PROFILE = {
   objetivo: "definicion",  // "definicion" | "mantenimiento" | "volumen"
   actividad: 1.45,         // factor NEAT/actividad diaria (sin contar el entreno)
   ritmoKgSemana: -0.5,     // ritmo de cambio de peso deseado (kg/semana)
+  pesoInicial: 93.9,       // punto de partida (antes constante START_W)
+  pesoObjetivo: 85,        // meta de peso (antes constante GOAL_W)
 };
 
 // Factores de actividad seleccionables en la UI
@@ -1265,9 +1267,12 @@ function calcNutritionTargets(profile, metrics, opts = {}) {
   const carbo = Math.max(50, Math.round((kcal - proteina * 4 - grasa * 9) / 4));
   // kcal recalculadas para que cuadren exactamente con los macros
   const kcalFinal = proteina * 4 + carbo * 4 + grasa * 9;
+  // Fibra: ~14 g por cada 1000 kcal (recomendación estándar), acotada a un
+  // rango razonable para no pedir cifras inalcanzables en dietas altas.
+  const fibra = Math.max(20, Math.min(60, Math.round((kcalFinal / 1000) * 14)));
 
   return {
-    kcal: kcalFinal, p: proteina, c: carbo, f: grasa,
+    kcal: kcalFinal, p: proteina, c: carbo, f: grasa, fibra,
     bmr, bmrMethod: method, leanKg,
     tdee, tdeeEstimado, tdeeReal: tdeeReal || null, usandoTdeeReal: usarReal,
     ritmoKgSemana: ritmo, deficitDiario: Math.round(kcalFinal - tdee),
@@ -1280,10 +1285,14 @@ function calcNutritionTargets(profile, metrics, opts = {}) {
  * Objetivo de hidratación: ~35 ml por kg + extra si se entrenó ese día.
  * Antes era una constante de 14 vasos para todo el mundo.
  */
-function calcWaterGoalGlasses(weight, trainedToday = false, glassMl = 250) {
+function calcWaterGoalGlasses(weight, trainedToday = false, glassMl = 250, durationMin = 0) {
   const w = parseFloat(weight) || 0;
   if (w <= 0) return 14;
-  const ml = w * 35 + (trainedToday ? 600 : 0);
+  // La pérdida por sudor escala con la duración de la sesión (~500 ml/hora).
+  // Si no se registró duración, se asume una sesión estándar de ~60 min.
+  const mins = parseInt(durationMin) || 0;
+  const sudorMl = trainedToday ? (mins > 0 ? (mins / 60) * 500 : 600) : 0;
+  const ml = w * 35 + sudorMl;
   return Math.max(6, Math.min(24, Math.round(ml / glassMl)));
 }
 
@@ -1562,9 +1571,64 @@ function getWeeklyStats(foodlog, exlog, metricslog, notes) {
   const avgProtein = last7.reduce((s,d)=>{ const fl=foodlog[d]||[]; return s+(fl.reduce((a,e)=>a+(+e.proteina||0),0)); },0)/Math.max(1,last7.filter(d=>(foodlog[d]||[]).length>0).length);
   const avgKcal = last7.reduce((s,d)=>{ const fl=foodlog[d]||[]; return s+(fl.reduce((a,e)=>a+(+e.kcal||0),0)); },0)/Math.max(1,last7.filter(d=>(foodlog[d]||[]).length>0).length);
   const weightDates = last7.filter(d=>metricslog?.[d]?.weight);
-  const weightChange = weightDates.length>=2 ? parseFloat(metricslog[weightDates[weightDates.length-1]].weight)-parseFloat(metricslog[weightDates[0]].weight) : null;
+  // Cambio de peso sobre la serie SUAVIZADA (EMA), no sobre lecturas crudas:
+  // dos pesadas puntuales con retención de agua daban cambios semanales irreales.
+  const emaByDate = {};
+  calcWeightEMASeries(metricslog).forEach(pt => { emaByDate[pt.date] = pt.ema; });
+  const wAt = (d) => emaByDate[d] ?? parseFloat(metricslog[d]?.weight);
+  const weightChange = weightDates.length>=2
+    ? wAt(weightDates[weightDates.length-1]) - wAt(weightDates[0])
+    : null;
   const fatigueCount = detectFatigueFromNotes(notes);
   return { trainDays: trainDays.length, avgProtein: Math.round(avgProtein), avgKcal: Math.round(avgKcal), weightChange, fatigueCount };
+}
+
+/**
+ * Serie unificada de recomposición: peso suavizado, % de grasa, masa magra y
+ * cintura en una sola línea temporal, más el cambio total de cada métrica.
+ * Permite ver si se está recomponiendo y no solo perdiendo peso.
+ */
+function buildRecompositionSeries(metricslog) {
+  const ema = {};
+  calcWeightEMASeries(metricslog).forEach(pt => { ema[pt.date] = pt.ema; });
+  const dates = Object.keys(metricslog || {}).sort();
+
+  let lastGrasa = null, lastCintura = null;
+  const points = [];
+  dates.forEach(d => {
+    const e = metricslog[d] || {};
+    const peso = ema[d] ?? parseFloat(e.weight);
+    if (!(peso > 0)) return;
+    const g = parseFloat(e.grasaPct);
+    if (!isNaN(g) && g > 0) lastGrasa = g;
+    const c = parseFloat(e.cintura);
+    if (!isNaN(c) && c > 0) lastCintura = c;
+    points.push({
+      date: d,
+      peso: Math.round(peso * 10) / 10,
+      grasaPct: lastGrasa,
+      magra: lastGrasa != null ? Math.round(peso * (1 - lastGrasa / 100) * 10) / 10 : null,
+      grasaKg: lastGrasa != null ? Math.round(peso * (lastGrasa / 100) * 10) / 10 : null,
+      cintura: lastCintura,
+    });
+  });
+
+  if (points.length < 2) return { available: false, points };
+
+  const first = points[0], last = points[points.length - 1];
+  const delta = (a, b) => (a != null && b != null) ? Math.round((b - a) * 10) / 10 : null;
+  const deltas = {
+    peso: delta(first.peso, last.peso),
+    magra: delta(first.magra, last.magra),
+    grasaKg: delta(first.grasaKg, last.grasaKg),
+    grasaPct: delta(first.grasaPct, last.grasaPct),
+    cintura: delta(first.cintura, last.cintura),
+  };
+  // Recomposición "de libro": pierde grasa y mantiene o gana masa magra
+  const recomposing = deltas.grasaKg != null && deltas.magra != null
+    && deltas.grasaKg < -0.5 && deltas.magra >= -0.3;
+
+  return { available: true, points, deltas, recomposing, first, last };
 }
 
 // ── Agente Entrenador: funciones puras ──
@@ -1838,6 +1902,75 @@ function detectRefeedNeed(metricslog, foodlog, targets, opts = {}) {
   }
 
   return { recommended, kind, reason, weeksInDeficit, stalled, adherencePct };
+}
+
+/* ===== DATOS DE RECUPERACIÓN (sueño, pasos, FC en reposo) =====
+   Antes la fatiga solo se infería de palabras clave en las notas. Estos
+   campos se guardan en metricslog junto al peso y alimentan el readiness. */
+
+// Campos de recuperación admitidos en una entrada de metricslog
+const RECOVERY_FIELDS = ["suenoHoras", "suenoCalidad", "pasos", "fcReposo"];
+
+/**
+ * Evalúa los datos de recuperación de un día y devuelve un ajuste para el
+ * readiness score junto a los factores legibles que lo justifican.
+ * fcBaseline: media de FC en reposo del propio usuario (si hay histórico).
+ */
+function evaluateRecovery(entry, fcBaseline = null) {
+  const e = entry || {};
+  let delta = 0;
+  const factors = [];
+  let hasData = false;
+
+  const horas = parseFloat(e.suenoHoras);
+  if (!isNaN(horas) && horas > 0) {
+    hasData = true;
+    if (horas >= 7.5) { delta += 1.5; factors.push(`${horas} h de sueño`); }
+    else if (horas >= 6.5) { delta += 0.5; factors.push(`${horas} h de sueño`); }
+    else if (horas >= 5.5) { delta -= 1; factors.push(`Solo ${horas} h de sueño`); }
+    else { delta -= 2; factors.push(`Sueño muy corto (${horas} h)`); }
+  }
+
+  const calidad = parseInt(e.suenoCalidad); // 1-5
+  if (!isNaN(calidad) && calidad > 0) {
+    hasData = true;
+    if (calidad >= 4) { delta += 0.5; factors.push("Sueño reparador"); }
+    else if (calidad <= 2) { delta -= 1; factors.push("Sueño de mala calidad"); }
+  }
+
+  const pasos = parseInt(e.pasos);
+  if (!isNaN(pasos) && pasos > 0) {
+    hasData = true;
+    if (pasos >= 15000) { delta -= 0.5; factors.push(`${pasos.toLocaleString("es")} pasos (mucho NEAT)`); }
+    else if (pasos >= 7000) { delta += 0.5; factors.push(`${pasos.toLocaleString("es")} pasos`); }
+    else if (pasos < 3000) { factors.push("Día sedentario"); }
+  }
+
+  const fc = parseInt(e.fcReposo);
+  if (!isNaN(fc) && fc > 0) {
+    hasData = true;
+    const base = parseFloat(fcBaseline);
+    if (!isNaN(base) && base > 0) {
+      const diff = fc - base;
+      // Una FC en reposo elevada sobre la propia media indica estrés/fatiga
+      if (diff >= 7) { delta -= 1.5; factors.push(`FC reposo +${diff} sobre tu media`); }
+      else if (diff >= 4) { delta -= 0.75; factors.push(`FC reposo algo alta (+${diff})`); }
+      else if (diff <= -3) { delta += 0.5; factors.push("FC reposo baja: bien recuperado"); }
+    } else if (fc >= 75) { delta -= 0.75; factors.push(`FC reposo ${fc} ppm`); }
+    else if (fc <= 55) { delta += 0.5; factors.push(`FC reposo ${fc} ppm`); }
+  }
+
+  return { hasData, delta, factors };
+}
+
+// Media de FC en reposo de los últimos N registros (línea base personal)
+function calcRestingHRBaseline(metricslog, lastN = 14) {
+  const vals = Object.keys(metricslog || {}).sort()
+    .map(d => parseInt(metricslog[d]?.fcReposo))
+    .filter(v => !isNaN(v) && v > 0);
+  if (vals.length < 3) return null;
+  const recent = vals.slice(-lastN);
+  return Math.round(recent.reduce((a, v) => a + v, 0) / recent.length);
 }
 
 /* ===== ADAPTACIÓN METABÓLICA =====
@@ -2347,7 +2480,7 @@ export default function App(){
     if (entries.length > 0) {
       const latest = entries[0][1] || {};
       return {
-        weight: parseFloat(latest.weight) || START_W,
+        weight: parseFloat(latest.weight) || (parseFloat(bodyProfile?.pesoInicial) || START_W),
         musculo: parseFloat(latest.musculo) || (bodyComp ? bodyComp.musculo : 64.7),
         grasaPct: parseFloat(latest.grasaPct) || (bodyComp ? bodyComp.grasaPct : 26.2),
         visceral: parseInt(latest.visceral) || (bodyComp ? bodyComp.visceral : 9),
@@ -4435,7 +4568,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
   };
 
   const activeMetrics = getMetricsForDate(selectedDateStr) || {
-    weight: START_W, musculo: 64.7, grasaPct: 26.2, visceral: 9,
+    weight: parseFloat(bodyProfile?.pesoInicial) || START_W, musculo: 64.7, grasaPct: 26.2, visceral: 9,
     brazoDer: "", brazoIzq: "", musloDer: "", musloIzq: "", pantorrillaDer: "", pantorrillaIzq: "", cintura: "", pecho: ""
   };
 
@@ -5517,6 +5650,8 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             activeMetrics={activeMetrics}
             dayFuelTargets={dayFuelTargets}
             metricslog={metricslog}
+            todayDurationMin={(workoutDurations || {})[selectedDateStr] || 0}
+            onQuickWeight={(w) => saveState({ weight: w })}
             totals={totals}
             log={log}
             setLog={(l) => { setLog(l); saveState({ log: l }); }} 
@@ -7132,15 +7267,22 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, me
   else if (yProt > 0 && yProt < 80) { score -= 1; factors.push("Proteína baja ayer"); }
   else if (yKcal > 0 && yKcal < 1500) { score -= 0.5; factors.push("Calorías bajas ayer"); }
 
-  // 4. Calidad de sueño en notas recientes
+  // 4. Recuperación: datos objetivos si los hay (sueño, pasos, FC en reposo);
+  //    si no, se cae a las palabras clave de las notas como antes.
   const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
   const recentNotes = (notes || []).filter(n => n?.date && n.date.slice(0, 10) >= weekAgo);
-  const goodSleepKw = ["dormí bien","dormi bien","buen sueño","descansé","descanse","dormi 8","dormí 8"];
-  const badSleepKw = ["mal sueño","insomnio","no dormí","no dormi","poco sueño","desvelado","desvelada","dormí poco","dormi poco"];
-  const goodSleep = recentNotes.some(n => goodSleepKw.some(k => (n.text||"").toLowerCase().includes(k)));
-  const badSleep = recentNotes.some(n => badSleepKw.some(k => (n.text||"").toLowerCase().includes(k)));
-  if (goodSleep) { score += 1; factors.push("Buen sueño reciente"); }
-  else if (badSleep) { score -= 1.5; factors.push("Sueño deficiente"); }
+  const recovery = evaluateRecovery((metricslog || {})[today], calcRestingHRBaseline(metricslog));
+  if (recovery.hasData) {
+    score += recovery.delta;
+    factors.push(...recovery.factors);
+  } else {
+    const goodSleepKw = ["dormí bien","dormi bien","buen sueño","descansé","descanse","dormi 8","dormí 8"];
+    const badSleepKw = ["mal sueño","insomnio","no dormí","no dormi","poco sueño","desvelado","desvelada","dormí poco","dormi poco"];
+    const goodSleep = recentNotes.some(n => goodSleepKw.some(k => (n.text||"").toLowerCase().includes(k)));
+    const badSleep = recentNotes.some(n => badSleepKw.some(k => (n.text||"").toLowerCase().includes(k)));
+    if (goodSleep) { score += 1; factors.push("Buen sueño reciente"); }
+    else if (badSleep) { score -= 1.5; factors.push("Sueño deficiente"); }
+  }
 
   // 5. Fatiga acumulada en notas
   const fatigueKw = ["fatiga","cansado","cansada","agotado","agotada","sin energía","sin energia"];
@@ -7486,7 +7628,8 @@ function Hoy({
   proactiveMsg, aiNotifications, setAiNotifications, macroAdjustSuggestion, setMacroAdjustSuggestion, saveState, customPresets,
   weeklyInsight, smartGoals, challenges, updateChallengeProgress, upcomingEvent, experiments, setExperiments, splits,
   setView, setShowNutritionModal, setModalVals, addFoodInputText, setAddFoodInputText, customSuggestions,
-  exlog, notes, foodlog, sendCoachMessage, activeMetrics, dayFuelTargets, metricslog
+  exlog, notes, foodlog, sendCoachMessage, activeMetrics, dayFuelTargets, metricslog,
+  todayDurationMin, onQuickWeight
 }){
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false); 
@@ -7663,7 +7806,7 @@ function Hoy({
   );
   // Objetivo de hidratación según peso corporal (~35 ml/kg) + extra si hoy
   // hubo entreno. Antes era una constante de 14 vasos para cualquier peso.
-  const waterGoal = calcWaterGoalGlasses(activeMetrics?.weight, !isRestDay);
+  const waterGoal = calcWaterGoalGlasses(activeMetrics?.weight, !isRestDay, 250, todayDurationMin);
   const readiness = React.useMemo(
     () => predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, metricslog, activeMetrics),
     [exlog, notes, water, foodlog, selectedDateStr, metricslog, activeMetrics]
@@ -7948,6 +8091,42 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
           {water < waterGoal ? "Toca para +💧" : "¡Hidratación completa! 🎉"}
         </div>
       </div>
+
+      {/* Registro rápido de peso: el peso diario es lo que alimenta la
+          tendencia, el TDEE y los objetivos, así que debe costar 2 toques. */}
+      {onQuickWeight && (() => {
+        const yaHoy = (metricslog || {})[selectedDateStr]?.weight;
+        const base = parseFloat(yaHoy) || parseFloat(activeMetrics?.weight) || 0;
+        if (!base) return null;
+        const opciones = [-0.5, -0.2, 0, +0.2, +0.5].map(d => Math.round((base + d) * 10) / 10);
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 15px", marginBottom:12}}>
+            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8, gap:8, flexWrap:"wrap"}}>
+              <span style={{display:"flex", alignItems:"center", gap:6, fontSize:12, fontWeight:800, color:C.ink}}>
+                <Scale size={14} color={C.cyan}/> Peso de hoy
+              </span>
+              {yaHoy ? (
+                <span style={{fontSize:11, color:C.lime, fontWeight:700}}>✓ {yaHoy} kg registrado</span>
+              ) : (
+                <span style={{fontSize:10.5, color:C.muted}}>Toca tu peso</span>
+              )}
+            </div>
+            <div style={{display:"flex", gap:5}}>
+              {opciones.map(v => (
+                <button key={v} className="btn-active-scale" onClick={() => onQuickWeight(v)}
+                  style={{flex:1, background: parseFloat(yaHoy) === v ? "rgba(74,214,255,0.14)" : C.panel2,
+                    border:`1px solid ${parseFloat(yaHoy) === v ? C.cyan : C.line}`, borderRadius:9, padding:"8px 2px",
+                    color: parseFloat(yaHoy) === v ? C.cyan : C.ink, fontSize:12.5, fontWeight:800}}>
+                  {v}
+                </button>
+              ))}
+            </div>
+            <div style={{fontSize:9.5, color:C.muted, marginTop:6}}>
+              ¿Otro valor? Regístralo en la pestaña Registro con más detalle.
+            </div>
+          </div>
+        );
+      })()}
 
       <div style={{display:"flex", alignItems:"center", gap:10, background:C.panel, border:`1.5px solid ${readiness.color}33`, borderRadius:14, padding:"10px 14px", marginBottom:12, animation:"pop 0.3s ease"}}>
         <div style={{width:44, height:44, borderRadius:"50%", background:`${readiness.color}22`, border:`2px solid ${readiness.color}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0}}>
@@ -15765,6 +15944,13 @@ function Registro({
   const [pantorrillaDer, setPantorrillaDer] = useState("");
   const [pantorrillaIzq, setPantorrillaIzq] = useState("");
   const [cintura, setCintura] = useState("");
+  // Contexto de la medición y datos de recuperación del día
+  const [fuente, setFuente] = useState("bascula");   // bascula | inbody | manual
+  const [ayunas, setAyunas] = useState(true);
+  const [suenoHoras, setSuenoHoras] = useState("");
+  const [suenoCalidad, setSuenoCalidad] = useState("");
+  const [pasos, setPasos] = useState("");
+  const [fcReposo, setFcReposo] = useState("");
   const [pecho, setPecho] = useState("");
 
   const [busy, setBusy] = useState(false); 
@@ -15785,6 +15971,13 @@ function Registro({
     setPantorrillaIzq(entry.pantorrillaIzq !== undefined ? String(entry.pantorrillaIzq) : "");
     setCintura(entry.cintura !== undefined ? String(entry.cintura) : "");
     setPecho(entry.pecho !== undefined ? String(entry.pecho) : "");
+
+    setFuente(entry.fuente || "bascula");
+    setAyunas(entry.ayunas !== undefined ? !!entry.ayunas : true);
+    setSuenoHoras(entry.suenoHoras !== undefined ? String(entry.suenoHoras) : "");
+    setSuenoCalidad(entry.suenoCalidad !== undefined ? String(entry.suenoCalidad) : "");
+    setPasos(entry.pasos !== undefined ? String(entry.pasos) : "");
+    setFcReposo(entry.fcReposo !== undefined ? String(entry.fcReposo) : "");
 
     const allDates = Object.keys(metricslog).sort().reverse();
     if (!cmpDateA && allDates.length >= 2) setCmpDateA(allDates[1]);
@@ -15921,8 +16114,19 @@ function Registro({
     if (isNaN(wNum) || wNum <= 0) return;
     
     const currentMetric = metricslog[selectedDateStr] || {};
+    // Contexto de la medición: sin esto se comparan pesadas no equivalentes
+    // (báscula en ayunas vs InBody por la tarde) en la misma serie.
+    const contexto = { fuente, ayunas };
+    const recuperacion = {};
+    if (suenoHoras !== "") recuperacion.suenoHoras = parseFloat(suenoHoras);
+    if (suenoCalidad !== "") recuperacion.suenoCalidad = parseInt(suenoCalidad);
+    if (pasos !== "") recuperacion.pasos = parseInt(pasos);
+    if (fcReposo !== "") recuperacion.fcReposo = parseInt(fcReposo);
+
     const nextMetric = {
       ...currentMetric,
+      ...contexto,
+      ...recuperacion,
       weight: wNum,
       musculo: currentMetric.musculo !== undefined ? currentMetric.musculo : (activeMetrics.musculo || 64.7),
       grasaPct: currentMetric.grasaPct !== undefined ? currentMetric.grasaPct : (activeMetrics.grasaPct || 26.2),
@@ -16077,10 +16281,11 @@ function Registro({
 
   const weights = notes.filter(n => n.type === "peso" && n.weight).slice().reverse();
   const lastW = activeMetrics.weight;
-  const startW = weights.length ? weights[0].weight : START_W;
+  const goalW = parseFloat(bodyProfile?.pesoObjetivo) || GOAL_W;
+  const startW = parseFloat(bodyProfile?.pesoInicial) || (weights.length ? weights[0].weight : START_W);
   const chartW = weights.map(x => ({date: x.date, w: x.weight}));
-  const goalPct = Math.max(0, Math.min(100, ((startW - lastW) / ((startW - GOAL_W) || 1)) * 100));
-  const toGoal = (lastW - GOAL_W);
+  const goalPct = Math.max(0, Math.min(100, ((startW - lastW) / ((startW - goalW) || 1)) * 100));
+  const toGoal = (lastW - goalW);
 
   // Peso de tendencia (EMA): filtra el ruido diario de agua/comida
   const emaSeries = calcWeightEMASeries(metricslog);
@@ -16485,7 +16690,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
             <div className="disp" style={{fontSize:40, marginTop:2}}>{lastW.toFixed(1)} <span style={{fontSize:16, color:C.muted}}>kg</span></div>
           </div>
           <div style={{textAlign:"right", display:"flex", alignItems:"center", gap:6, color:C.lime, fontWeight:800, fontSize:15}}>
-            <Target size={16}/>meta {GOAL_W} kg
+            <Target size={16}/>meta {goalW} kg
           </div>
         </div>
         <div style={{height:9, background:C.panel2, borderRadius:6, overflow:"hidden"}}>
@@ -16556,6 +16761,49 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               style={{flex:1, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", color:C.ink, fontSize:14, outline:"none"}}
             />
             <span style={{color:C.muted, fontSize:14}}>kg</span>
+          </div>
+        )}
+
+        {/* Contexto de la medición y datos de recuperación del día */}
+        {type === "peso" && (
+          <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:12, padding:"10px 12px", marginBottom:10}}>
+            <div style={{fontSize:9.5, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".05em", marginBottom:6}}>
+              Cómo mediste
+            </div>
+            <div style={{display:"flex", gap:6, marginBottom:8, flexWrap:"wrap"}}>
+              {[["bascula","Báscula"],["inbody","InBody"],["manual","Manual"]].map(([v,l]) => (
+                <button key={v} className="btn-active-scale" onClick={() => setFuente(v)}
+                  style={{flex:1, minWidth:70, background: fuente===v ? "rgba(74,214,255,0.12)" : "transparent", border:`1px solid ${fuente===v ? C.cyan : C.line}`, borderRadius:8, padding:"5px 4px", color: fuente===v ? C.cyan : C.muted, fontSize:11, fontWeight:700}}>
+                  {l}
+                </button>
+              ))}
+              <button className="btn-active-scale" onClick={() => setAyunas(a => !a)}
+                title="Medir siempre en las mismas condiciones hace comparable la serie"
+                style={{flex:1, minWidth:80, background: ayunas ? "rgba(205,255,74,0.12)" : "transparent", border:`1px solid ${ayunas ? C.lime : C.line}`, borderRadius:8, padding:"5px 4px", color: ayunas ? C.lime : C.muted, fontSize:11, fontWeight:700}}>
+                {ayunas ? "✓ En ayunas" : "En ayunas"}
+              </button>
+            </div>
+
+            <div style={{fontSize:9.5, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".05em", marginBottom:6}}>
+              Recuperación <span style={{fontWeight:500, textTransform:"none", letterSpacing:0}}>(opcional — mejora tu score diario)</span>
+            </div>
+            <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
+              {[
+                ["Sueño", suenoHoras, setSuenoHoras, "h", "7.5"],
+                ["Calidad", suenoCalidad, setSuenoCalidad, "1-5", "4"],
+                ["Pasos", pasos, setPasos, "", "8000"],
+                ["FC rep.", fcReposo, setFcReposo, "ppm", "58"],
+              ].map(([label, val, setter, unit, ph]) => (
+                <div key={label} style={{flex:1, minWidth:66}}>
+                  <div style={{fontSize:9, color:C.muted, fontWeight:700, marginBottom:2}}>{label}{unit ? ` (${unit})` : ""}</div>
+                  <input
+                    value={val} onChange={e => setter(e.target.value)}
+                    type="number" inputMode="decimal" className="ph" placeholder={ph}
+                    style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 8px", color:C.ink, fontSize:12.5, outline:"none", minWidth:0}}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -16719,10 +16967,16 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
             </div>
 
             {/* Edad / altura / ritmo */}
-            <div style={{display:"flex", gap:8, marginBottom:10, flexWrap:"wrap"}}>
+            <div style={{display:"flex", gap:8, marginBottom:8, flexWrap:"wrap"}}>
               {num("edad", "Edad", "años", 10, 100)}
               {num("alturaCm", "Altura", "cm", 120, 230)}
               {num("ritmoKgSemana", "Ritmo", "kg/sem", -1.5, 1.5)}
+            </div>
+
+            {/* Peso de partida y meta (antes constantes fijas en el código) */}
+            <div style={{display:"flex", gap:8, marginBottom:10, flexWrap:"wrap"}}>
+              {num("pesoInicial", "Peso inicial", "kg", 30, 300)}
+              {num("pesoObjetivo", "Peso meta", "kg", 30, 300)}
             </div>
 
             {/* Objetivo */}
@@ -16762,8 +17016,8 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                   ))}
                 </div>
                 <div style={{display:"flex", gap:6, marginBottom:9}}>
-                  {[["Proteína", nt.p, C.lime], ["Carbos", nt.c, C.cyan], ["Grasas", nt.f, C.amber]].map(([l, v, col]) => (
-                    <div key={l} style={{flex:1, background:C.bg, borderRadius:8, padding:"6px 8px", textAlign:"center"}}>
+                  {[["Proteína", nt.p, C.lime], ["Carbos", nt.c, C.cyan], ["Grasas", nt.f, C.amber], ["Fibra", nt.fibra, C.muted]].map(([l, v, col]) => (
+                    <div key={l} style={{flex:1, background:C.bg, borderRadius:8, padding:"6px 6px", textAlign:"center"}}>
                       <div style={{fontSize:9, color:C.muted, fontWeight:700}}>{l}</div>
                       <div style={{fontSize:14, fontWeight:900, color:col}}>{v}<span style={{fontSize:9, fontWeight:600}}>g</span></div>
                     </div>
@@ -16862,6 +17116,83 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                 Registra tu peso para calcular tus objetivos automáticamente.
               </div>
             )}
+          </div>
+        );
+      })()}
+
+      {/* ===== PANEL DE RECOMPOSICIÓN ===== */}
+      {(() => {
+        const rec = buildRecompositionSeries(metricslog);
+        if (!rec.available) return null;
+        const pts = rec.points;
+        // Gráfico: peso, masa magra y grasa en kg sobre el mismo eje temporal
+        const W = 300, H = 96, pad = 6;
+        const series = [
+          { key: "peso", color: C.ink, label: "Peso" },
+          { key: "magra", color: C.lime, label: "Masa magra" },
+          { key: "grasaKg", color: C.amber, label: "Grasa" },
+        ].filter(s => pts.some(p => p[s.key] != null));
+        const allVals = series.flatMap(s => pts.map(p => p[s.key]).filter(v => v != null));
+        const min = Math.min(...allVals), max = Math.max(...allVals);
+        const range = (max - min) || 1;
+        const xAt = (i) => pad + (i * (W - 2 * pad)) / Math.max(1, pts.length - 1);
+        const yAt = (v) => H - pad - ((v - min) / range) * (H - 2 * pad);
+        const pathOf = (key) => pts.map((p, i) => p[key] == null ? null : `${xAt(i).toFixed(1)},${yAt(p[key]).toFixed(1)}`)
+          .filter(Boolean).map((c, i) => `${i === 0 ? "M" : "L"}${c}`).join(" ");
+
+        const deltaChip = (label, val, unit, mejorSiBaja) => {
+          if (val == null) return null;
+          const bueno = mejorSiBaja ? val < 0 : val > 0;
+          const col = val === 0 ? C.muted : bueno ? C.lime : C.amber;
+          return (
+            <div key={label} style={{flex:1, minWidth:64, background:C.bg, borderRadius:8, padding:"6px 8px", textAlign:"center"}}>
+              <div style={{fontSize:9, color:C.muted, fontWeight:700}}>{label}</div>
+              <div style={{fontSize:13, fontWeight:900, color:col}}>{val > 0 ? "+" : ""}{val}<span style={{fontSize:9, fontWeight:600}}>{unit}</span></div>
+            </div>
+          );
+        };
+
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:14, marginBottom:12}}>
+            <div style={{display:"flex", alignItems:"center", gap:7, fontSize:12.5, fontWeight:800, color:C.ink, marginBottom:3}}>
+              <Activity size={15} color={C.lime}/> Recomposición corporal
+            </div>
+            <div style={{fontSize:10.5, color:C.muted, marginBottom:10, lineHeight:1.45}}>
+              Peso suavizado, masa magra y grasa en una sola línea. Perder grasa manteniendo la masa magra es el objetivo real — la báscula sola no lo distingue.
+            </div>
+
+            {rec.recomposing && (
+              <div style={{background:"rgba(205,255,74,0.10)", border:`1px solid ${C.lime}55`, borderRadius:10, padding:"8px 11px", marginBottom:10, fontSize:11, color:C.muted, lineHeight:1.45}}>
+                <b style={{color:C.lime}}>Vas bien.</b> Estás perdiendo grasa manteniendo (o ganando) masa magra.
+              </div>
+            )}
+
+            <div style={{overflowX:"auto", marginBottom:8}}>
+              <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{display:"block", maxWidth:"100%"}}>
+                {series.map(s => (
+                  <path key={s.key} d={pathOf(s.key)} fill="none" stroke={s.color} strokeWidth={1.8}
+                    strokeLinejoin="round" strokeLinecap="round" opacity={s.key === "peso" ? 0.55 : 1}/>
+                ))}
+              </svg>
+            </div>
+            <div style={{display:"flex", gap:10, flexWrap:"wrap", marginBottom:10}}>
+              {series.map(s => (
+                <span key={s.key} style={{display:"inline-flex", alignItems:"center", gap:4, fontSize:10, color:C.muted, fontWeight:700}}>
+                  <span style={{width:9, height:2.5, background:s.color, borderRadius:2, display:"inline-block"}}/>
+                  {s.label}
+                </span>
+              ))}
+            </div>
+
+            <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
+              {deltaChip("Peso", rec.deltas.peso, "kg", true)}
+              {deltaChip("Masa magra", rec.deltas.magra, "kg", false)}
+              {deltaChip("Grasa", rec.deltas.grasaKg, "kg", true)}
+              {deltaChip("Cintura", rec.deltas.cintura, "cm", true)}
+            </div>
+            <div style={{fontSize:9.5, color:C.muted, marginTop:7}}>
+              Cambio desde {fdate(rec.first.date + "T12:00:00Z")} · {pts.length} mediciones
+            </div>
           </div>
         );
       })()}
@@ -17048,7 +17379,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               <div style={{background:`rgba(205,255,74,0.05)`, border:`1px solid rgba(205,255,74,0.18)`, borderRadius:10, padding:"12px 14px", marginBottom:12}}>
                 <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:10}}>
                   {[
-                    ["Peso recomendado", `${GOAL_W}–82 kg`],
+                    ["Peso recomendado", `${goalW} kg`],
                     ["Grasa a perder", `−${fatToLose.toFixed(1)} kg`],
                     ["Músculo a ganar", `+${muscToGain.toFixed(1)} kg`],
                     ["Rango IMC óptimo", `${optWMin}–${optWMax} kg`],
@@ -18681,6 +19012,8 @@ if (typeof module !== 'undefined' && module.exports) {
     detectStrengthLossUnderDeficit, detectRefeedNeed, detectDeloadNeed,
     calcMetabolicAdaptation, calcWaistMetrics, detectRecomposition,
     detectWeightOutlier, calcBodyProjection, fatFractionOfLoss, leanFractionOfGain,
+    evaluateRecovery, calcRestingHRBaseline, buildRecompositionSeries, getWeeklyStats,
+    RECOVERY_FIELDS,
     default: App
   };
 }

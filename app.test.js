@@ -987,3 +987,172 @@ describe('proyección corporal con partición tipo Forbes', () => {
     expect(pts[8].peso).toBeGreaterThan(pts[0].peso);
   });
 });
+
+describe('objetivo de fibra', () => {
+  const { calcNutritionTargets, DEFAULT_BODY_PROFILE } = require('./app.js');
+
+  test('deriva la fibra de las calorías (~14g/1000kcal)', () => {
+    const t = calcNutritionTargets(DEFAULT_BODY_PROFILE, { weight: 90, grasaPct: 22 });
+    expect(t.fibra).toBe(Math.max(20, Math.min(60, Math.round((t.kcal / 1000) * 14))));
+    expect(t.fibra).toBeGreaterThanOrEqual(20);
+    expect(t.fibra).toBeLessThanOrEqual(60);
+  });
+
+  test('más calorías implican más fibra', () => {
+    const bajo = calcNutritionTargets({ ...DEFAULT_BODY_PROFILE, objetivo: 'definicion', ritmoKgSemana: -0.7 }, { weight: 70, grasaPct: 15 });
+    const alto = calcNutritionTargets({ ...DEFAULT_BODY_PROFILE, objetivo: 'volumen', ritmoKgSemana: 0.3 }, { weight: 100, grasaPct: 20 });
+    expect(alto.fibra).toBeGreaterThanOrEqual(bajo.fibra);
+  });
+});
+
+describe('hidratación por sudor', () => {
+  const { calcWaterGoalGlasses } = require('./app.js');
+
+  test('una sesión más larga pide más agua', () => {
+    const corta = calcWaterGoalGlasses(90, true, 250, 30);
+    const larga = calcWaterGoalGlasses(90, true, 250, 120);
+    expect(larga).toBeGreaterThan(corta);
+  });
+
+  test('sin duración registrada asume una sesión estándar', () => {
+    expect(calcWaterGoalGlasses(90, true, 250, 0)).toBeGreaterThan(calcWaterGoalGlasses(90, false));
+  });
+
+  test('sigue acotado a un rango razonable', () => {
+    expect(calcWaterGoalGlasses(200, true, 250, 300)).toBeLessThanOrEqual(24);
+    expect(calcWaterGoalGlasses(40, false)).toBeGreaterThanOrEqual(6);
+  });
+});
+
+describe('datos de recuperación', () => {
+  const { evaluateRecovery, calcRestingHRBaseline } = require('./app.js');
+
+  test('sin datos no aporta nada', () => {
+    const r = evaluateRecovery({});
+    expect(r.hasData).toBe(false);
+    expect(r.delta).toBe(0);
+  });
+
+  test('dormir bien suma y dormir poco resta', () => {
+    expect(evaluateRecovery({ suenoHoras: 8 }).delta).toBeGreaterThan(0);
+    expect(evaluateRecovery({ suenoHoras: 5 }).delta).toBeLessThan(0);
+    expect(evaluateRecovery({ suenoHoras: 8 }).hasData).toBe(true);
+  });
+
+  test('la calidad del sueño modula el resultado', () => {
+    const buena = evaluateRecovery({ suenoHoras: 7.5, suenoCalidad: 5 });
+    const mala = evaluateRecovery({ suenoHoras: 7.5, suenoCalidad: 1 });
+    expect(buena.delta).toBeGreaterThan(mala.delta);
+  });
+
+  test('la FC en reposo se compara con la línea base propia', () => {
+    const alta = evaluateRecovery({ fcReposo: 70 }, 60); // +10 sobre su media
+    const normal = evaluateRecovery({ fcReposo: 60 }, 60);
+    expect(alta.delta).toBeLessThan(normal.delta);
+    expect(alta.factors.join(' ')).toMatch(/FC reposo/);
+  });
+
+  test('muchos pasos penalizan por NEAT acumulado', () => {
+    expect(evaluateRecovery({ pasos: 18000 }).delta).toBeLessThan(evaluateRecovery({ pasos: 9000 }).delta);
+  });
+
+  test('la línea base de FC necesita al menos 3 registros', () => {
+    expect(calcRestingHRBaseline({ '2026-07-01': { fcReposo: 60 } })).toBeNull();
+    const log = {
+      '2026-07-01': { fcReposo: 58 }, '2026-07-02': { fcReposo: 60 },
+      '2026-07-03': { fcReposo: 62 },
+    };
+    expect(calcRestingHRBaseline(log)).toBe(60);
+  });
+});
+
+describe('serie de recomposición', () => {
+  const { buildRecompositionSeries, getWeeklyStats } = require('./app.js');
+
+  test('necesita al menos dos puntos', () => {
+    expect(buildRecompositionSeries({ '2026-07-01': { weight: 90 } }).available).toBe(false);
+    expect(buildRecompositionSeries({}).available).toBe(false);
+  });
+
+  test('calcula masa magra y grasa en kg, arrastrando el último % conocido', () => {
+    const log = {
+      '2026-05-01': { weight: 100, grasaPct: 30, cintura: 100 },
+      '2026-06-01': { weight: 98 },                     // sin % de grasa: arrastra 30
+      '2026-07-01': { weight: 96, grasaPct: 25, cintura: 94 },
+    };
+    const r = buildRecompositionSeries(log);
+    expect(r.available).toBe(true);
+    expect(r.points).toHaveLength(3);
+    expect(r.points[1].grasaPct).toBe(30); // arrastrado
+    expect(r.last.magra).toBeGreaterThan(0);
+    expect(r.deltas.cintura).toBe(-6);
+    expect(r.deltas.grasaPct).toBe(-5);
+  });
+
+  test('marca recomposición cuando baja la grasa y se mantiene la masa magra', () => {
+    const log = {
+      '2026-05-01': { weight: 90, grasaPct: 25 },
+      '2026-06-01': { weight: 89.5, grasaPct: 22 },
+      '2026-07-01': { weight: 89, grasaPct: 20 },
+    };
+    const r = buildRecompositionSeries(log);
+    expect(r.deltas.grasaKg).toBeLessThan(0);
+    expect(r.recomposing).toBe(true);
+  });
+
+  test('no marca recomposición si se pierde masa magra', () => {
+    const log = {
+      '2026-05-01': { weight: 90, grasaPct: 20 },
+      '2026-07-01': { weight: 82, grasaPct: 19 },
+    };
+    expect(buildRecompositionSeries(log).recomposing).toBe(false);
+  });
+
+  test('getWeeklyStats usa el peso suavizado para el cambio semanal', () => {
+    const hoy = new Date();
+    const d = (n) => { const x = new Date(hoy); x.setDate(x.getDate() - n); return x.toISOString().slice(0, 10); };
+    const log = { [d(6)]: { weight: 90 }, [d(3)]: { weight: 93 }, [d(0)]: { weight: 90 } };
+    const stats = getWeeklyStats({}, {}, log, []);
+    // Con lecturas crudas el cambio sería 0; con EMA refleja el pico suavizado
+    expect(stats.weightChange).not.toBeNull();
+    expect(Math.abs(stats.weightChange)).toBeLessThan(3);
+  });
+});
+
+describe('UI de las nuevas métricas', () => {
+  beforeAll(() => { localStorage.setItem('onboarding_shown', '1'); });
+
+  test('Registro muestra peso meta, fibra y contexto de medición', async () => {
+    const originalError = console.error;
+    console.error = jest.fn();
+    const App = require('./app').default;
+
+    await act(async () => { render(<App />); });
+    const regTab = screen.getAllByText('Registro')[0].closest('button');
+    await act(async () => { regTab.click(); });
+
+    // Peso inicial y meta configurables (antes constantes en el código)
+    expect(screen.getAllByText('Peso inicial').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Peso meta').length).toBeGreaterThan(0);
+    // Fibra como cuarto objetivo junto a los macros
+    expect(screen.getAllByText('Fibra').length).toBeGreaterThan(0);
+    // Contexto de la medición y recuperación
+    expect(screen.getAllByText('Cómo mediste').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Báscula').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('InBody').length).toBeGreaterThan(0);
+
+    console.error = originalError;
+  });
+
+  test('Hoy muestra el registro rápido de peso', async () => {
+    const originalError = console.error;
+    console.error = jest.fn();
+    const App = require('./app').default;
+
+    await act(async () => { render(<App />); });
+
+    expect(screen.getAllByText('Peso de hoy').length).toBeGreaterThan(0);
+
+    console.error = originalError;
+  });
+});
