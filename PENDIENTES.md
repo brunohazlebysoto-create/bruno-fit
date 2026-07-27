@@ -4,42 +4,18 @@ Backlog derivado de la auditoría de cómo la app registra peso y datos
 biométricos, y cómo eso ajusta (o no) los requerimientos nutricionales y de
 entrenamiento.
 
-**Estado:** 11 de 24 ideas implementadas (ver "Ya implementado" al final).
+**Estado:** 16 de 24 ideas implementadas (ver "Ya implementado" al final).
 Las referencias `app.js:NNN` son orientativas — el archivo cambia.
 
 ---
 
-> Las 5 ideas que estaban en "Prioridad alta" ya están implementadas
-> (carb cycling, deload por composición, pérdida de fuerza en déficit,
-> carga calibrada a la fase calórica y refeed/diet break). Ver el detalle
-> al final.
+> Ya implementadas: las 5 de "Prioridad alta" original (carb cycling,
+> deload por composición, pérdida de fuerza en déficit, carga calibrada a
+> la fase calórica, refeed/diet break) y las 5 siguientes (adaptación
+> metabólica, cintura/WHtR, readiness score, partición de Forbes y
+> outliers de peso). Ver el detalle al final.
 
 ## Prioridad alta
-
-### 6. Ajuste por adaptación metabólica
-Si el peso no baja pese a cumplir las calorías, recalcular el TDEE a la baja de
-forma progresiva. La base ya está: `calcTDEE` ahora usa peso suavizado y
-`calcNutritionTargets` acepta `tdeeReal`. Falta el bucle de corrección.
-
-### 7. Cintura / WHR como métrica de éxito
-`cintura` y `pecho` se capturan en `savePerimetros` (`app.js:15257`) pero **solo
-se dibujan**: no alimentan nutrición ni entrenamiento. Usar la cintura como
-señal de recomposición (bajar cintura manteniendo fuerza) junto al peso.
-
-### 8. Readiness score diario
-Combinar fatiga (notas), días de descanso (hay un cálculo parcial en
-`app.js:6428`) y tendencia de peso en un único score que ajuste la sesión
-sugerida del día.
-
-### 9. Partición grasa/músculo realista en las proyecciones
-`calcBodyProjection` (`app.js:1108`) asume fijo 85% grasa en déficit y 40% en
-superávit. Hacerlo dependiente del % de grasa actual (relación de Forbes): con
-grasa alta se pierde proporcionalmente más grasa, con grasa baja más músculo.
-
-### 10. Detección de outliers al registrar peso
-Avisar si un peso registrado se desvía >2-3 kg del peso de tendencia (EMA):
-casi siempre es error de tecleo o medición post-comida. La EMA ya existe
-(`calcWeightEMASeries`), falta el aviso en el formulario.
 
 ### 11. Etiqueta de fuente y estado de la medición
 Guardar en cada entrada de `metricslog` si viene de báscula / InBody / manual y
@@ -98,6 +74,12 @@ score serio (idea 8). Requiere UI de captura o integración externa.
 | **Pérdida de fuerza en déficit** | `detectStrengthLossUnderDeficit`: cruza la tendencia de 1RM por ejercicio con la de peso. Alerta solo si caen 2+ ejercicios **y** se está bajando de peso (evita falsos positivos) |
 | **Carga según fase calórica** | `classifyCaloricPhase` + `loadRecommendation(…, phase)`: en déficit agresivo exige 10 reps antes de subir (vs 8), reduce el incremento a la mitad y no manda rotar ejercicio ante un estancamiento esperable; en superávit sube con 7 reps |
 | **Refeed / diet break** | `detectRefeedNeed`: refeed a las 4 semanas de déficit, diet break a las 8, o antes si el peso se estanca con ≥85% de adherencia. Aparece como notificación y en el panel de objetivos |
+| **Adaptación metabólica** | `calcMetabolicAdaptation`: compara el gasto real medido con el estimado por fórmula. Marca adaptación leve (−8%) o marcada (−15%) y sugiere recalibrar sobre el gasto real; también detecta gastar más de lo estimado |
+| **Cintura / WHtR** | `calcWaistMetrics`: la cintura ya no es solo un dibujo. Calcula el ratio cintura/altura (umbral de salud 0.5), su clasificación de riesgo y el cambio total/parcial. Se muestra en el panel de objetivos |
+| **Recomposición** | `detectRecomposition`: cintura bajando + peso estable + fuerza sostenida = estás cambiando grasa por músculo aunque la báscula no se mueva. Aparece como notificación |
+| **Readiness con composición** | `predictTodayReadiness` recibe `metricslog` y `activeMetrics`: penaliza déficits agresivos (>1%/sem) y la necesidad de deload. Además el % de hidratación ya usa el objetivo por peso, no un `/14` fijo |
+| **Partición de Forbes** | `fatFractionOfLoss` / `leanFractionOfGain`: la proyección ya no asume 85%/40% fijos. Con más grasa se pierde proporcionalmente más grasa (y se gana menos músculo), recalculado cada semana |
+| **Outliers de peso** | `detectWeightOutlier`: avisa al escribir un peso que se aleja >2.5 kg del peso de tendencia (error de tecleo o medición post-comida). Informa sin bloquear el guardado |
 
 ### Nota de diseño
 Los objetivos calculados **no se aplican solos**: se muestran y el usuario pulsa

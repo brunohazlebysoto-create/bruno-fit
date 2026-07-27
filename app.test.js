@@ -827,3 +827,163 @@ describe('deload sensible a la composición corporal', () => {
     expect(r.rapidLossPct).toBe(0);
   });
 });
+
+describe('adaptación metabólica', () => {
+  const { calcMetabolicAdaptation } = require('./app.js');
+
+  test('sin datos no está disponible', () => {
+    expect(calcMetabolicAdaptation(0, 3000).available).toBe(false);
+    expect(calcMetabolicAdaptation(2500, 0).available).toBe(false);
+  });
+
+  test('detecta adaptación leve y marcada', () => {
+    expect(calcMetabolicAdaptation(2760, 3000).level).toBe('mild');        // -8%
+    expect(calcMetabolicAdaptation(2500, 3000).level).toBe('significant'); // -16.7%
+    expect(calcMetabolicAdaptation(2950, 3000).level).toBe('none');        // -1.7%
+  });
+
+  test('detecta gasto mayor del estimado', () => {
+    const r = calcMetabolicAdaptation(3400, 3000);
+    expect(r.level).toBe('higher');
+    expect(r.adaptationPct).toBeGreaterThan(0);
+    expect(r.message).toMatch(/más/i);
+  });
+
+  test('el mensaje de adaptación marcada sugiere recalibrar', () => {
+    const r = calcMetabolicAdaptation(2500, 3000);
+    expect(r.message).toMatch(/diet break|gasto real/i);
+  });
+});
+
+describe('cintura y recomposición', () => {
+  const { calcWaistMetrics, detectRecomposition, DEFAULT_BODY_PROFILE } = require('./app.js');
+
+  const logConCintura = {
+    '2026-05-01': { weight: 93, cintura: 98 },
+    '2026-06-01': { weight: 92.5, cintura: 95 },
+    '2026-07-01': { weight: 92.4, cintura: 92 },
+  };
+
+  test('sin mediciones de cintura no está disponible', () => {
+    expect(calcWaistMetrics({ '2026-07-01': { weight: 90 } }, DEFAULT_BODY_PROFILE).available).toBe(false);
+  });
+
+  test('calcula WHtR y clasifica el riesgo', () => {
+    const r = calcWaistMetrics(logConCintura, { ...DEFAULT_BODY_PROFILE, alturaCm: 180 });
+    expect(r.available).toBe(true);
+    expect(r.cintura).toBe(92);
+    expect(r.whtr).toBeCloseTo(92 / 180, 3);
+    expect(r.riesgo.label).toBe('Elevado'); // 0.511 > 0.5
+  });
+
+  test('WHtR bajo el umbral 0.5 se marca saludable', () => {
+    const r = calcWaistMetrics({ '2026-07-01': { weight: 80, cintura: 85 } }, { ...DEFAULT_BODY_PROFILE, alturaCm: 180 });
+    expect(r.riesgo.ok).toBe(true);
+  });
+
+  test('mide el cambio total de cintura', () => {
+    const r = calcWaistMetrics(logConCintura, DEFAULT_BODY_PROFILE);
+    expect(r.deltaTotal).toBe(-6); // 92 - 98
+    expect(r.deltaPrev).toBe(-3);  // 92 - 95
+    expect(r.mediciones).toBe(3);
+  });
+
+  test('detecta recomposición: cintura baja, peso estable, fuerza sostenida', () => {
+    const exercises = { a: [{ name: 'Press banca', musculos: ['Pectoral'] }] };
+    const exlog = {
+      'Press banca': [
+        { date: '2026-05-01T10:00:00', w: 85, reps: 6, type: 'work' },
+        { date: '2026-06-01T10:00:00', w: 88, reps: 6, type: 'work' },
+        { date: '2026-07-01T10:00:00', w: 90, reps: 6, type: 'work' },
+      ],
+    };
+    const r = detectRecomposition(logConCintura, exlog, exercises);
+    expect(r.detected).toBe(true);
+    expect(r.waistDelta).toBe(-6);
+    expect(r.message).toMatch(/recomponiendo/i);
+  });
+
+  test('no detecta recomposición si la cintura no baja', () => {
+    const sinCambio = {
+      '2026-05-01': { weight: 93, cintura: 98 },
+      '2026-07-01': { weight: 92.9, cintura: 98 },
+    };
+    expect(detectRecomposition(sinCambio, {}, {}).detected).toBe(false);
+  });
+
+  test('no detecta recomposición sin mediciones suficientes', () => {
+    expect(detectRecomposition({ '2026-07-01': { weight: 90, cintura: 92 } }, {}, {}).detected).toBe(false);
+  });
+});
+
+describe('outliers de peso', () => {
+  const { detectWeightOutlier } = require('./app.js');
+  const log = {
+    '2026-07-01': { weight: 92 }, '2026-07-05': { weight: 91.8 },
+    '2026-07-10': { weight: 91.6 }, '2026-07-15': { weight: 91.5 },
+  };
+
+  test('un peso coherente con la tendencia no es outlier', () => {
+    expect(detectWeightOutlier(log, 91.4).outlier).toBe(false);
+  });
+
+  test('detecta una desviación grande hacia arriba', () => {
+    const r = detectWeightOutlier(log, 96);
+    expect(r.outlier).toBe(true);
+    expect(r.diff).toBeGreaterThan(0);
+    expect(r.reason).toMatch(/retención|error/i);
+  });
+
+  test('detecta una desviación grande hacia abajo', () => {
+    const r = detectWeightOutlier(log, 86);
+    expect(r.outlier).toBe(true);
+    expect(r.diff).toBeLessThan(0);
+    expect(r.severity).toBe('high');
+  });
+
+  test('no marca outlier sin histórico suficiente', () => {
+    expect(detectWeightOutlier({ '2026-07-01': { weight: 92 } }, 99).outlier).toBe(false);
+    expect(detectWeightOutlier({}, 99).outlier).toBe(false);
+  });
+
+  test('ignora entradas inválidas', () => {
+    expect(detectWeightOutlier(log, 'abc').outlier).toBe(false);
+    expect(detectWeightOutlier(log, 0).outlier).toBe(false);
+  });
+});
+
+describe('proyección corporal con partición tipo Forbes', () => {
+  const { calcBodyProjection, fatFractionOfLoss, leanFractionOfGain } = require('./app.js');
+
+  test('con más grasa se pierde proporcionalmente más grasa', () => {
+    expect(fatFractionOfLoss(30)).toBeGreaterThan(fatFractionOfLoss(12));
+    expect(fatFractionOfLoss(30)).toBeLessThanOrEqual(0.92);
+    expect(fatFractionOfLoss(5)).toBeGreaterThanOrEqual(0.55);
+  });
+
+  test('con menos grasa se gana proporcionalmente más músculo', () => {
+    expect(leanFractionOfGain(10)).toBeGreaterThan(leanFractionOfGain(30));
+    expect(leanFractionOfGain(50)).toBeGreaterThanOrEqual(0.20);
+  });
+
+  test('en déficit el peso y el % de grasa bajan', () => {
+    const pts = calcBodyProjection(93.9, 26.2, 3000, 2500, 12);
+    expect(pts).toHaveLength(13);
+    expect(pts[12].peso).toBeLessThan(pts[0].peso);
+    expect(pts[12].grasaPct).toBeLessThan(pts[0].grasaPct);
+  });
+
+  test('alguien con grasa alta conserva más músculo en déficit que alguien definido', () => {
+    const kcalDef = 2500, tdee = 3000, semanas = 12;
+    const graso = calcBodyProjection(100, 32, tdee, kcalDef, semanas);
+    const definido = calcBodyProjection(100, 10, tdee, kcalDef, semanas);
+    const perdidaMusculoGraso = graso[0].musculo - graso[semanas].musculo;
+    const perdidaMusculoDefinido = definido[0].musculo - definido[semanas].musculo;
+    expect(perdidaMusculoGraso).toBeLessThan(perdidaMusculoDefinido);
+  });
+
+  test('en superávit el peso sube', () => {
+    const pts = calcBodyProjection(80, 15, 2800, 3200, 8);
+    expect(pts[8].peso).toBeGreaterThan(pts[0].peso);
+  });
+});

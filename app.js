@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W24";
+const APP_VERSION = "v2026.06.23-W25";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1121,6 +1121,20 @@ function calcTDEE(foodlog, metricslog) {
   return Math.round(avgKcal - deltaKcalPerDay);
 }
 
+/* Partición de la pérdida/ganancia de peso según el % de grasa actual
+   (relación de Forbes simplificada). Antes se asumía fijo 85% grasa en
+   déficit y 40% en superávit para todo el mundo, lo que sobreestimaba la
+   pérdida de grasa en personas ya definidas y subestimaba la ganancia de
+   músculo en las que empiezan con grasa alta. */
+function fatFractionOfLoss(grasaPct) {
+  const bf = parseFloat(grasaPct) || 20;
+  return Math.max(0.55, Math.min(0.92, 0.55 + 0.012 * bf));
+}
+function leanFractionOfGain(grasaPct) {
+  const bf = parseFloat(grasaPct) || 20;
+  return Math.max(0.20, Math.min(0.65, 0.65 - 0.015 * bf));
+}
+
 function calcBodyProjection(currentWeight, currentGrasaPct, tdee, targetKcal, weeks=12) {
   const points = [];
   let w = currentWeight, g = currentGrasaPct;
@@ -1129,8 +1143,12 @@ function calcBodyProjection(currentWeight, currentGrasaPct, tdee, targetKcal, we
     const musculo = w * (1 - g/100);
     points.push({ semana: wk, peso: Math.round(w*10)/10, grasaPct: Math.round(g*10)/10, musculo: Math.round(musculo*10)/10 });
     const wChange = dailyDelta * 7;
-    // Asume pérdida mayoritariamente de grasa (85%) si déficit, ganancia mayoritariamente muscular (60%) si superávit
-    const fatChange = wChange < 0 ? wChange * 0.85 : wChange * 0.4;
+    // La partición depende del % de grasa ACTUAL y se recalcula cada semana:
+    // cuanta más grasa, mayor proporción de grasa se pierde (y menos músculo
+    // se gana en superávit).
+    const fatChange = wChange < 0
+      ? wChange * fatFractionOfLoss(g)
+      : wChange * (1 - leanFractionOfGain(g));
     const muscChange = wChange - fatChange;
     const newFatKg = Math.max(0, (w * g/100) + fatChange);
     const newMuscKg = Math.max(0, musculo + muscChange);
@@ -1822,6 +1840,148 @@ function detectRefeedNeed(metricslog, foodlog, targets, opts = {}) {
   return { recommended, kind, reason, weeksInDeficit, stalled, adherencePct };
 }
 
+/* ===== ADAPTACIÓN METABÓLICA =====
+   Si el gasto real medido cae por debajo del estimado por fórmula de forma
+   sostenida, el metabolismo se ha adaptado al déficit y hay que recalibrar
+   sobre el TDEE real en vez de insistir con el teórico. */
+function calcMetabolicAdaptation(tdeeReal, tdeeEstimado) {
+  const real = parseFloat(tdeeReal) || 0;
+  const est = parseFloat(tdeeEstimado) || 0;
+  if (real <= 0 || est <= 0) {
+    return { available: false, adaptationPct: 0, level: "none", message: "" };
+  }
+  const adaptationPct = Math.round(((real - est) / est) * 1000) / 10;
+  let level = "none";
+  if (adaptationPct <= -15) level = "significant";
+  else if (adaptationPct <= -8) level = "mild";
+  else if (adaptationPct >= 10) level = "higher"; // gasta más de lo estimado
+
+  let message = "";
+  if (level === "significant") {
+    message = `Tu gasto real (${Math.round(real)} kcal) está un ${Math.abs(adaptationPct)}% por debajo del estimado. Adaptación metabólica marcada: calcula sobre el gasto real y plantea un diet break.`;
+  } else if (level === "mild") {
+    message = `Tu gasto real (${Math.round(real)} kcal) es un ${Math.abs(adaptationPct)}% menor que el estimado. Ajusta los objetivos al gasto real para no estancarte.`;
+  } else if (level === "higher") {
+    message = `Gastas un ${adaptationPct}% más de lo estimado (${Math.round(real)} kcal). Puedes comer algo más manteniendo el mismo ritmo.`;
+  }
+  return { available: true, adaptationPct, level, message, tdeeReal: Math.round(real), tdeeEstimado: Math.round(est) };
+}
+
+/* ===== CINTURA Y RECOMPOSICIÓN =====
+   La cintura se registraba pero solo se dibujaba. Es la mejor señal de
+   recomposición: bajar cintura manteniendo peso y fuerza significa cambiar
+   grasa por músculo, algo que la báscula sola no muestra. */
+
+// Última medición de un campo de perímetros, con su fecha
+function latestMetricField(metricslog, field) {
+  const dates = Object.keys(metricslog || {})
+    .filter(d => {
+      const v = parseFloat(metricslog[d]?.[field]);
+      return !isNaN(v) && v > 0;
+    })
+    .sort();
+  if (!dates.length) return null;
+  const d = dates[dates.length - 1];
+  return { date: d, value: parseFloat(metricslog[d][field]), dates };
+}
+
+function calcWaistMetrics(metricslog, profile) {
+  const p = { ...DEFAULT_BODY_PROFILE, ...(profile || {}) };
+  const latest = latestMetricField(metricslog, "cintura");
+  if (!latest) return { available: false };
+
+  const alturaCm = parseFloat(p.alturaCm) || 0;
+  const whtr = alturaCm > 0 ? Math.round((latest.value / alturaCm) * 1000) / 1000 : null;
+  // Ratio cintura/altura: <0.5 es el umbral de salud metabólica ampliamente usado
+  let riesgo = null;
+  if (whtr != null) {
+    if (whtr < 0.43) riesgo = { label: "Muy bajo", ok: true };
+    else if (whtr < 0.5) riesgo = { label: "Saludable", ok: true };
+    else if (whtr < 0.58) riesgo = { label: "Elevado", ok: false };
+    else riesgo = { label: "Alto", ok: false };
+  }
+
+  // Cambio respecto a la primera medición y a la anterior
+  const first = parseFloat(metricslog[latest.dates[0]].cintura);
+  const prevDate = latest.dates.length >= 2 ? latest.dates[latest.dates.length - 2] : null;
+  const prev = prevDate ? parseFloat(metricslog[prevDate].cintura) : null;
+
+  return {
+    available: true,
+    cintura: latest.value, date: latest.date,
+    whtr, riesgo,
+    deltaTotal: Math.round((latest.value - first) * 10) / 10,
+    deltaPrev: prev != null ? Math.round((latest.value - prev) * 10) / 10 : null,
+    mediciones: latest.dates.length,
+  };
+}
+
+/**
+ * Detecta recomposición: cintura bajando mientras el peso se mantiene
+ * (o baja poco) y la fuerza no cae. Es el caso que la báscula "no ve".
+ */
+function detectRecomposition(metricslog, exlog, exercises) {
+  const waist = calcWaistMetrics(metricslog, null);
+  if (!waist.available || waist.mediciones < 2 || waist.deltaTotal == null) {
+    return { detected: false, reason: "Faltan mediciones de cintura" };
+  }
+  const wTrend = calcWeightTrend(metricslog);
+  const trendW = getTrendWeight(metricslog);
+
+  const waistDown = waist.deltaTotal <= -1;          // al menos 1 cm menos
+  const weightStable = !wTrend || Math.abs(wTrend.kgPerWeek) < 0.3;
+
+  // Fuerza: ¿se mantiene o sube? (usa el histórico de PRs ya existente)
+  const records = buildPRHistory(exlog, exercises);
+  let improving = 0, declining = 0;
+  records.forEach(r => {
+    const hist = (r.history || []).filter(h => h.e1rm > 0);
+    if (hist.length < 2) return;
+    const delta = hist[hist.length - 1].e1rm - hist[0].e1rm;
+    if (delta > 0) improving++;
+    else if (delta < 0) declining++;
+  });
+  const strengthOk = improving >= declining;
+
+  const detected = waistDown && weightStable && strengthOk;
+  return {
+    detected,
+    waistDelta: waist.deltaTotal,
+    weightStable,
+    strengthOk, improving, declining,
+    trendWeight: trendW,
+    message: detected
+      ? `Estás recomponiendo: ${Math.abs(waist.deltaTotal)} cm menos de cintura con el peso estable y la fuerza sostenida. La báscula no lo refleja, pero estás cambiando grasa por músculo.`
+      : "",
+  };
+}
+
+/* ===== OUTLIERS DE PESO =====
+   Un peso muy alejado de la tendencia suele ser un error de tecleo o una
+   medición post-comida; si entra sin avisar, contamina el TDEE y la tendencia. */
+function detectWeightOutlier(metricslog, newWeight, opts = {}) {
+  const w = parseFloat(newWeight);
+  if (isNaN(w) || w <= 0) return { outlier: false, reason: "" };
+  const trend = getTrendWeight(metricslog, opts.alpha);
+  const minPoints = opts.minPoints || 3;
+  const points = calcWeightEMASeries(metricslog).length;
+  if (trend == null || points < minPoints) return { outlier: false, reason: "" };
+
+  const diff = Math.round((w - trend) * 10) / 10;
+  const absDiff = Math.abs(diff);
+  const threshold = opts.thresholdKg || 2.5;
+  if (absDiff < threshold) return { outlier: false, diff, trend, reason: "" };
+
+  const severity = absDiff >= threshold * 2 ? "high" : "medium";
+  return {
+    outlier: true, diff, trend, severity,
+    reason: `${w} kg se aleja ${absDiff} kg de tu peso de tendencia (${trend} kg). ` +
+      (diff > 0
+        ? "Puede ser retención de agua, una comida reciente o un error al escribir."
+        : "Puede ser una medición en ayunas extrema o un error al escribir."),
+  };
+}
+
 // Normaliza cualquier nombre de músculo (incluso anatómico detallado generado por IA,
 // ej. "Pectoral mayor (fibras claviculares)", "Tríceps braquial (cabeza larga)",
 // "Deltoides Posterior", "Braquiorradial") a una de las 11 categorías canónicas.
@@ -2141,6 +2301,8 @@ export default function App(){
   const [tdeeEstimate, setTdeeEstimate] = useState(null); // #12 - Real TDEE
   const [strengthLossAlert, setStrengthLossAlert] = useState(null); // fuerza cayendo en déficit
   const [refeedAlert, setRefeedAlert] = useState(null);             // refeed / diet break sugerido
+  const [metabolicAdaptation, setMetabolicAdaptation] = useState(null); // gasto real vs estimado
+  const [recompAlert, setRecompAlert] = useState(null);             // recomposición detectada
   const [upcomingEvent, setUpcomingEvent] = useState(null); // #13 - Event planning
   const [experiments, setExperiments] = useState([]); // #18 - A/B experiments
   const [overloadSuggestions, setOverloadSuggestions] = useState({}); // #8 - Progressive overload
@@ -3909,6 +4071,30 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       }, ...prev.filter(n => n.id !== "strength_loss")].slice(0, 8));
     }
 
+    // Adaptación metabólica: ¿el gasto real cayó bajo el estimado?
+    const bmrInfo = calcBMR(bodyProfile, activeMetrics);
+    const tdeeEst = bmrInfo.bmr ? Math.round(bmrInfo.bmr * (parseFloat(bodyProfile?.actividad) || 1.45)) : 0;
+    const adaptation = calcMetabolicAdaptation(tdee, tdeeEst);
+    setMetabolicAdaptation(adaptation.available && adaptation.level !== "none" ? adaptation : null);
+    if (adaptation.available && (adaptation.level === "significant" || adaptation.level === "mild")) {
+      setAiNotifications(prev => [{
+        id: "metabolic_adaptation", type: "info", icon: "🔥",
+        title: adaptation.level === "significant" ? "Adaptación metabólica" : "Gasto menor del estimado",
+        message: adaptation.message,
+        urgency: adaptation.level === "significant" ? "medium" : "low",
+      }, ...prev.filter(n => n.id !== "metabolic_adaptation")].slice(0, 8));
+    }
+
+    // Recomposición: cintura bajando con peso estable y fuerza sostenida
+    const recomp = detectRecomposition(mLog, eLog, exercises);
+    setRecompAlert(recomp.detected ? recomp : null);
+    if (recomp.detected) {
+      setAiNotifications(prev => [{
+        id: "recomposition", type: "success", icon: "📏",
+        title: "Estás recomponiendo", message: recomp.message, urgency: "low",
+      }, ...prev.filter(n => n.id !== "recomposition")].slice(0, 8));
+    }
+
     // Refeed / diet break: semanas acumuladas en déficit o estancamiento
     // pese a buena adherencia.
     const refeed = detectRefeedNeed(mLog, fLog, { ...(tgt || {}), tdee, deficitDiario: tgt && tdee ? tgt.kcal - tdee : NaN });
@@ -4268,6 +4454,12 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       nutritionTargets.kcal, nutritionTargets.p, nutritionTargets.c, nutritionTargets.f
     );
   };
+
+  // Métricas de cintura (WHtR y tendencia) — señal de recomposición
+  const waistMetrics = React.useMemo(
+    () => calcWaistMetrics(metricslog, bodyProfile),
+    [metricslog, bodyProfile]
+  );
 
   // Fase calórica actual — condiciona lo que es razonable pedirle al entreno
   const caloricPhase = React.useMemo(
@@ -5324,6 +5516,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             target={target}
             activeMetrics={activeMetrics}
             dayFuelTargets={dayFuelTargets}
+            metricslog={metricslog}
             totals={totals}
             log={log}
             setLog={(l) => { setLog(l); saveState({ log: l }); }} 
@@ -5438,6 +5631,9 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             nutritionTargets={nutritionTargets}
             strengthLossAlert={strengthLossAlert}
             refeedAlert={refeedAlert}
+            metabolicAdaptation={metabolicAdaptation}
+            recompAlert={recompAlert}
+            waistMetrics={waistMetrics}
             onApplyTargets={applyNutritionTargets}
             foodlog={foodlog}
             waterlog={waterlog}
@@ -6859,8 +7055,10 @@ function EditEntry({
   );
 }
 
-function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr) {
+function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, metricslog = null, activeMetrics = null) {
   const today = selectedDateStr || new Date().toISOString().slice(0, 10);
+  // El objetivo de agua depende del peso, no de una constante de 14 vasos
+  const waterGoalGlasses = calcWaterGoalGlasses(activeMetrics?.weight, true);
 
   // ── ¿Ya entrenaste hoy? → modo Recuperación ──
   const todaySets = Object.values(exlog || {}).flatMap(sets =>
@@ -6871,7 +7069,7 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr) {
   if (trainedToday) {
     const todayFood = (foodlog || {})[today] || [];
     const proteinToday = Math.round(todayFood.reduce((a, e) => a + (+e.proteina || 0), 0));
-    const hydPct = Math.min(1, (water || 0) / 14);
+    const hydPct = Math.min(1, (water || 0) / waterGoalGlasses);
     const totalSets = todaySets.length;
     const totalVol = Math.round(todaySets.reduce((a, s) => a + setVolume(s), 0));
 
@@ -6919,7 +7117,7 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr) {
   else if (restDays > 3) { score += 0.5; factors.push("Descanso prolongado"); }
 
   // 2. Hidratación actual
-  const hydPct = Math.min(1, (water || 0) / 14);
+  const hydPct = Math.min(1, (water || 0) / waterGoalGlasses);
   if (hydPct >= 0.75) { score += 1.5; factors.push("Bien hidratado"); }
   else if (hydPct >= 0.4) { score += 0.5; factors.push("Hidratación parcial"); }
   else { score -= 1; factors.push("Hidratación baja"); }
@@ -6961,6 +7159,23 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr) {
   });
   if (weekSets > 45) { score -= 1.5; factors.push(`Semana muy cargada (${weekSets} series)`); }
   else if (weekSets > 30) { score -= 0.5; factors.push(`Semana cargada (${weekSets} series)`); }
+
+  // 7. Composición corporal: un déficit agresivo degrada la recuperación,
+  //    así que la disposición real para entrenar fuerte baja aunque el
+  //    entrenamiento y el sueño estén bien.
+  if (metricslog) {
+    const wTrend = calcWeightTrend(metricslog);
+    const trendW = getTrendWeight(metricslog);
+    if (wTrend && trendW > 0 && wTrend.kgPerWeek < 0) {
+      const lossPct = (Math.abs(wTrend.kgPerWeek) / trendW) * 100;
+      if (lossPct >= 1.5) { score -= 1.5; factors.push(`Bajando ${Math.round(lossPct * 10) / 10}%/sem — recuperación comprometida`); }
+      else if (lossPct >= 1.0) { score -= 0.75; factors.push(`Déficit agresivo (${Math.round(lossPct * 10) / 10}%/sem)`); }
+    }
+    // 8. Necesidad de descarga acumulada
+    const deload = detectDeloadNeed(exlog, notes, metricslog);
+    if (deload.urgency === "high") { score -= 1.5; factors.push("Deload recomendado"); }
+    else if (deload.urgency === "medium") { score -= 0.75; factors.push("Carga acumulada alta"); }
+  }
 
   score = Math.round(Math.max(1, Math.min(10, score)));
   let label, color;
@@ -7271,7 +7486,7 @@ function Hoy({
   proactiveMsg, aiNotifications, setAiNotifications, macroAdjustSuggestion, setMacroAdjustSuggestion, saveState, customPresets,
   weeklyInsight, smartGoals, challenges, updateChallengeProgress, upcomingEvent, experiments, setExperiments, splits,
   setView, setShowNutritionModal, setModalVals, addFoodInputText, setAddFoodInputText, customSuggestions,
-  exlog, notes, foodlog, sendCoachMessage, activeMetrics, dayFuelTargets
+  exlog, notes, foodlog, sendCoachMessage, activeMetrics, dayFuelTargets, metricslog
 }){
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false); 
@@ -7450,8 +7665,8 @@ function Hoy({
   // hubo entreno. Antes era una constante de 14 vasos para cualquier peso.
   const waterGoal = calcWaterGoalGlasses(activeMetrics?.weight, !isRestDay);
   const readiness = React.useMemo(
-    () => predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr),
-    [exlog, notes, water, foodlog, selectedDateStr]
+    () => predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, metricslog, activeMetrics),
+    [exlog, notes, water, foodlog, selectedDateStr, metricslog, activeMetrics]
   );
 
   const weekKcal = React.useMemo(() => {
@@ -15292,7 +15507,7 @@ function Registro({
   projections, tdeeEstimate, analyzeAndReconfigure, experiments, setExperiments,
   dietGuidelines, setDietGuidelines, trainingGuidelines, setTrainingGuidelines, onSaveGuidelines,
   sendCoachMessage, setView, bodyProfile, updateBodyProfile, nutritionTargets, onApplyTargets,
-  strengthLossAlert, refeedAlert
+  strengthLossAlert, refeedAlert, metabolicAdaptation, recompAlert, waistMetrics
 }){
   const [type, setType] = useState("peso");
   const [statsPeriod, setStatsPeriod] = useState(7); // 7 or 30 days
@@ -16344,6 +16559,21 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           </div>
         )}
 
+        {/* Aviso de outlier: un peso muy alejado de la tendencia suele ser un
+            error de tecleo o una medición post-comida. No bloquea el guardado. */}
+        {type === "peso" && (() => {
+          const chk = detectWeightOutlier(metricslog, weight);
+          if (!chk.outlier) return null;
+          return (
+            <div style={{marginTop:-4, marginBottom:10, background:"rgba(255,177,61,0.10)", border:`1px solid ${C.amber}55`, borderRadius:10, padding:"8px 11px", display:"flex", gap:7, alignItems:"flex-start"}}>
+              <ShieldAlert size={14} color={C.amber} style={{flexShrink:0, marginTop:1}}/>
+              <div style={{fontSize:11, color:C.muted, lineHeight:1.45}}>
+                <b style={{color:C.amber}}>Comprueba el dato.</b> {chk.reason}
+              </div>
+            </div>
+          );
+        })()}
+
         {type === "composicion" && (
           <div style={{display:"flex", flexDirection:"column", gap:8}}>
             <div style={{display:"flex", alignItems:"center", gap:8}}>
@@ -16576,6 +16806,54 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                       </span>
                     </div>
                     <div style={{fontSize:11, color:C.muted, lineHeight:1.45}}>{refeedAlert.reason}</div>
+                  </div>
+                )}
+                {metabolicAdaptation && (
+                  <div style={{marginTop:8, background:"rgba(255,177,61,0.08)", border:`1px solid ${C.amber}44`, borderRadius:10, padding:"9px 11px"}}>
+                    <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:3}}>
+                      <Flame size={13} color={C.amber}/>
+                      <span style={{fontSize:10, fontWeight:800, color:C.amber, textTransform:"uppercase", letterSpacing:".05em"}}>
+                        Gasto real {metabolicAdaptation.adaptationPct > 0 ? "+" : ""}{metabolicAdaptation.adaptationPct}% vs estimado
+                      </span>
+                    </div>
+                    <div style={{fontSize:11, color:C.muted, lineHeight:1.45}}>{metabolicAdaptation.message}</div>
+                  </div>
+                )}
+                {recompAlert && (
+                  <div style={{marginTop:8, background:"rgba(205,255,74,0.10)", border:`1px solid ${C.lime}55`, borderRadius:10, padding:"9px 11px"}}>
+                    <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:3}}>
+                      <Check size={13} color={C.lime}/>
+                      <span style={{fontSize:10, fontWeight:800, color:C.lime, textTransform:"uppercase", letterSpacing:".05em"}}>
+                        Recomposición en marcha
+                      </span>
+                    </div>
+                    <div style={{fontSize:11, color:C.muted, lineHeight:1.45}}>{recompAlert.message}</div>
+                  </div>
+                )}
+                {waistMetrics?.available && (
+                  <div style={{marginTop:8, background:C.bg, border:`1px solid ${C.line}`, borderRadius:10, padding:"9px 11px", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap"}}>
+                    <div>
+                      <div style={{fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em"}}>Cintura</div>
+                      <div style={{fontSize:14, fontWeight:900, color:C.ink}}>
+                        {waistMetrics.cintura} <span style={{fontSize:9, fontWeight:600}}>cm</span>
+                        {waistMetrics.deltaTotal !== 0 && (
+                          <span style={{fontSize:10, fontWeight:700, color: waistMetrics.deltaTotal < 0 ? C.lime : C.amber, marginLeft:5}}>
+                            {waistMetrics.deltaTotal > 0 ? "+" : ""}{waistMetrics.deltaTotal} cm
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {waistMetrics.whtr != null && (
+                      <div style={{marginLeft:"auto", textAlign:"right"}}>
+                        <div style={{fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em"}} title="Ratio cintura/altura — por debajo de 0.5 se considera saludable">
+                          Cintura/altura
+                        </div>
+                        <div style={{fontSize:13, fontWeight:900, color: waistMetrics.riesgo?.ok ? C.lime : C.amber}}>
+                          {waistMetrics.whtr.toFixed(2)}
+                          <span style={{fontSize:9.5, fontWeight:700, marginLeft:4}}>{waistMetrics.riesgo?.label}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -18401,6 +18679,8 @@ if (typeof module !== 'undefined' && module.exports) {
     DEFAULT_BODY_PROFILE, GOAL_PRESETS,
     calcCarbCycleTargets, classifyFuelDay, classifyCaloricPhase,
     detectStrengthLossUnderDeficit, detectRefeedNeed, detectDeloadNeed,
+    calcMetabolicAdaptation, calcWaistMetrics, detectRecomposition,
+    detectWeightOutlier, calcBodyProjection, fatFractionOfLoss, leanFractionOfGain,
     default: App
   };
 }
