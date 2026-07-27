@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W21";
+const APP_VERSION = "v2026.06.23-W22";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -11067,6 +11067,15 @@ tr:last-child td{border-bottom:none}
     return progress.sort((a,b) => b.delta - a.delta).slice(0, 3);
   }, [exlog]);
 
+  // Recomendación + progreso por ejercicio del día seleccionado (misma lógica
+  // que el PDF), indexada por nombre para mostrarla al abrir cada ejercicio.
+  const dayRecMap = React.useMemo(() => {
+    const summary = buildDaySummary(exlog, exercises, selectedDateStr);
+    const map = {};
+    (summary.exercises || []).forEach(e => { map[e.name] = e; });
+    return map;
+  }, [exlog, exercises, selectedDateStr]);
+
   /* ===== MAPA DE CALOR DE VOLUMEN SEMANAL ===== */
   const vol = useMemo(() => {
     // Solo añadir al mapa si musculos tiene contenido; si está vacío, dejar que MUSCLES haga fallback
@@ -12582,6 +12591,29 @@ tr:last-child td{border-bottom:none}
                                 ))}
                               </div>
                             )}
+
+                            {/* Recomendación de carga para la próxima sesión */}
+                            {(() => {
+                              const dr = dayRecMap[exName];
+                              if (!dr || !dr.recommendation) return null;
+                              const rec = dr.recommendation;
+                              const col = rec.kind === "overload" ? C.limeGreen || C.lime : rec.kind === "variation" ? C.amber : C.cyan;
+                              const lbl = rec.kind === "overload" ? "SUBIR CARGA" : rec.kind === "variation" ? "ROTAR / FORZAR REP" : "CONSOLIDAR";
+                              const prog = dr.deltaVsPrev != null
+                                ? `${dr.deltaVsPrev > 0 ? "↑ +" + dr.deltaVsPrev + " kg" : dr.deltaVsPrev < 0 ? "↓ " + dr.deltaVsPrev + " kg" : "= igual"} vs anterior (${dr.prevMaxW} kg)`
+                                : "1ª sesión registrada";
+                              return (
+                                <div style={{background:`${col}14`, border:`1px solid ${col}44`, borderRadius:10, padding:"8px 10px", marginBottom:10}}>
+                                  <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:3, flexWrap:"wrap"}}>
+                                    <TrendingUp size={13} color={col}/>
+                                    <span style={{fontSize:9.5, fontWeight:800, color:col, textTransform:"uppercase", letterSpacing:".05em"}}>{lbl}</span>
+                                    <span style={{fontSize:13, fontWeight:900, color:C.ink, marginLeft:"auto"}}>{rec.weight}kg × {rec.reps}</span>
+                                  </div>
+                                  <div style={{fontSize:11, color:C.muted, lineHeight:1.4}}>{rec.note}</div>
+                                  <div style={{fontSize:10, fontWeight:700, color: dr.deltaVsPrev > 0 ? (C.limeGreen||C.lime) : dr.deltaVsPrev < 0 ? C.amber : C.muted, marginTop:4}}>{prog}</div>
+                                </div>
+                              );
+                            })()}
 
                             {/* Tipo de set */}
                             <div style={{display:"flex", gap:6, marginBottom:8}}>
