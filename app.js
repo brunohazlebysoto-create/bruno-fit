@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W19";
+const APP_VERSION = "v2026.06.23-W20";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -10791,7 +10791,10 @@ function Entreno({
   const chartData = (n) => { const key = findExlogKey(n); return ((exlog || {})[key] || []).slice().sort((a,b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0)); };
 
   // Exporta el registro del día seleccionado + mini-análisis como PDF imprimible
-  const exportDayPDF = () => {
+  const [dayPdfAiBusy, setDayPdfAiBusy] = useState(false);
+
+  const exportDayPDF = async (useAI = false) => {
+    if (dayPdfAiBusy) return;
     const durationMin = (workoutDurations || {})[selectedDateStr] || 0;
     let sensation = "";
     try {
@@ -10804,6 +10807,9 @@ function Entreno({
 
     // Abrir ventana dentro del gesto del click (evita bloqueo de pop-ups en móvil)
     const win = window.open("", "_blank");
+    if (win && useAI) {
+      try { win.document.write('<!DOCTYPE html><html><body style="background:#0c0e0b;color:#16a34a;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center"><div><p style="font-size:20px">⏳ El coach está analizando tu sesión…</p><p style="font-size:13px;color:#9aa088">Generando el análisis con IA · 10-30 seg ☕</p></div></body></html>'); } catch (_) {}
+    }
 
     const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const dateLong = (() => {
@@ -10857,7 +10863,16 @@ function Entreno({
     const diffBadge = summary.volDiffPct !== null
       ? `<span class="dpct ${summary.volDiffPct >= 0 ? "up" : "down"}">${summary.volDiffPct >= 0 ? "+" : ""}${summary.volDiffPct}% vs media</span>` : "";
 
-    const html = `<!DOCTYPE html>
+    // Bloque de análisis: narrativa IA (si la hay) o los bullets basados en reglas
+    const analysisBlock = (aiText) => {
+      if (aiText && aiText.trim()) {
+        const paras = aiText.trim().split(/\n+/).filter(Boolean).map(p => `<p class="ap">${esc(p)}</p>`).join("");
+        return `<div class="sec">Análisis del coach <span class="ai-tag">✦ IA</span></div><div class="an ai">${paras}</div>`;
+      }
+      return `<div class="sec">Mini-análisis de la sesión</div><div class="an"><ul>${analysisItems}</ul></div>`;
+    };
+
+    const renderHtml = (aiText) => `<!DOCTYPE html>
 <html lang="es"><head><meta charset="UTF-8"/>
 <title>Sesión ${selectedDateStr} · Bruno</title>
 <style>
@@ -10882,6 +10897,10 @@ h1{font-size:18pt;font-weight:900;letter-spacing:-.5px;line-height:1.1}
 .an ul{list-style:none}
 .an li{font-size:9.5pt;color:#14532d;padding:3px 0 3px 16px;position:relative;line-height:1.4}
 .an li::before{content:"›";position:absolute;left:2px;color:#16a34a;font-weight:800}
+.an.ai{background:#faf5ff;border-color:#e9d5ff}
+.an .ap{font-size:9.5pt;color:#4c1d95;line-height:1.55;margin-bottom:7px}
+.an .ap:last-child{margin-bottom:0}
+.ai-tag{background:#7c3aed;color:#fff;font-size:7pt;font-weight:800;padding:2px 7px;border-radius:20px;vertical-align:middle;margin-left:4px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
 .ex{border:1.5px solid #e5e7eb;border-radius:9px;overflow:hidden;margin-bottom:10px;page-break-inside:avoid}
 .exh{background:#f3f4f6;padding:7px 11px;border-bottom:1.5px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;gap:8px}
@@ -10921,8 +10940,7 @@ tr:last-child td{border-bottom:none}
     <div class="sb"><div class="l">${durationMin > 0 ? "Duración" : "PRs hoy"}</div><div class="v">${durationMin > 0 ? durationMin + ' <small>min</small>' : "★ " + summary.totals.prCount}</div></div>
   </div>
 
-  <div class="sec">Mini-análisis de la sesión</div>
-  <div class="an"><ul>${analysisItems}</ul></div>
+  ${analysisBlock(aiText)}
 
   <div class="grid2" style="margin-top:16px">
     <div>
@@ -10943,8 +10961,36 @@ tr:last-child td{border-bottom:none}
   </div>
 </div></body></html>`;
 
-    if (win) { win.document.open(); win.document.write(html); win.document.close(); }
-    else { alert("El navegador bloqueó la ventana. Permite pop-ups para este sitio y vuelve a intentar."); }
+    const write = (aiText) => {
+      if (win) { win.document.open(); win.document.write(renderHtml(aiText)); win.document.close(); }
+      else { alert("El navegador bloqueó la ventana. Permite pop-ups para este sitio y vuelve a intentar."); }
+    };
+
+    if (!useAI) { write(null); return; }
+
+    // ── Modo IA: pedir un análisis narrativo al coach ──
+    setDayPdfAiBusy(true);
+    try {
+      const exLines = summary.exercises.map(e =>
+        `- ${e.name} [${e.muscle || "?"}]: ${e.workSetsCount} series de trabajo, tope ${e.topW}kg×${e.topReps} reps, volumen ${e.volume}kg, 1RM~${e.e1rm}kg${e.isPR ? " (PR de peso)" : ""}`
+      ).join("\n");
+      const muscLine = summary.muscles.map(m => `${m.muscle} ${m.weightedSets} series${m.fatiguePct >= 25 ? ` (pre-fatiga ${m.fatiguePct}%)` : ""}`).join(", ");
+      const volCtx = summary.volDiffPct !== null ? ` (${summary.volDiffPct >= 0 ? "+" : ""}${summary.volDiffPct}% vs media reciente de ${summary.avgHistVol}kg)` : "";
+      const userMsg = `Analiza esta sesión de entrenamiento de Bruno.\n` +
+        `Fecha: ${dateLong}.\n` +
+        `Volumen total: ${summary.totals.volume}kg${volCtx}. Series de trabajo: ${summary.totals.workSets}. ${durationMin > 0 ? `Duración: ${durationMin} min.` : ""} ${sensation ? `Sensación reportada: ${sensation}.` : ""}\n` +
+        `Ejercicios:\n${exLines}\n` +
+        `Trabajo muscular: ${muscLine}.`;
+      const sys = `Eres el coach de fuerza e hipertrofia de Bruno. Analiza su sesión con tono cercano, técnico y motivador. Responde en español, en TEXTO PLANO (sin markdown, sin viñetas, sin títulos), en EXACTAMENTE 2 párrafos separados por un salto de línea: (1) evaluación de la sesión — volumen e intensidad, foco muscular, PRs y fatiga acumulada; (2) recomendaciones concretas para la próxima sesión de estos músculos (qué carga intentar, qué priorizar, qué rotar si hay estancamiento). Máximo 130 palabras en total. No inventes datos que no estén en el contexto.`;
+      const raw = await callGemini([{ role: "user", content: userMsg }], sys);
+      const aiText = (typeof raw === "string" ? raw : (raw?.text || "")).trim();
+      if (aiText) write(aiText);
+      else write(null); // sin respuesta útil → cae al análisis offline
+    } catch (err) {
+      write(null); // error de IA → PDF con el mini-análisis offline igualmente
+    } finally {
+      setDayPdfAiBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -12151,13 +12197,24 @@ tr:last-child td{border-bottom:none}
               </div>
 
               {selectedDayWorkouts && Object.keys(selectedDayWorkouts).length > 0 && (
-                <button
-                  className="btn-active-scale"
-                  onClick={exportDayPDF}
-                  style={{width:"100%", marginBottom:10, padding:"10px 0", borderRadius:10, border:`1px solid ${C.limeGreen||C.lime}`, background:"rgba(22,163,74,0.10)", color:C.limeGreen||C.lime, fontWeight:800, fontSize:12.5, display:"flex", alignItems:"center", justifyContent:"center", gap:7}}
-                >
-                  <FileText size={15}/> Exportar sesión a PDF + análisis
-                </button>
+                <div style={{display:"flex", gap:8, marginBottom:10}}>
+                  <button
+                    className="btn-active-scale"
+                    onClick={() => exportDayPDF(false)}
+                    disabled={dayPdfAiBusy}
+                    style={{flex:1, padding:"10px 0", borderRadius:10, border:`1px solid ${C.limeGreen||C.lime}`, background:"rgba(22,163,74,0.10)", color:C.limeGreen||C.lime, fontWeight:800, fontSize:12, display:"flex", alignItems:"center", justifyContent:"center", gap:6, opacity:dayPdfAiBusy?0.5:1}}
+                  >
+                    <FileText size={14}/> PDF rápido
+                  </button>
+                  <button
+                    className="btn-active-scale"
+                    onClick={() => exportDayPDF(true)}
+                    disabled={dayPdfAiBusy}
+                    style={{flex:1, padding:"10px 0", borderRadius:10, border:`1px solid ${C.blue}`, background:"rgba(124,58,237,0.10)", color:C.blue, fontWeight:800, fontSize:12, display:"flex", alignItems:"center", justifyContent:"center", gap:6, opacity:dayPdfAiBusy?0.7:1, cursor:dayPdfAiBusy?"default":"pointer"}}
+                  >
+                    {dayPdfAiBusy ? <><Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/> Analizando…</> : <><Sparkles size={14}/> PDF con IA</>}
+                  </button>
+                </div>
               )}
 
               {/* Quick sensation */}
