@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W33";
+const APP_VERSION = "v2026.06.23-W34";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -15748,30 +15748,59 @@ function Registro({
           <span>{fdate(dailyNutritionData[dailyNutritionData.length - 1].date)}</span>
         </div>
 
-        {/* Tabla detallada de días registrados */}
-        <div style={{marginTop:12, borderTop:`1px solid ${C.line}`, paddingTop:8, maxHeight:150, overflowY:"auto"}}>
-          <div style={{fontSize:11, fontWeight:700, color:C.muted, marginBottom:6, textTransform:"uppercase", letterSpacing:".05em"}}>Detalle Diario:</div>
-          {dailyNutritionData
-            .filter(d => d.kcal > 0)
-            .reverse()
-            .map(d => {
-              const compliance = target ? (d.kcal / target.kcal) * 100 : 100;
-              let dotColor = C.lime;
-              if (compliance < 90) dotColor = C.cyan;
-              else if (compliance > 110) dotColor = C.rose;
+        {/* Detalle día a día, plegable.
+            Antes se listaban TODOS los días dentro de un contenedor con
+            scroll propio (maxHeight:150): un scroll dentro del scroll de la
+            página, incómodo en móvil, y renderizando el histórico entero
+            aunque casi nunca se mire. */}
+        {(() => {
+          const dias = dailyNutritionData.filter(d => d.kcal > 0).slice().reverse();
+          if (dias.length === 0) return null;
+          const mostrados = dias.slice(0, detalleLimite);
+          const fuera = dias.length - mostrados.length;
+          return (
+            <div style={{marginTop:12, borderTop:`1px solid ${C.line}`, paddingTop:8}}>
+              <button
+                onClick={() => setDetalleAbierto(v => !v)}
+                style={{background:"none", border:"none", cursor:"pointer", width:"100%", display:"flex", justifyContent:"space-between", alignItems:"center", padding:0}}
+              >
+                <span style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em"}}>
+                  Detalle diario <span style={{textTransform:"none", letterSpacing:0, fontWeight:600}}>· {dias.length} día{dias.length !== 1 ? "s" : ""} registrado{dias.length !== 1 ? "s" : ""}</span>
+                </span>
+                <span style={{color:C.muted, fontSize:12}}>{detalleAbierto ? "▲" : "▼"}</span>
+              </button>
 
-              return (
-                <div key={d.date} style={{display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:11.5, padding:"5px 0", borderBottom:`1px solid rgba(42,46,32,0.4)`}}>
-                  <span style={{fontWeight:600}}>{fdate(d.date + "T12:00:00Z")}</span>
-                  <div style={{display:"flex", alignItems:"center", gap:6}}>
-                    <span style={{width:6, height:6, borderRadius:"50%", background:dotColor}}/>
-                    <span style={{fontWeight:700, color:C.ink}}>{Math.round(d.kcal)} kcal</span>
-                  </div>
-                  <span style={{color:C.muted, fontSize:10.5}}>P: {Math.round(d.p)}g · C: {Math.round(d.c)}g · G: {Math.round(d.f)}g</span>
+              {detalleAbierto && (
+                <div style={{marginTop:8}}>
+                  {mostrados.map(d => {
+                    const compliance = target ? (d.kcal / target.kcal) * 100 : 100;
+                    let dotColor = C.lime;
+                    if (compliance < 90) dotColor = C.cyan;
+                    else if (compliance > 110) dotColor = C.rose;
+
+                    return (
+                      <div key={d.date} style={{display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:11.5, padding:"5px 0", borderBottom:`1px solid rgba(42,46,32,0.4)`}}>
+                        <span style={{fontWeight:600}}>{fdate(d.date + "T12:00:00Z")}</span>
+                        <div style={{display:"flex", alignItems:"center", gap:6}}>
+                          <span style={{width:6, height:6, borderRadius:"50%", background:dotColor}} title={`${Math.round(compliance)}% del objetivo`}/>
+                          <span style={{fontWeight:700, color:C.ink}}>{Math.round(d.kcal)} kcal</span>
+                        </div>
+                        <span style={{color:C.muted, fontSize:10.5}}>P: {Math.round(d.p)}g · C: {Math.round(d.c)}g · G: {Math.round(d.f)}g</span>
+                      </div>
+                    );
+                  })}
+                  {fuera > 0 && (
+                    <button className="btn-active-scale" onClick={() => setDetalleLimite(l => l + 30)}
+                      style={{width:"100%", marginTop:8, padding:"7px 0", borderRadius:9, border:`1px solid ${C.line}`,
+                        background:"transparent", color:C.muted, fontSize:11.5, fontWeight:700}}>
+                      Ver más ({fuera} restantes)
+                    </button>
+                  )}
                 </div>
-              );
-            })}
-        </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
     );
   };
@@ -15857,6 +15886,9 @@ function Registro({
   const [bitacoraAbierta, setBitacoraAbierta] = useState(false);
   const [notaFiltro, setNotaFiltro] = useState("todos");
   const [notaLimite, setNotaLimite] = useState(20);
+  // Detalle diario de nutrición: plegado, con paginación
+  const [detalleAbierto, setDetalleAbierto] = useState(false);
+  const [detalleLimite, setDetalleLimite] = useState(10);
 
   // Cargar análisis guardado cuando cambia la fecha seleccionada
   const [muscInput, setMuscInput] = useState("");
