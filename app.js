@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W37";
+const APP_VERSION = "v2026.06.23-W38";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -768,6 +768,19 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
     throw new Error("⏱️ Límite de peticiones alcanzado en todas las claves. Si todas tus claves son de la misma cuenta de Google, comparten la misma cuota — crea claves desde cuentas distintas para multiplicarla. O espera 1 minuto e intenta de nuevo.");
   }
   throw lastError || new Error("No se pudo conectar con ninguna API Key.");
+}
+
+/**
+ * Las consultas que la app lanza sola al coach llevan un prompt técnico entre
+ * corchetes. Mostrarlo tal cual hacía parecer que el usuario había escrito un
+ * párrafo que nunca tecleó, así que se sustituye por una etiqueta corta.
+ */
+function esPromptAutomatico(texto) {
+  return typeof texto === "string" && /^\s*\[[^\]]+\]/.test(texto);
+}
+function etiquetaAutomatica(texto) {
+  const m = typeof texto === "string" && texto.match(/^\s*\[([^\]]+)\]/);
+  return m ? `✦ ${m[1]}` : "✦ Consulta automática";
 }
 
 const SEED_TECNICO = {
@@ -1900,25 +1913,25 @@ function evaluateRecovery(entry, fcBaseline = null) {
   const horas = parseFloat(e.suenoHoras);
   if (!isNaN(horas) && horas > 0) {
     hasData = true;
-    if (horas >= 7.5) { delta += 1.5; factors.push(`${horas} h de sueño`); }
-    else if (horas >= 6.5) { delta += 0.5; factors.push(`${horas} h de sueño`); }
-    else if (horas >= 5.5) { delta -= 1; factors.push(`Solo ${horas} h de sueño`); }
-    else { delta -= 2; factors.push(`Sueño muy corto (${horas} h)`); }
+    if (horas >= 7.5) { delta += 1.5; factors.push({t: `${horas} h de sueño`, s: 1}); }
+    else if (horas >= 6.5) { delta += 0.5; factors.push({t: `${horas} h de sueño`, s: 1}); }
+    else if (horas >= 5.5) { delta -= 1; factors.push({t: `Solo ${horas} h de sueño`, s: -1}); }
+    else { delta -= 2; factors.push({t: `Sueño muy corto (${horas} h)`, s: -1}); }
   }
 
   const calidad = parseInt(e.suenoCalidad); // 1-5
   if (!isNaN(calidad) && calidad > 0) {
     hasData = true;
-    if (calidad >= 4) { delta += 0.5; factors.push("Sueño reparador"); }
-    else if (calidad <= 2) { delta -= 1; factors.push("Sueño de mala calidad"); }
+    if (calidad >= 4) { delta += 0.5; factors.push({t: "Sueño reparador", s: 1}); }
+    else if (calidad <= 2) { delta -= 1; factors.push({t: "Sueño de mala calidad", s: -1}); }
   }
 
   const pasos = parseInt(e.pasos);
   if (!isNaN(pasos) && pasos > 0) {
     hasData = true;
-    if (pasos >= 15000) { delta -= 0.5; factors.push(`${pasos.toLocaleString("es")} pasos (mucho NEAT)`); }
-    else if (pasos >= 7000) { delta += 0.5; factors.push(`${pasos.toLocaleString("es")} pasos`); }
-    else if (pasos < 3000) { factors.push("Día sedentario"); }
+    if (pasos >= 15000) { delta -= 0.5; factors.push({t: `${pasos.toLocaleString("es")} pasos (mucho NEAT)`, s: -1}); }
+    else if (pasos >= 7000) { delta += 0.5; factors.push({t: `${pasos.toLocaleString("es")} pasos`, s: 1}); }
+    else if (pasos < 3000) { factors.push({t: "Día sedentario", s: 0}); }
   }
 
   const fc = parseInt(e.fcReposo);
@@ -1928,11 +1941,11 @@ function evaluateRecovery(entry, fcBaseline = null) {
     if (!isNaN(base) && base > 0) {
       const diff = fc - base;
       // Una FC en reposo elevada sobre la propia media indica estrés/fatiga
-      if (diff >= 7) { delta -= 1.5; factors.push(`FC reposo +${diff} sobre tu media`); }
-      else if (diff >= 4) { delta -= 0.75; factors.push(`FC reposo algo alta (+${diff})`); }
-      else if (diff <= -3) { delta += 0.5; factors.push("FC reposo baja: bien recuperado"); }
-    } else if (fc >= 75) { delta -= 0.75; factors.push(`FC reposo ${fc} ppm`); }
-    else if (fc <= 55) { delta += 0.5; factors.push(`FC reposo ${fc} ppm`); }
+      if (diff >= 7) { delta -= 1.5; factors.push({t: `FC reposo +${diff} sobre tu media`, s: -1}); }
+      else if (diff >= 4) { delta -= 0.75; factors.push({t: `FC reposo algo alta (+${diff})`, s: -1}); }
+      else if (diff <= -3) { delta += 0.5; factors.push({t: "FC reposo baja: bien recuperado", s: 1}); }
+    } else if (fc >= 75) { delta -= 0.75; factors.push({t: `FC reposo ${fc} ppm`, s: -1}); }
+    else if (fc <= 55) { delta += 0.5; factors.push({t: `FC reposo ${fc} ppm`, s: 1}); }
   }
 
   return { hasData, delta, factors };
@@ -7174,17 +7187,17 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, me
     let score = 7;
     const factors = [];
 
-    if (proteinToday >= 50) { score += 1; factors.push(`${proteinToday}g proteína ✓`); }
-    else if (proteinToday >= 20) { factors.push(`${proteinToday}g prot. (suma más)`); }
-    else { score -= 1; factors.push("Prioriza proteína ahora"); }
+    if (proteinToday >= 50) { score += 1; factors.push({t: `${proteinToday}g proteína ✓`, s: 1}); }
+    else if (proteinToday >= 20) { factors.push({t: `${proteinToday}g prot. (suma más)`, s: 0}); }
+    else { score -= 1; factors.push({t: "Prioriza proteína ahora", s: -1}); }
 
-    if (hydPct >= 0.75) { score += 1; factors.push("Hidratación buena"); }
-    else if (hydPct >= 0.4) { factors.push("Sigue hidratándote"); }
-    else { score -= 1; factors.push("Agua urgente"); }
+    if (hydPct >= 0.75) { score += 1; factors.push({t: "Hidratación buena", s: 1}); }
+    else if (hydPct >= 0.4) { factors.push({t: "Sigue hidratándote", s: 0}); }
+    else { score -= 1; factors.push({t: "Agua urgente", s: -1}); }
 
-    if (totalSets >= 15) { factors.push(`Sesión intensa · ${totalSets} series`); score -= 0.5; }
-    else if (totalSets >= 6) { factors.push(`${totalSets} series · ${totalVol > 0 ? totalVol + " kg vol." : ""}`); }
-    else { factors.push(`${totalSets} series registradas`); }
+    if (totalSets >= 15) { factors.push({t: `Sesión intensa · ${totalSets} series`, s: -1}); score -= 0.5; }
+    else if (totalSets >= 6) { factors.push({t: `${totalSets} series · ${totalVol > 0 ? totalVol + " kg vol." : ""}`, s: 0}); }
+    else { factors.push({t: `${totalSets} series registradas`, s: 0}); }
 
     score = Math.round(Math.max(1, Math.min(10, score)));
     let label, color;
@@ -7210,25 +7223,25 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, me
   const restDays = lastWorkoutDate
     ? Math.floor((new Date(today) - new Date(lastWorkoutDate)) / 86400000)
     : 7;
-  if (restDays === 1) { score += 0.5; factors.push("1 día de descanso"); }
-  else if (restDays === 2 || restDays === 3) { score += 1.5; factors.push(`${restDays} días de descanso`); }
-  else if (restDays > 3) { score += 0.5; factors.push("Descanso prolongado"); }
+  if (restDays === 1) { score += 0.5; factors.push({t: "1 día de descanso", s: 1}); }
+  else if (restDays === 2 || restDays === 3) { score += 1.5; factors.push({t: `${restDays} días de descanso`, s: 1}); }
+  else if (restDays > 3) { score += 0.5; factors.push({t: "Descanso prolongado", s: 1}); }
 
   // 2. Hidratación actual
   const hydPct = Math.min(1, (water || 0) / waterGoalGlasses);
-  if (hydPct >= 0.75) { score += 1.5; factors.push("Bien hidratado"); }
-  else if (hydPct >= 0.4) { score += 0.5; factors.push("Hidratación parcial"); }
-  else { score -= 1; factors.push("Hidratación baja"); }
+  if (hydPct >= 0.75) { score += 1.5; factors.push({t: "Bien hidratado", s: 1}); }
+  else if (hydPct >= 0.4) { score += 0.5; factors.push({t: "Hidratación parcial", s: 1}); }
+  else { score -= 1; factors.push({t: "Hidratación baja", s: -1}); }
 
   // 3. Proteína y calorías de ayer
   const yesterday = (() => { const d = new Date(today + "T12:00:00"); d.setDate(d.getDate() - 1); return getLocalDateStr(d); })();
   const yEntries = (foodlog || {})[yesterday] || [];
   const yProt = Math.round(yEntries.reduce((a, e) => a + (+e.proteina || 0), 0));
   const yKcal = Math.round(yEntries.reduce((a, e) => a + (+e.kcal || 0), 0));
-  if (yProt >= 150) { score += 1.5; factors.push(`${yProt}g proteína ayer`); }
-  else if (yProt >= 100) { score += 0.5; factors.push(`${yProt}g prot. ayer`); }
-  else if (yProt > 0 && yProt < 80) { score -= 1; factors.push("Proteína baja ayer"); }
-  else if (yKcal > 0 && yKcal < 1500) { score -= 0.5; factors.push("Calorías bajas ayer"); }
+  if (yProt >= 150) { score += 1.5; factors.push({t: `${yProt}g proteína ayer`, s: 1}); }
+  else if (yProt >= 100) { score += 0.5; factors.push({t: `${yProt}g prot. ayer`, s: 1}); }
+  else if (yProt > 0 && yProt < 80) { score -= 1; factors.push({t: "Proteína baja ayer", s: -1}); }
+  else if (yKcal > 0 && yKcal < 1500) { score -= 0.5; factors.push({t: "Calorías bajas ayer", s: -1}); }
 
   // 4. Recuperación: datos objetivos si los hay (sueño, pasos, FC en reposo);
   //    si no, se cae a las palabras clave de las notas como antes.
@@ -7237,21 +7250,22 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, me
   const recovery = evaluateRecovery((metricslog || {})[today], calcRestingHRBaseline(metricslog));
   if (recovery.hasData) {
     score += recovery.delta;
+    // evaluateRecovery ya devuelve sus factores con la forma {t, s}
     factors.push(...recovery.factors);
   } else {
     const goodSleepKw = ["dormí bien","dormi bien","buen sueño","descansé","descanse","dormi 8","dormí 8"];
     const badSleepKw = ["mal sueño","insomnio","no dormí","no dormi","poco sueño","desvelado","desvelada","dormí poco","dormi poco"];
     const goodSleep = recentNotes.some(n => goodSleepKw.some(k => (n.text||"").toLowerCase().includes(k)));
     const badSleep = recentNotes.some(n => badSleepKw.some(k => (n.text||"").toLowerCase().includes(k)));
-    if (goodSleep) { score += 1; factors.push("Buen sueño reciente"); }
-    else if (badSleep) { score -= 1.5; factors.push("Sueño deficiente"); }
+    if (goodSleep) { score += 1; factors.push({t: "Buen sueño reciente", s: 1}); }
+    else if (badSleep) { score -= 1.5; factors.push({t: "Sueño deficiente", s: -1}); }
   }
 
   // 5. Fatiga acumulada en notas
   const fatigueKw = ["fatiga","cansado","cansada","agotado","agotada","sin energía","sin energia"];
   const fatigueCount = recentNotes.filter(n => fatigueKw.some(k => (n.text||"").toLowerCase().includes(k))).length;
-  if (fatigueCount >= 2) { score -= 2; factors.push("Fatiga acumulada"); }
-  else if (fatigueCount === 1) { score -= 1; factors.push("Algo de fatiga"); }
+  if (fatigueCount >= 2) { score -= 2; factors.push({t: "Fatiga acumulada", s: -1}); }
+  else if (fatigueCount === 1) { score -= 1; factors.push({t: "Algo de fatiga", s: -1}); }
 
   // 6. Volumen semanal (riesgo de sobreentrenamiento)
   const weekStart = getLocalDateStr(new Date(Date.now() - 6 * 86400000));
@@ -7262,8 +7276,8 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, me
       if (d >= weekStart && d < today && s.type !== 'warmup') weekSets++;
     });
   });
-  if (weekSets > 45) { score -= 1.5; factors.push(`Semana muy cargada (${weekSets} series)`); }
-  else if (weekSets > 30) { score -= 0.5; factors.push(`Semana cargada (${weekSets} series)`); }
+  if (weekSets > 45) { score -= 1.5; factors.push({t: `Semana muy cargada (${weekSets} series)`, s: -1}); }
+  else if (weekSets > 30) { score -= 0.5; factors.push({t: `Semana cargada (${weekSets} series)`, s: -1}); }
 
   // 7. Composición corporal: un déficit agresivo degrada la recuperación,
   //    así que la disposición real para entrenar fuerte baja aunque el
@@ -7273,13 +7287,13 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, me
     const trendW = getTrendWeight(metricslog);
     if (wTrend && trendW > 0 && wTrend.kgPerWeek < 0) {
       const lossPct = (Math.abs(wTrend.kgPerWeek) / trendW) * 100;
-      if (lossPct >= 1.5) { score -= 1.5; factors.push(`Bajando ${Math.round(lossPct * 10) / 10}%/sem — recuperación comprometida`); }
-      else if (lossPct >= 1.0) { score -= 0.75; factors.push(`Déficit agresivo (${Math.round(lossPct * 10) / 10}%/sem)`); }
+      if (lossPct >= 1.5) { score -= 1.5; factors.push({t: `Bajando ${Math.round(lossPct * 10) / 10}%/sem — recuperación comprometida`, s: -1}); }
+      else if (lossPct >= 1.0) { score -= 0.75; factors.push({t: `Déficit agresivo (${Math.round(lossPct * 10) / 10}%/sem)`, s: -1}); }
     }
     // 8. Necesidad de descarga acumulada
     const deload = detectDeloadNeed(exlog, notes, metricslog);
-    if (deload.urgency === "high") { score -= 1.5; factors.push("Deload recomendado"); }
-    else if (deload.urgency === "medium") { score -= 0.75; factors.push("Carga acumulada alta"); }
+    if (deload.urgency === "high") { score -= 1.5; factors.push({t: "Deload recomendado", s: -1}); }
+    else if (deload.urgency === "medium") { score -= 0.75; factors.push({t: "Carga acumulada alta", s: -1}); }
   }
 
   score = Math.round(Math.max(1, Math.min(10, score)));
@@ -8103,7 +8117,35 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
             {readiness.mode === "recovery" ? "Recuperación hoy" : "Preparación hoy"}
           </div>
           <div style={{fontSize:13, fontWeight:700, color:C.ink}}>{readiness.label}</div>
-          {readiness.factors.length > 0 && <div style={{fontSize:10.5, color:C.muted, marginTop:2, lineHeight:1.45}}>{readiness.factors.join(" · ")}</div>}
+          {/* Antes eran 7 factores seguidos separados por puntos: ilegible de
+              un vistazo. Ahora se separan los que suman de los que restan y se
+              muestran solo los más relevantes de cada lado. */}
+          {readiness.factors.length > 0 && (() => {
+            const suman = readiness.factors.filter(f => f.s > 0).slice(0, 2);
+            const restan = readiness.factors.filter(f => f.s < 0).slice(0, 2);
+            const neutros = readiness.factors.filter(f => f.s === 0);
+            const ocultos = readiness.factors.length - suman.length - restan.length;
+            return (
+              <div style={{marginTop:4, display:"flex", flexDirection:"column", gap:2}}>
+                {restan.map((f, i) => (
+                  <div key={"r"+i} style={{fontSize:10.5, color:C.amber, display:"flex", gap:5, alignItems:"flex-start"}}>
+                    <span style={{fontWeight:800, flexShrink:0}}>↓</span><span>{f.t}</span>
+                  </div>
+                ))}
+                {suman.map((f, i) => (
+                  <div key={"s"+i} style={{fontSize:10.5, color:C.muted, display:"flex", gap:5, alignItems:"flex-start"}}>
+                    <span style={{fontWeight:800, color:C.lime, flexShrink:0}}>↑</span><span>{f.t}</span>
+                  </div>
+                ))}
+                {(ocultos > 0 || neutros.length > 0) && (
+                  <div style={{fontSize:9.5, color:C.muted, opacity:.7}}
+                    title={readiness.factors.map(f => f.t).join(" · ")}>
+                    +{ocultos} factor{ocultos !== 1 ? "es" : ""} más
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       </div>
 
@@ -8461,10 +8503,10 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
         const PI = Math.PI;
         // Los anillos siguen el objetivo EFECTIVO del día (con carbos ciclados)
         const macros = [
-          { r: 62, sw: 12, color: C.lime,  label: "Kcal",     val: Math.round(totals.kcal), max: effTarget.kcal, unit: "kcal" },
-          { r: 46, sw: 10, color: C.cyan,  label: "Proteína", val: Math.round(totals.p),    max: effTarget.p,    unit: "g" },
-          { r: 30, sw: 10, color: C.amber, label: "Carbos",   val: Math.round(totals.c),    max: effTarget.c,    unit: "g" },
-          { r: 15, sw: 8,  color: C.rose,  label: "Grasas",   val: Math.round(totals.f),    max: effTarget.f,    unit: "g" },
+          { r: 64, sw: 11, color: C.lime,  label: "Kcal",     val: Math.round(totals.kcal), max: effTarget.kcal, unit: "kcal" },
+          { r: 50, sw: 10, color: C.cyan,  label: "Proteína", val: Math.round(totals.p),    max: effTarget.p,    unit: "g" },
+          { r: 37, sw: 10, color: C.amber, label: "Carbos",   val: Math.round(totals.c),    max: effTarget.c,    unit: "g" },
+          { r: 24, sw: 9,  color: C.rose,  label: "Grasas",   val: Math.round(totals.f),    max: effTarget.f,    unit: "g" },
         ];
         const fuelCol = dayFuelTargets?.dayType === "alto" ? C.lime
                       : dayFuelTargets?.dayType === "descanso" ? C.cyan : C.amber;
@@ -8473,19 +8515,28 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
             <svg width={150} height={150} viewBox="0 0 150 150">
               {macros.map(m => {
                 const circ = 2 * PI * m.r;
-                const pct = Math.min(1, m.max > 0 ? m.val / m.max : 0);
+                const bruto = m.max > 0 ? m.val / m.max : 0;
+                const pct = Math.min(1, bruto);
                 const offset = circ - pct * circ;
+                // Excedente: antes pasarse quedaba idéntico a cumplir exacto,
+                // porque el anillo se limitaba al 100%. Ahora el sobrante se
+                // dibuja encima en rojo, hasta media vuelta como tope visual.
+                const exceso = Math.min(0.5, Math.max(0, bruto - 1));
                 return (
                   <g key={m.label} transform="rotate(-90 75 75)">
                     <circle cx={75} cy={75} r={m.r} fill="none" stroke={m.color + "22"} strokeWidth={m.sw}/>
                     <circle cx={75} cy={75} r={m.r} fill="none" stroke={m.color} strokeWidth={m.sw}
                       strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
                       style={{transition:"stroke-dashoffset 0.6s ease"}}/>
+                    {exceso > 0 && (
+                      <circle cx={75} cy={75} r={m.r} fill="none" stroke={C.rose} strokeWidth={m.sw}
+                        strokeDasharray={`${(exceso * circ).toFixed(1)} ${circ}`} strokeLinecap="butt" opacity={0.95}/>
+                    )}
                   </g>
                 );
               })}
-              <text x={75} y={71} textAnchor="middle" style={{fontSize:15, fontWeight:900, fill:C.ink}}>{Math.round(totals.kcal)}</text>
-              <text x={75} y={85} textAnchor="middle" style={{fontSize:10, fill:C.muted}}>/ {effTarget.kcal} kcal</text>
+              <text x={75} y={76} textAnchor="middle" style={{fontSize:15, fontWeight:900, fill: totals.kcal > effTarget.kcal ? C.rose : C.ink}}>{Math.round(totals.kcal)}</text>
+              <text x={75} y={87} textAnchor="middle" style={{fontSize:8, fill:C.muted, letterSpacing:".08em"}}>KCAL</text>
             </svg>
             <div style={{flex:1, display:"flex", flexDirection:"column", gap:7}}>
               {dayFuelTargets && dayFuelTargets.deltaCarbo !== 0 && (
@@ -8498,15 +8549,28 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                 </div>
               )}
               {macros.map(m => {
-                const pct = Math.min(1, m.max > 0 ? m.val / m.max : 0);
+                const bruto = m.max > 0 ? m.val / m.max : 0;
+                const pct = Math.min(1, bruto);
+                const sobra = m.val - m.max;
+                const pasado = sobra > 0;
+                // El tramo excedido se pinta al final de la barra, y la cifra
+                // cambia de color: pasarse y cumplir no deben verse igual.
+                const anchoExceso = pasado ? Math.min(35, (sobra / m.max) * 100) : 0;
                 return (
                   <div key={m.label} style={{display:"flex", flexDirection:"column", gap:2}}>
                     <div style={{display:"flex", justifyContent:"space-between", fontSize:11}}>
                       <span style={{color:m.color, fontWeight:700}}>{m.label}</span>
-                      <span style={{color:C.muted}}>{m.val}<span style={{color:C.muted, fontWeight:400}}>/{m.max}{m.unit}</span></span>
+                      <span style={{color:C.muted}}>
+                        <span style={{color: pasado ? C.rose : C.muted, fontWeight: pasado ? 800 : 400}}>{m.val}</span>
+                        <span style={{color:C.muted, fontWeight:400}}>/{m.max}{m.unit}</span>
+                        {pasado && (
+                          <span style={{color:C.rose, fontWeight:800, marginLeft:4}}>+{Math.round(sobra)}</span>
+                        )}
+                      </span>
                     </div>
-                    <div style={{height:5, background:C.panel2, borderRadius:4, overflow:"hidden"}}>
-                      <div style={{height:"100%", width:(pct*100)+"%", background:m.color, borderRadius:4, transition:"width 0.5s ease"}}/>
+                    <div style={{height:5, background:C.panel2, borderRadius:4, overflow:"hidden", display:"flex"}}>
+                      <div style={{height:"100%", width:(pct*100 - anchoExceso)+"%", background:m.color, transition:"width 0.5s ease"}}/>
+                      {pasado && <div style={{height:"100%", width:anchoExceso+"%", background:C.rose}} title={`${Math.round(sobra)}${m.unit} por encima`}/>}
                     </div>
                   </div>
                 );
@@ -9385,7 +9449,14 @@ function Coach({
         {chat.slice(-4).map((m, i) => (
           <div key={i} style={{position:"relative"}}>
             <div className={`chat-bubble ${m.role === "user" ? "user" : "assistant"}`}>
-              {m.role === "user" ? m.content : <MarkdownText text={m.content}/>}
+              {m.role === "user"
+                // Las consultas que dispara la app sola llevan el prompt técnico
+                // dentro. Se mostraban como si las hubiera escrito el usuario,
+                // que nunca las tecleó: se resumen en una etiqueta.
+                ? (esPromptAutomatico(m.content)
+                    ? <span style={{opacity:.8, fontStyle:"italic"}}>{etiquetaAutomatica(m.content)}</span>
+                    : m.content)
+                : <MarkdownText text={m.content}/>}
             </div>
             {m.role === "assistant" && m.content && m.content.length > 10 && (
               <ShareButton text={m.content}/>

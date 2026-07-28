@@ -1049,7 +1049,9 @@ describe('datos de recuperación', () => {
     const alta = evaluateRecovery({ fcReposo: 70 }, 60); // +10 sobre su media
     const normal = evaluateRecovery({ fcReposo: 60 }, 60);
     expect(alta.delta).toBeLessThan(normal.delta);
-    expect(alta.factors.join(' ')).toMatch(/FC reposo/);
+    // factors son objetos {t, s}: t = texto, s = signo (+1 suma, -1 resta)
+    expect(alta.factors.map(f => f.t).join(' ')).toMatch(/FC reposo/);
+    expect(alta.factors.every(f => typeof f.t === 'string' && [-1, 0, 1].includes(f.s))).toBe(true);
   });
 
   test('muchos pasos penalizan por NEAT acumulado', () => {
