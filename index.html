@@ -162,7 +162,29 @@
         });
       }
 
-      try {
+      // La app avisa cuando React ya montó. Sirve para ocultar el loader y,
+      // además, para saber si el bundle arrancó de verdad o solo se descargó.
+      let arrancada = false;
+      window.addEventListener('load-completed', () => {
+        arrancada = true;
+        loaderDiv.style.opacity = 0;
+        setTimeout(() => loaderDiv.remove(), 300);
+      });
+
+      // ── Camino rápido: bundle precompilado y autocontenido (npm run build).
+      // No necesita Babel ni CDN: la app abre sin conexión y sin compilar nada.
+      function loadBundle() {
+        return new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = './app.bundle.js?v=v2026.06.23-W45';
+          script.onload = resolve;
+          script.onerror = () => reject(new Error('app.bundle.js no disponible'));
+          document.body.appendChild(script);
+        });
+      }
+
+      // ── Camino de respaldo: compilar app.js en el navegador con Babel.
+      async function compileInBrowser() {
         // Fetch app.js source — ?t= busts HF CDN cache; IndexedDB re-uses compiled code if content hash matches
         const res = await fetch('./app.js?t=' + Date.now(), { cache: 'no-store' });
         if (!res.ok) throw new Error("No se pudo cargar el archivo app.js");
@@ -170,24 +192,18 @@
         const hash = await getHash(appCode);
 
         let compiledCode = await getCachedCode(hash);
-        
+
         if (!compiledCode) {
           statusEl.innerText = "Optimizando código de la aplicación (solo primer uso)...";
           await loadBabel();
-          
+
           compiledCode = Babel.transform(appCode, {
             presets: [['react', { runtime: 'classic' }]],
             filename: 'app.js'
           }).code;
-          
+
           await cacheCode(hash, compiledCode);
         }
-
-        // Hide preloader shortly after execution begins
-        window.addEventListener('load-completed', () => {
-          loaderDiv.style.opacity = 0;
-          setTimeout(() => loaderDiv.remove(), 300);
-        });
 
         // Execute transpiled script as a module
         const blob = new Blob([compiledCode], { type: 'application/javascript' });
@@ -196,18 +212,28 @@
         moduleScript.type = 'module';
         moduleScript.src = url;
         document.body.appendChild(moduleScript);
+      }
 
-      } catch (err) {
-        console.error("Error en cargador IndexedDB/Babel:", err);
-        statusEl.innerHTML = `<span style="color:#ff6b8a">Error al iniciar: ${err.message}</span><br>Cargando en modo lento de respaldo...`;
-        
-        // Fallback: load Babel standalone normally and load app.js
-        await loadBabel();
-        const fallbackScript = document.createElement('script');
-        fallbackScript.type = 'text/babel';
-        fallbackScript.setAttribute('data-type', 'module');
-        fallbackScript.src = './app.js';
-        document.body.appendChild(fallbackScript);
+      try {
+        await loadBundle();
+        if (!arrancada) throw new Error('el bundle se cargó pero no montó la app');
+      } catch (errBundle) {
+        console.warn('Sin bundle utilizable, se compila en el navegador:', errBundle.message);
+        statusEl.innerText = "Preparando la aplicación...";
+        try {
+          await compileInBrowser();
+        } catch (err) {
+          console.error("Error en cargador IndexedDB/Babel:", err);
+          statusEl.innerHTML = `<span style="color:#ff6b8a">Error al iniciar: ${err.message}</span><br>Cargando en modo lento de respaldo...`;
+
+          // Fallback: load Babel standalone normally and load app.js
+          await loadBabel();
+          const fallbackScript = document.createElement('script');
+          fallbackScript.type = 'text/babel';
+          fallbackScript.setAttribute('data-type', 'module');
+          fallbackScript.src = './app.js';
+          document.body.appendChild(fallbackScript);
+        }
       }
     })();
   </script>

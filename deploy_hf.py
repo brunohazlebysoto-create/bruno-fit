@@ -5,8 +5,29 @@ from huggingface_hub import HfApi
 TOKEN = os.environ.get("HF_TOKEN") or __import__("secrets_local", fromlist=["HF_TOKEN"]).HF_TOKEN if os.path.exists(os.path.join(os.path.dirname(__file__), "secrets_local.py")) else os.environ.get("HF_TOKEN", "")
 REPO_NAME = "bruno-fit"
 
+def check_bundle():
+    """El navegador ejecuta app.bundle.js, no app.js. Si el bundle quedó atrás,
+    se desplegaría código viejo sin que nada avise: mejor abortar aquí."""
+    import hashlib
+    base = os.path.dirname(os.path.abspath(__file__))
+    src = os.path.join(base, "app.js")
+    bundle = os.path.join(base, "app.bundle.js")
+    if not os.path.exists(bundle):
+        print("Falta app.bundle.js. Ejecutá:  npm run build")
+        sys.exit(1)
+    with open(src, "rb") as f:
+        esperado = hashlib.sha1(f.read()).hexdigest()
+    with open(bundle, "r", encoding="utf-8") as f:
+        cabecera = f.read(400)
+    if "fuente:" + esperado not in cabecera:
+        print("app.bundle.js está desactualizado respecto a app.js. Ejecutá:  npm run build")
+        sys.exit(1)
+    print("Bundle al día con app.js.")
+
+
 def main():
     print("Iniciando despliegue en Hugging Face Spaces...")
+    check_bundle()
     api = HfApi(token=TOKEN)
     
     # 1. Obtener información del usuario
@@ -36,9 +57,11 @@ def main():
         sys.exit(1)
         
     # 3. Subir los archivos de la app
+    # app.bundle.js es el que ejecuta el navegador (generado por `npm run build`).
+    # app.js se sigue subiendo: es el fuente y el respaldo si el bundle falla.
     files_to_upload = [
-        "index.html", "style.css", "app.js", 
-        "manifest.json", "sw.js", 
+        "index.html", "style.css", "app.bundle.js", "app.js",
+        "manifest.json", "sw.js",
         "icon-192.png", "icon-512.png", "README.md"
     ]
     

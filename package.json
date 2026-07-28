@@ -5,6 +5,8 @@
   "main": "app.js",
   "scripts": {
     "test": "jest",
+    "build": "node tools/build.mjs",
+    "verify": "npm run build && node tools/verify-index.mjs",
     "preview": "node tools/preview.mjs --seed --freeze",
     "shots": "npm run preview && node tools/screenshots.mjs",
     "shots:update": "npm run preview && node tools/screenshots.mjs --update"
