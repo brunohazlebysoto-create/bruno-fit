@@ -53,10 +53,18 @@ writeFileSync(
 
 // El CDN de HuggingFace cachea agresivamente: sin cambiar la query, un bundle
 // nuevo puede no llegar nunca al navegador. Se sella con la versión del fuente.
-const htmlPath = resolve(root, "index.html");
-const html = readFileSync(htmlPath, "utf8");
-const htmlNuevo = html.replace(/app\.bundle\.js\?v=[^'"]*/, `app.bundle.js?v=${version}`);
-if (htmlNuevo !== html) writeFileSync(htmlPath, htmlNuevo);
+// Lo mismo con el service worker: su caché se invalida al cambiar de nombre.
+const sellar = (archivo, patron) => {
+  const ruta = resolve(root, archivo);
+  const antes = readFileSync(ruta, "utf8");
+  const despues = antes.replace(patron.busca, patron.pon);
+  if (despues !== antes) { writeFileSync(ruta, despues); return true; }
+  return false;
+};
+const sellados = [
+  sellar("index.html", { busca: /app\.bundle\.js\?v=[^'"]*/, pon: `app.bundle.js?v=${version}` }) && "index.html",
+  sellar("sw.js", { busca: /const VERSION = "[^"]*"/, pon: `const VERSION = "${version}"` }) && "sw.js",
+].filter(Boolean);
 
 const kb = (statSync(salida).size / 1024).toFixed(0);
-console.log(`app.bundle.js generado · ${version} · ${kb} KB${htmlNuevo !== html ? " · index.html sellado" : ""}`);
+console.log(`app.bundle.js generado · ${version} · ${kb} KB${sellados.length ? ` · sellado: ${sellados.join(", ")}` : ""}`);

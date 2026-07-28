@@ -101,7 +101,7 @@
       loaderDiv.id = 'app-preloader';
       loaderDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:#0c0e0b;color:#f3f4ea;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:sans-serif;z-index:999999;transition:opacity 0.3s ease;';
       loaderDiv.innerHTML = `
-        <div style="width:40px;height:40px;border:3px solid rgba(205,255,74,0.1);border-top-color:#cdff4a;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:16px;"></div>
+        <div id="preloader-spin" style="width:40px;height:40px;border:3px solid rgba(205,255,74,0.1);border-top-color:#cdff4a;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:16px;"></div>
         <div style="font-size:16px;font-weight:700;letter-spacing:0.05em;color:#cdff4a;margin-bottom:8px;">BRUNOFIT</div>
         <div id="preloader-status" style="font-size:11px;color:#9aa088;max-width:240px;text-align:center;line-height:1.4;">Iniciando panel...</div>
         <style>@keyframes spin{to{transform:rotate(360deg);}}</style>
@@ -176,7 +176,7 @@
       function loadBundle() {
         return new Promise((resolve, reject) => {
           const script = document.createElement('script');
-          script.src = './app.bundle.js?v=v2026.06.23-W45';
+          script.src = './app.bundle.js?v=v2026.06.23-W46';
           script.onload = resolve;
           script.onerror = () => reject(new Error('app.bundle.js no disponible'));
           document.body.appendChild(script);
@@ -214,6 +214,29 @@
         document.body.appendChild(moduleScript);
       }
 
+      // Si se agotan todos los caminos hay que decirlo con claridad y dejar una
+      // salida. La pantalla roja de "promesa rechazada" es una herramienta de
+      // depuración: al usuario le deja la app muerta y sin nada que hacer.
+      let falloMostrado = false;
+      function mostrarFallo(detalle) {
+        if (falloMostrado || arrancada) return;
+        falloMostrado = true;
+        // Sin esto la ruedita sigue girando y parece que aún carga algo
+        const spin = document.getElementById('preloader-spin');
+        if (spin) spin.style.display = 'none';
+        statusEl.innerHTML =
+          '<div style="color:#ff6b8a;font-size:13px;font-weight:800;margin-bottom:6px">No se pudo cargar la aplicación</div>' +
+          '<div style="color:#9aa088;line-height:1.5">Revisá tu conexión y reintentá. Tus datos están guardados en el teléfono: no se pierde nada.</div>' +
+          '<div style="color:#5c6152;font-size:9px;margin-top:10px;word-break:break-word">' + String(detalle || '').slice(0, 140) + '</div>';
+        const btn = document.createElement('button');
+        btn.textContent = 'Reintentar';
+        btn.style.cssText = 'margin-top:16px;padding:10px 24px;border-radius:10px;border:none;background:#cdff4a;color:#0c0e0b;font-weight:800;font-size:13px;cursor:pointer';
+        btn.onclick = () => location.reload();
+        loaderDiv.appendChild(btn);
+      }
+      // Red de seguridad para cualquier camino que se quede colgado sin fallar
+      setTimeout(() => mostrarFallo('la aplicación no respondió a tiempo'), 25000);
+
       try {
         await loadBundle();
         if (!arrancada) throw new Error('el bundle se cargó pero no montó la app');
@@ -225,14 +248,19 @@
         } catch (err) {
           console.error("Error en cargador IndexedDB/Babel:", err);
           statusEl.innerHTML = `<span style="color:#ff6b8a">Error al iniciar: ${err.message}</span><br>Cargando en modo lento de respaldo...`;
-
-          // Fallback: load Babel standalone normally and load app.js
-          await loadBabel();
-          const fallbackScript = document.createElement('script');
-          fallbackScript.type = 'text/babel';
-          fallbackScript.setAttribute('data-type', 'module');
-          fallbackScript.src = './app.js';
-          document.body.appendChild(fallbackScript);
+          try {
+            // Fallback: load Babel standalone normally and load app.js
+            await loadBabel();
+            const fallbackScript = document.createElement('script');
+            fallbackScript.type = 'text/babel';
+            fallbackScript.setAttribute('data-type', 'module');
+            fallbackScript.src = './app.js';
+            document.body.appendChild(fallbackScript);
+          } catch (errFinal) {
+            // Sin este catch la promesa se escapa y salta la pantalla roja de
+            // "PROMESA RECHAZADA", que no explica nada ni deja reintentar
+            mostrarFallo(errFinal.message || err.message);
+          }
         }
       }
     })();

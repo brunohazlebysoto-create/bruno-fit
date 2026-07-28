@@ -167,6 +167,23 @@ desde esm.sh. Con esos CDN bloqueados o caídos la app simplemente no arrancaba.
   (compara el hash del fuente sellado en la cabecera): servir código viejo en
   silencio sería peor que no desplegar
 
+### Cuando aun así falla (W46)
+
+Con unpkg caído en el móvil, la app mostraba la pantalla roja **PROMESA
+RECHAZADA**: el `await loadBabel()` del último recurso estaba *dentro* del
+`catch`, así que su rechazo no lo capturaba nadie. Y esa pantalla no explica
+nada útil ni deja salida.
+
+- ese último intento va ahora dentro de su propio `try`
+- si se agotan todos los caminos: mensaje claro, aviso de que **los datos siguen
+  guardados en el teléfono** y botón **Reintentar**
+- temporizador de 25 s por si algún camino se cuelga sin llegar a fallar
+- `npm run verify` prueba también **el peor caso** (`--sin-bundle`): sin bundle
+  y sin red, comprueba que sale el aviso con reintento y no la pantalla roja
+- el service worker pasó de no guardar nada a **cachear los archivos propios**
+  (`index.html` red primero para no servir despliegues viejos; el resto caché
+  primero, con la versión en la URL). La app abre sin conexión
+
 ### El orden de la sesión
 
 Saber con cuánta fatiga llegó cada grupo muscular a cada ejercicio depende de en

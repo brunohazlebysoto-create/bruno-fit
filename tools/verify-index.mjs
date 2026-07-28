@@ -50,9 +50,16 @@ function buscarChromium() {
   return undefined;
 }
 
+// Con --sin-bundle se simula el peor caso: no hay bundle y tampoco red para
+// bajar Babel. La app no puede arrancar; lo que se comprueba es que avisa con
+// un mensaje claro y un botón de reintento, no con la pantalla roja de
+// "PROMESA RECHAZADA", que no explica nada ni deja salida.
+const sinBundle = process.argv.includes("--sin-bundle");
+
 const server = createServer(async (req, res) => {
   let ruta = decodeURIComponent(req.url.split("?")[0]);
   if (ruta === "/") ruta = "/index.html";
+  if (sinBundle && ruta === "/app.bundle.js") { res.writeHead(404); res.end("no"); return; }
   const archivo = join(root, normalize(ruta).replace(/^(\.\.[/\\])+/, ""));
   try {
     const buf = await readFile(archivo);
@@ -91,31 +98,42 @@ await page.waitForTimeout(4000);
 const estado = await page.evaluate(() => ({
   preloader: !!document.getElementById("app-preloader"),
   nodos: document.getElementById("root")?.childElementCount ?? 0,
-  pantallaError: document.body.innerText.includes("ERROR CRÍTICO"),
+  pantallaError: /ERROR CRÍTICO|PROMESA RECHAZADA/.test(document.body.innerText),
+  reintentar: [...document.querySelectorAll("button")].some(b => b.textContent === "Reintentar"),
   texto: (document.body.innerText || "").replace(/\s+/g, " ").slice(0, 160),
 }));
 
-const destino = process.argv[2];
+const destino = process.argv.slice(2).find((a) => a.endsWith(".png"));
 if (destino) await page.screenshot({ path: destino });
 
 await browser.close();
 server.close();
 
-// El cargador cae a Babel si el bundle falla; sin red eso también fallaría, así
-// que un arranque correcto aquí demuestra que el bundle hizo su trabajo.
 const fallos = [];
-if (estado.preloader) fallos.push("el preloader sigue visible: la app no montó");
-if (!estado.nodos) fallos.push("#root quedó vacío");
-if (estado.pantallaError) fallos.push("se mostró la pantalla de error crítico");
-// Los errores de red de las fuentes de Google son esperables y no rompen nada
-const relevantes = errores.filter((e) => !/fonts\.(googleapis|gstatic)\.com/.test(e));
-if (relevantes.length) fallos.push(...relevantes);
+
+if (sinBundle) {
+  // Aquí NO puede arrancar: lo correcto es fallar con explicación y salida
+  if (estado.pantallaError) fallos.push("salió la pantalla roja en vez del aviso con reintento");
+  if (!estado.reintentar) fallos.push("no apareció el botón Reintentar");
+} else {
+  // El cargador cae a Babel si el bundle falla; sin red eso también fallaría,
+  // así que un arranque correcto aquí demuestra que el bundle hizo su trabajo.
+  if (estado.preloader) fallos.push("el preloader sigue visible: la app no montó");
+  if (!estado.nodos) fallos.push("#root quedó vacío");
+  if (estado.pantallaError) fallos.push("se mostró la pantalla de error crítico");
+  // Los errores de red de las fuentes de Google son esperables y no rompen nada
+  const relevantes = errores.filter((e) => !/fonts\.(googleapis|gstatic)\.com/.test(e));
+  if (relevantes.length) fallos.push(...relevantes);
+}
 
 if (fallos.length) {
-  console.error("✗ index.html NO arranca correctamente:");
+  console.error(`✗ index.html NO se comporta como debe${sinBundle ? " sin bundle" : ""}:`);
   fallos.forEach((f) => console.error("  · " + f));
   process.exit(1);
 }
-console.log(`✓ index.html arranca sin CDN · ${estado.nodos} nodo(s) en #root`);
-console.log(`  primeras palabras: ${estado.texto}`);
+if (sinBundle) console.log("✓ sin bundle ni red: avisa con un mensaje claro y botón de reintento");
+else {
+  console.log(`✓ index.html arranca sin CDN · ${estado.nodos} nodo(s) en #root`);
+  console.log(`  primeras palabras: ${estado.texto}`);
+}
 if (destino) console.log(`  captura: ${destino}`);
