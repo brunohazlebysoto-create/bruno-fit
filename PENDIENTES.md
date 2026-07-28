@@ -89,3 +89,39 @@ mantiene el comportamiento original.
   alimenta la tendencia, el TDEE y los objetivos.
 - **Histórico de objetivos**: guardar cómo evolucionaron kcal y macros para
   correlacionarlos con los resultados obtenidos.
+
+---
+
+## Revisión de interfaz (W37–W40)
+
+Segunda pasada, esta vez mirando las pantallas una a una en el preview local.
+
+### Errores corregidos
+
+| Error | Impacto |
+|-------|---------|
+| Los mensajes de "sin clave API" mandaban a `gemini.google.com` | Es el chatbot, no donde se sacan las claves: **impedía completar el paso**. Ahora `aistudio.google.com` |
+| "Semana actual vs anterior: 1 días" | Plural incorrecto |
+| El split del día se cruzaba por nombre ("Pectoral" vs "Pecho + Bíceps") | Nunca coincidía; ahora se identifica por cuántos ejercicios del split se hicieron |
+
+### Mejoras aplicadas
+
+| Antes | Ahora |
+|-------|-------|
+| Pasarse del objetivo se veía igual que cumplirlo: barras y anillos topaban al 100% | El excedente se dibuja en rojo y se indica cuánto (`232/199g +33`) |
+| El centro del anillo era ilegible: el texto caía sobre los aros | Radios separados y sin la línea del objetivo, que ya está al lado |
+| El coach mostraba prompts que el usuario nunca escribió | Se resumen en una etiqueta corta |
+| La preparación del día eran 7 factores seguidos | Separados en lo que resta (↓) y lo que suma (↑), los 2 más relevantes de cada lado |
+| Todos los días entrenados eran un punto verde idéntico | Color por split y punto mayor si el volumen fue alto |
+| Las pestañas A/B/C/D/E no decían nada | Llevan el grupo muscular y el color del split |
+| El selector de sensación salía en días sin entreno | Solo cuando hay sesión que valorar |
+| La papelera borraba al instante | Pide confirmación: los datos de peso no se recuperan |
+| El objetivo calórico solo estaba en texto bajo el gráfico | Línea de objetivo sobre las barras + media semanal y días por encima |
+| "Rendimiento este mes" eran diez cuadraditos sin explicar | Barra con el desglose: constancia /4, volumen /3, progreso /3 |
+| Cuatro botones del coach con cuatro colores y sin jerarquía | Uno principal sólido y tres secundarios neutros |
+| "Bien hidratada" | "Buena hidratación" |
+
+### Nota sobre los datos de ejemplo
+El preview sembraba los 8 ejercicios el mismo día, lo cual no ocurre en uso
+real y **ocultó el fallo de detección de split**. Ahora cada sesión usa solo
+los ejercicios de su split y rotan A→B→C→D.
