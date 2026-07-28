@@ -17,3 +17,5 @@ node_modules/
 
 # Preview local generado por tools/preview.mjs (artefacto de build, ~3 MB)
 preview/
+screenshots/actual/
+screenshots/diff/

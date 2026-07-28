@@ -1,0 +1,204 @@
+#!/usr/bin/env node
+/**
+ * Capturas de regresión visual.
+ *
+ * Recorre las vistas clave de la app en el preview local y guarda una imagen
+ * por escena. Comparando contra las de referencia se detecta si un cambio
+ * descolocó algo sin querer — justo lo que los tests unitarios no ven.
+ *
+ *   npm run shots            → captura en screenshots/actual/ y compara
+ *   npm run shots:update     → acepta lo capturado como nueva referencia
+ *
+ * Requiere preview/index.html generado CON --freeze (reloj congelado), o las
+ * capturas cambiarían cada día por la fecha y el saludo por hora.
+ */
+import { chromium } from "playwright";
+import { PNG } from "pngjs";
+import pixelmatch from "pixelmatch";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync, copyFileSync } from "node:fs";
+import { dirname, resolve, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const previewFile = resolve(root, "preview/index.html");
+const dirBase = resolve(root, "screenshots/base");
+const dirActual = resolve(root, "screenshots/actual");
+const dirDiff = resolve(root, "screenshots/diff");
+
+const update = process.argv.includes("--update");
+// Umbral por píxel (0-1): más bajo = más sensible al antialiasing
+const THRESHOLD = 0.12;
+// % de píxeles distintos que se tolera antes de marcar la escena como cambiada
+const MAX_DIFF_PCT = 0.15;
+
+if (!existsSync(previewFile)) {
+  console.error("Falta preview/index.html. Ejecuta: npm run preview");
+  process.exit(1);
+}
+
+/**
+ * Escenas a capturar. `scroll` es el desplazamiento vertical en píxeles;
+ * varias escenas por pestaña permiten cubrir secciones que quedan bajo el pliegue.
+ */
+const ESCENAS = [
+  { id: "hoy-01-cabecera", tab: "Hoy", scroll: 0 },
+  { id: "hoy-02-peso-y-preparacion", tab: "Hoy", scroll: 620 },
+  { id: "hoy-03-macros-y-carbos", tab: "Hoy", scroll: 1150 },
+  { id: "entreno-01-cabecera", tab: "Entreno", scroll: 0 },
+  { id: "entreno-02-calendario", tab: "Entreno", scroll: 900 },
+  { id: "entreno-03-detalle-sesion", tab: "Entreno", scroll: 1700 },
+  { id: "registro-01-peso-y-tendencia", tab: "Registro", scroll: 0 },
+  { id: "registro-02-objetivos", tab: "Registro", scroll: 1150 },
+  { id: "registro-03-composicion", tab: "Registro", scroll: 1900 },
+  { id: "perfil-01", tab: "Perfil", scroll: 0 },
+  { id: "coach-01", tab: "Coach", scroll: 0 },
+];
+
+const leerPNG = (p) => PNG.sync.read(readFileSync(p));
+
+/**
+ * Localiza un Chromium ya instalado. Playwright suele esperar una build
+ * concreta que no tiene por qué coincidir con la del entorno (contenedores,
+ * CI), así que se reutiliza la que haya en vez de descargar otra.
+ * Devuelve undefined para dejar que Playwright decida si no encuentra ninguna.
+ */
+function buscarChromium() {
+  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
+  const raiz = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  if (raiz && existsSync(raiz)) {
+    const candidatos = readdirSync(raiz)
+      .filter((d) => d.startsWith("chromium-"))
+      .sort()
+      .reverse()
+      .map((d) => join(raiz, d, "chrome-linux", "chrome"));
+    const encontrado = candidatos.find((p) => existsSync(p));
+    if (encontrado) return encontrado;
+  }
+  for (const p of ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"]) {
+    if (existsSync(p)) return p;
+  }
+  return undefined;
+}
+
+async function capturar() {
+  [dirActual, dirDiff].forEach((d) => { rmSync(d, { recursive: true, force: true }); mkdirSync(d, { recursive: true }); });
+  mkdirSync(dirBase, { recursive: true });
+
+  const browser = await chromium.launch({ executablePath: buscarChromium() });
+  const page = await browser.newPage({
+    viewport: { width: 420, height: 900 },
+    deviceScaleFactor: 1,          // 1x mantiene las referencias pequeñas
+    timezoneId: "America/Santiago", // zona fija: afecta a fechas mostradas
+    locale: "es-CL",
+    reducedMotion: "reduce",        // sin animaciones a medias en la captura
+  });
+
+  const errores = [];
+  page.on("pageerror", (e) => errores.push(e.message.slice(0, 200)));
+
+  await page.goto("file://" + previewFile, { waitUntil: "load", timeout: 60000 });
+  await page.waitForTimeout(3500); // arranque de la app y carga de estado
+
+  let tabActual = null;
+  for (const esc of ESCENAS) {
+    if (esc.tab !== tabActual) {
+      await page.getByText(esc.tab, { exact: true }).first().click({ timeout: 10000 });
+      await page.waitForTimeout(1200);
+      tabActual = esc.tab;
+    }
+    // Volver arriba del todo antes de posicionar. La app desplaza un contenedor
+    // interno (html/body tienen overflow:hidden), así que window.scrollTo no
+    // sirve: hay que resetear el scrollTop de cualquier elemento desplazado, o
+    // cada escena hereda la posición de la anterior.
+    await page.evaluate(() => {
+      document.querySelectorAll("*").forEach((el) => { if (el.scrollTop > 0) el.scrollTop = 0; });
+      window.scrollTo(0, 0);
+    });
+    await page.waitForTimeout(300);
+    await page.mouse.move(210, 450);
+    if (esc.scroll) await page.mouse.wheel(0, esc.scroll);
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: join(dirActual, esc.id + ".png") });
+  }
+
+  await browser.close();
+  return errores;
+}
+
+function comparar() {
+  const actuales = readdirSync(dirActual).filter((f) => f.endsWith(".png")).sort();
+  const filas = [];
+  let cambiadas = 0, nuevas = 0;
+
+  for (const nombre of actuales) {
+    const pActual = join(dirActual, nombre);
+    const pBase = join(dirBase, nombre);
+    if (!existsSync(pBase)) {
+      filas.push({ nombre, estado: "NUEVA", pct: null });
+      nuevas++;
+      continue;
+    }
+    const a = leerPNG(pActual), b = leerPNG(pBase);
+    if (a.width !== b.width || a.height !== b.height) {
+      filas.push({ nombre, estado: "TAMAÑO", pct: null, detalle: `${b.width}x${b.height} → ${a.width}x${a.height}` });
+      cambiadas++;
+      continue;
+    }
+    const diff = new PNG({ width: a.width, height: a.height });
+    const n = pixelmatch(b.data, a.data, diff.data, a.width, a.height, { threshold: THRESHOLD });
+    const pct = (n / (a.width * a.height)) * 100;
+    if (pct > MAX_DIFF_PCT) {
+      writeFileSync(join(dirDiff, nombre), PNG.sync.write(diff));
+      filas.push({ nombre, estado: "CAMBIADA", pct });
+      cambiadas++;
+    } else {
+      filas.push({ nombre, estado: "igual", pct });
+    }
+  }
+
+  // Referencias que ya no se generan (escena eliminada o renombrada)
+  const huerfanas = readdirSync(dirBase)
+    .filter((f) => f.endsWith(".png") && !actuales.includes(f));
+
+  return { filas, cambiadas, nuevas, huerfanas };
+}
+
+function aceptarComoBase() {
+  mkdirSync(dirBase, { recursive: true });
+  for (const f of readdirSync(dirActual).filter((x) => x.endsWith(".png"))) {
+    copyFileSync(join(dirActual, f), join(dirBase, f));
+  }
+}
+
+// ── Ejecución ──
+const errores = await capturar();
+if (errores.length) {
+  console.log("⚠ errores de la página durante la captura:");
+  [...new Set(errores)].slice(0, 5).forEach((e) => console.log("   " + e));
+}
+
+if (update) {
+  aceptarComoBase();
+  console.log(`Referencias actualizadas: ${readdirSync(dirBase).filter((f) => f.endsWith(".png")).length} escenas en screenshots/base/`);
+  process.exit(0);
+}
+
+const { filas, cambiadas, nuevas, huerfanas } = comparar();
+const ancho = Math.max(...filas.map((f) => f.nombre.length));
+for (const f of filas) {
+  const pct = f.pct == null ? "" : `${f.pct.toFixed(2)}%`;
+  const marca = f.estado === "igual" ? "·" : f.estado === "NUEVA" ? "+" : "✗";
+  console.log(`  ${marca} ${f.nombre.padEnd(ancho)}  ${f.estado.padEnd(9)} ${pct}${f.detalle ? " " + f.detalle : ""}`);
+}
+if (huerfanas.length) console.log(`\n  Referencias sin escena: ${huerfanas.join(", ")}`);
+
+if (cambiadas > 0) {
+  console.log(`\n${cambiadas} escena(s) cambiaron. Diferencias en screenshots/diff/`);
+  console.log("Si el cambio es intencionado: npm run shots:update");
+  process.exit(1);
+}
+if (nuevas > 0) {
+  console.log(`\n${nuevas} escena(s) nuevas sin referencia. Acepta con: npm run shots:update`);
+  process.exit(1);
+}
+console.log(`\n${filas.length} escenas sin cambios visuales.`);

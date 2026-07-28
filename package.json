@@ -5,7 +5,9 @@
   "main": "app.js",
   "scripts": {
     "test": "jest",
-    "preview": "node tools/preview.mjs --seed"
+    "preview": "node tools/preview.mjs --seed --freeze",
+    "shots": "npm run preview && node tools/screenshots.mjs",
+    "shots:update": "npm run preview && node tools/screenshots.mjs --update"
   },
   "repository": {
     "type": "git",
@@ -26,10 +28,13 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "babel-jest": "^30.4.1",
+    "esbuild": "^0.28.1",
     "identity-obj-proxy": "^3.0.0",
     "jest": "^30.4.2",
     "jest-environment-jsdom": "^30.4.1",
-    "esbuild": "^0.28.1"
+    "pixelmatch": "^7.2.0",
+    "playwright": "^1.62.0",
+    "pngjs": "^7.0.0"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.107.0",

@@ -9,8 +9,10 @@
  *
  * No modifica index.html ni app.js: producción sigue igual.
  *
- *   node tools/preview.mjs            → genera preview/index.html
- *   node tools/preview.mjs --seed     → además precarga datos de ejemplo
+ *   node tools/preview.mjs                  → genera preview/index.html
+ *   node tools/preview.mjs --seed           → además precarga datos de ejemplo
+ *   node tools/preview.mjs --seed --freeze  → congela el reloj (capturas
+ *                                             reproducibles, ver tools/screenshots.mjs)
  */
 import { build } from "esbuild";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -22,6 +24,12 @@ const outDir = resolve(root, "preview");
 mkdirSync(outDir, { recursive: true });
 
 const withSeed = process.argv.includes("--seed");
+// Congelar el reloj hace que las capturas de regresión sean comparables: sin
+// esto la fecha, el saludo por hora y los datos sembrados cambian cada día.
+const freeze = process.argv.includes("--freeze");
+const FIXED_ISO = "2026-07-28T09:30:00";
+// Con el reloj congelado, los datos se anclan a esa misma fecha
+const HOY = freeze ? new Date(FIXED_ISO) : new Date();
 
 // ── 1. Empaquetar la app con sus dependencias locales ──
 const result = await build({
@@ -41,6 +49,19 @@ const appBundle = result.outputFiles[0].text;
 // ── 2. Datos de ejemplo (opcional) para ver la app "con vida" ──
 const seedScript = withSeed ? buildSeed() : "";
 
+// Parche de reloj: new Date() y Date.now() devuelven siempre el mismo instante.
+// El resto del comportamiento de Date se mantiene intacto.
+const freezeScript = freeze ? `
+(function () {
+  var FIJO = new Date(${JSON.stringify(FIXED_ISO)}).getTime();
+  var Real = Date;
+  function D(){ return arguments.length === 0 ? new Real(FIJO) : new Real(...arguments); }
+  D.prototype = Real.prototype;
+  D.now = function(){ return FIJO; };
+  D.parse = Real.parse; D.UTC = Real.UTC;
+  window.Date = D;
+})();` : "";
+
 // ── 3. HTML autocontenido: mismo CSS y misma raíz que producción ──
 const css = readFileSync(resolve(root, "style.css"), "utf8");
 const html = `<!DOCTYPE html>
@@ -53,18 +74,18 @@ const html = `<!DOCTYPE html>
 </head>
 <body>
 <div id="root"></div>
-<script>${seedScript}</script>
+<script>${freezeScript}</script>\n<script>${seedScript}</script>
 <script>${appBundle}</script>
 </body>
 </html>`;
 
 writeFileSync(resolve(outDir, "index.html"), html);
-console.log(`preview/index.html generado (${(html.length / 1024 / 1024).toFixed(1)} MB)${withSeed ? " con datos de ejemplo" : ""}`);
+console.log(`preview/index.html generado (${(html.length / 1024 / 1024).toFixed(1)} MB)${withSeed ? " con datos de ejemplo" : ""}${freeze ? ` · reloj fijado en ${FIXED_ISO}` : ""}`);
 
 function buildSeed() {
   const pad = (n) => String(n).padStart(2, "0");
   const key = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  const hoy = new Date();
+  const hoy = new Date(HOY);
   const diasAtras = (n) => { const d = new Date(hoy); d.setDate(d.getDate() - n); return d; };
 
   const metricslog = {}, foodlog = {}, waterlog = {};
