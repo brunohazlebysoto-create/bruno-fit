@@ -16,6 +16,20 @@ jobs:
           fetch-depth: 1
           lfs: false
 
+      # El navegador ejecuta app.bundle.js, no app.js. Si alguien commitea un
+      # cambio sin reconstruir, se desplegaría código viejo sin que nada avise.
+      - name: Comprobar que el bundle está al día
+        run: |
+          python3 - <<'EOF'
+          import hashlib, sys, os
+          if not os.path.exists("app.bundle.js"):
+              sys.exit("Falta app.bundle.js. Ejecutá: npm run build")
+          esperado = hashlib.sha1(open("app.js","rb").read()).hexdigest()
+          if "fuente:" + esperado not in open("app.bundle.js", encoding="utf-8").read(400):
+              sys.exit("app.bundle.js está desfasado de app.js. Ejecutá: npm run build")
+          print("Bundle al día con app.js.")
+          EOF
+
       - name: Install huggingface_hub
         run: pip install huggingface_hub
 
