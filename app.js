@@ -1264,7 +1264,14 @@ function calcNutritionTargets(profile, metrics, opts = {}) {
   // Grasa: % de las kcal, con mínimo hormonal de 0.6 g/kg de peso
   const grasa = Math.max(Math.round(weight * 0.6), Math.round((kcal * goal.fatPctKcal) / 9));
   // Carbohidratos: el resto (mínimo 50 g)
-  const carbo = Math.max(50, Math.round((kcal - proteina * 4 - grasa * 9) / 4));
+  let carbo = Math.max(50, Math.round((kcal - proteina * 4 - grasa * 9) / 4));
+  // El redondeo de los macros a gramos enteros podía dejar el total 1-3 kcal
+  // por debajo del suelo de seguridad; se compensa con carbohidratos para que
+  // la garantía "nunca bajo el BMR ni 1500 kcal" se cumpla siempre.
+  const suelo = Math.max(Math.round(bmr), 1500);
+  if (proteina * 4 + carbo * 4 + grasa * 9 < suelo) {
+    carbo += Math.ceil((suelo - (proteina * 4 + carbo * 4 + grasa * 9)) / 4);
+  }
   // kcal recalculadas para que cuadren exactamente con los macros
   const kcalFinal = proteina * 4 + carbo * 4 + grasa * 9;
   // Fibra: ~14 g por cada 1000 kcal (recomendación estándar), acotada a un
@@ -2462,15 +2469,8 @@ export default function App(){
   
   const [selectedDateStr, setSelectedDateStr] = useState(() => getLocalDateStr(new Date()));
 
-  const getLocalDateFromISO = (isoString) => {
-    try {
-      const d = new Date(isoString);
-      if (isNaN(d.getTime())) return "";
-      return getLocalDateStr(d);
-    } catch (e) {
-      return "";
-    }
-  };
+  // Alias del helper de módulo: había tres copias idénticas de esta función
+  const getLocalDateFromISO = localDateKey;
 
   const getMetricsForDate = (dateStr) => {
     const entries = Object.entries(metricslog || {})
@@ -11646,15 +11646,8 @@ function Entreno({
   const [wkBusy, setWkBusy] = useState(false); 
   const [wk, setWk] = useState("");
 
-  const getLocalDateFromISO = (isoString) => {
-    try {
-      const d = new Date(isoString);
-      if (isNaN(d.getTime())) return "";
-      return getLocalDateStr(d);
-    } catch (e) {
-      return "";
-    }
-  };
+  // Alias del helper de módulo: había tres copias idénticas de esta función
+  const getLocalDateFromISO = localDateKey;
 
   // Removed duplicate getMetricsForDate from Entreno component
 

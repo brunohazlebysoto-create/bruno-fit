@@ -1182,3 +1182,159 @@ describe('fechas locales (regresión de zona horaria)', () => {
     expect(getLocalDateStr(finDeMes)).toBe('2026-07-31');
   });
 });
+
+describe('robustez con datos reales precargados', () => {
+  const seed = (obj) => {
+    Object.entries(obj).forEach(([k, v]) => localStorage.setItem(k, JSON.stringify(v)));
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    localStorage.setItem('onboarding_shown', '1');
+    const rootElement = document.getElementById('root') || document.createElement('div');
+    rootElement.setAttribute('id', 'root');
+    if (!rootElement.parentElement) document.body.appendChild(rootElement);
+    window.HTMLElement.prototype.scrollIntoView = jest.fn();
+  });
+
+  const renderApp = async () => {
+    const originalError = console.error;
+    console.error = jest.fn();
+    const App = require('./app').default;
+    let utils;
+    await act(async () => { utils = render(<App />); });
+    console.error = originalError;
+    return utils;
+  };
+
+  test('arranca sin datos (estado vacío) sin romperse', async () => {
+    await renderApp();
+    expect(screen.getAllByText('Hoy').length).toBeGreaterThan(0);
+  });
+
+  test('una sola medición de peso no rompe la tendencia ni la recomposición', async () => {
+    // Caso límite: series de 1 punto (EMA y regresión necesitan >=2/>=3)
+    seed({ metricslog: { '2026-07-01': { weight: 92, grasaPct: 24, cintura: 95 } } });
+    await renderApp();
+    const regTab = screen.getAllByText('Registro')[0].closest('button');
+    await act(async () => { regTab.click(); });
+    expect(screen.getAllByText('Perfil corporal y objetivos').length).toBeGreaterThan(0);
+  });
+
+  test('histórico completo de peso y entrenos renderiza todas las pestañas', async () => {
+    const metricslog = {};
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(2026, 5, 1 + i);
+      const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      metricslog[k] = { weight: 95 - i * 0.15, grasaPct: 26 - i * 0.1, cintura: 98 - i * 0.1, fcReposo: 58 + (i % 5), suenoHoras: 7 + (i % 3) * 0.5 };
+    }
+    const exlog = { 'Press banca': [], 'Sentadilla': [] };
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(2026, 5, 1 + i * 2, 10, 0, 0);
+      exlog['Press banca'].push({ date: d.toISOString(), w: 80 + i, reps: 6, rir: 2, type: 'work' });
+      exlog['Sentadilla'].push({ date: d.toISOString(), w: 110 + i, reps: 5, rir: 1, type: 'work' });
+    }
+    const foodlog = {};
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(2026, 5, 1 + i);
+      const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      foodlog[k] = [{ kcal: 2600, proteina: 200, carbo: 250, grasa: 70 }];
+    }
+    seed({ metricslog, exlog, foodlog });
+
+    await renderApp();
+    // Recorre todas las pestañas con datos cargados
+    for (const tab of ['Entreno', 'Registro', 'Perfil', 'Coach', 'Hoy']) {
+      const btn = screen.getAllByText(tab)[0].closest('button');
+      await act(async () => { btn.click(); });
+    }
+    expect(screen.getAllByText('Hoy').length).toBeGreaterThan(0);
+  });
+
+  test('datos corruptos o parciales no tumban la app', async () => {
+    seed({
+      metricslog: {
+        '2026-07-01': { weight: 'no-es-un-numero' },
+        '2026-07-02': { weight: null },
+        '2026-07-03': {},
+        '2026-07-04': { weight: 90, grasaPct: 'x' },
+      },
+      exlog: {
+        'Press banca': [
+          { date: 'fecha-invalida', w: 80, reps: 6 },
+          { date: '2026-07-04T10:00:00', w: null, reps: null },
+          { date: '2026-07-05T10:00:00', w: 80, reps: 6, type: 'work' },
+        ],
+        'Vacío': [],
+      },
+      foodlog: { '2026-07-01': [{ kcal: 'abc' }] },
+    });
+    await renderApp();
+    const regTab = screen.getAllByText('Registro')[0].closest('button');
+    await act(async () => { regTab.click(); });
+    const entTab = screen.getAllByText('Entreno')[0].closest('button');
+    await act(async () => { entTab.click(); });
+    expect(screen.getByText('ENTRENAMIENTO · SPLIT')).toBeInTheDocument();
+  });
+});
+
+describe('invariantes de los cálculos (barrido amplio)', () => {
+  const { calcCarbCycleTargets, calcNutritionTargets, DEFAULT_BODY_PROFILE, GOAL_PRESETS } = require('./app.js');
+
+  test('el carb cycling conserva la media semanal en cualquier configuración', () => {
+    const fallos = [];
+    const bases = [
+      { kcal: 2000, p: 160, c: 180, f: 60 },
+      { kcal: 2600, p: 200, c: 265, f: 70 },
+      { kcal: 3400, p: 200, c: 450, f: 90 },
+    ];
+    for (const base of bases) {
+      for (let nTrain = 1; nTrain <= 7; nTrain++) {
+        for (let nAlto = 0; nAlto <= nTrain; nAlto++) {
+          for (const restCut of [0, 0.15, 0.25, 0.4]) {
+            const nRest = 7 - nTrain, nMedio = nTrain - nAlto;
+            const o = { trainingDaysPerWeek: nTrain, altoDaysPerWeek: nAlto, restCutPct: restCut };
+            const alto = calcCarbCycleTargets(base, { ...o, dayType: 'alto' });
+            const medio = calcCarbCycleTargets(base, { ...o, dayType: 'medio' });
+            const rest = calcCarbCycleTargets(base, { ...o, dayType: 'descanso' });
+            const semana = alto.c * nAlto + medio.c * nMedio + rest.c * nRest;
+            const desv = Math.abs(semana - base.c * 7) / (base.c * 7);
+            if (desv > 0.02) fallos.push(`c=${base.c} nTrain=${nTrain} nAlto=${nAlto} cut=${restCut} desv=${(desv * 100).toFixed(1)}%`);
+          }
+        }
+      }
+    }
+    expect(fallos).toEqual([]);
+  });
+
+  test('los objetivos nutricionales cumplen sus invariantes en todo el rango', () => {
+    const fallos = [];
+    for (const sexo of ['hombre', 'mujer']) {
+      for (const objetivo of Object.keys(GOAL_PRESETS)) {
+        for (const weight of [50, 70, 90, 120, 150]) {
+          for (const grasaPct of [0, 8, 15, 25, 40]) {
+            for (const ritmo of [-1.5, -0.5, 0, 0.5]) {
+              for (const edad of [18, 34, 70]) {
+                const t = calcNutritionTargets(
+                  { ...DEFAULT_BODY_PROFILE, sexo, objetivo, ritmoKgSemana: ritmo, edad },
+                  { weight, grasaPct }
+                );
+                if (!t) { fallos.push(`sin resultado: ${weight}kg`); continue; }
+                const id = `${sexo}/${objetivo}/${weight}kg/${grasaPct}%/${ritmo}/${edad}a`;
+                // Las kcal siempre cuadran exactamente con los macros
+                if (t.kcal !== t.p * 4 + t.c * 4 + t.f * 9) fallos.push(`kcal no cuadra: ${id}`);
+                // Nunca por debajo del suelo de seguridad
+                if (t.kcal < 1500) fallos.push(`bajo el mínimo: ${id} → ${t.kcal}`);
+                // Todos los macros positivos y finitos
+                for (const k of ['p', 'c', 'f', 'fibra', 'bmr', 'tdee']) {
+                  if (!Number.isFinite(t[k]) || t[k] <= 0) fallos.push(`${k} inválido: ${id} → ${t[k]}`);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(fallos.slice(0, 10)).toEqual([]);
+  });
+});
