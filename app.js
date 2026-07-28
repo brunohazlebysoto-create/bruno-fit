@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W34";
+const APP_VERSION = "v2026.06.23-W35";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -577,6 +577,57 @@ function compressImageToDataUrl(file, maxW = 800, quality = 0.82) {
   });
 }
 
+/**
+ * HTML de la ventana de espera de los PDF con IA, con cronómetro en vivo.
+ * Un cartel estático durante 40 s parece que la app se colgó y el usuario
+ * cierra la ventana; ver el tiempo correr evita esa falsa alarma.
+ */
+function htmlEsperaIA(titulo, subtitulo, color = "#cdff4a") {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="background:#0c0e0b;color:${color};font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center">
+  <div>
+    <div style="width:38px;height:38px;border:3px solid rgba(255,255,255,.12);border-top-color:${color};border-radius:50%;animation:g 1s linear infinite;margin:0 auto 16px"></div>
+    <p style="font-size:19px;margin:0 0 6px">${titulo}</p>
+    <p style="font-size:13px;color:#9aa088;margin:0">${subtitulo}</p>
+    <p id="t" style="font-size:12px;color:#6b7280;margin-top:12px">0 s</p>
+    <p id="avi" style="font-size:11.5px;color:#6b7280;margin-top:6px;max-width:260px"></p>
+  </div>
+  <style>@keyframes g{to{transform:rotate(360deg)}}</style>
+  <script>
+    var s=0, el=document.getElementById('t'), avi=document.getElementById('avi');
+    setInterval(function(){
+      s++; el.textContent = s + ' s';
+      if (s === 25) avi.textContent = 'Sigue en curso. Los modelos gratuitos suelen tardar más.';
+      if (s === 60) avi.textContent = 'Está tardando de más. Si no responde, prueba con otro modelo en Perfil → Ajustes.';
+    }, 1000);
+  <\/script>
+</body></html>`;
+}
+
+/**
+ * fetch con límite de tiempo. Sin esto, una clave lenta o colgada bloquea la
+ * petición indefinidamente y, como las claves se prueban EN SERIE, el usuario
+ * puede esperar minutos antes de ver un resultado o un error.
+ */
+async function fetchConTimeout(url, opciones, ms) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...opciones, signal: ctrl.signal });
+  } catch (e) {
+    if (e.name === "AbortError") {
+      throw new Error(`Sin respuesta en ${Math.round(ms / 1000)} s`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// Márgenes de espera: las peticiones con imagen/PDF tardan legítimamente más
+const TIMEOUT_TEXTO_MS = 45000;
+const TIMEOUT_MEDIA_MS = 90000;
+
 async function callGemini(messages, systemInstruction, responseSchema = null, options = {}) {
   let apiKeysStr = await loadKey("gemini_api_key", "");
   
@@ -618,6 +669,9 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
   }
 
   let lastError = null;
+  // Las llamadas con imagen o PDF necesitan más margen que las de solo texto
+  const llevaMedia = messages.some(m => Array.isArray(m.content) && m.content.some(p => p.type === "image"));
+  const timeoutMs = options.timeoutMs || (llevaMedia ? TIMEOUT_MEDIA_MS : TIMEOUT_TEXTO_MS);
 
   for (let idx = 0; idx < orderedKeys.length; idx++) {
     const apiKey = orderedKeys[idx];
@@ -665,7 +719,10 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
         const body = {
           model: model,
           messages: formattedMessages,
-          temperature: 0.2
+          temperature: 0.2,
+          // Techo de generación: evita respuestas desbocadas que multiplican la
+          // espera. Con esquema se deja amplio porque truncar rompe el JSON.
+          max_tokens: options.maxTokens || (responseSchema ? 8192 : 2048)
         };
 
         if (responseSchema) {
@@ -677,7 +734,7 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
           });
         }
 
-        const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        const res = await fetchConTimeout("https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -686,7 +743,7 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
             "X-Title": "Centro de Mando Fitness"
           },
           body: JSON.stringify(body)
-        });
+        }, timeoutMs);
 
         if (!res.ok) {
           const errorData = await res.json().catch(() => ({}));
@@ -724,7 +781,8 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${nativeModel}:generateContent?key=${apiKey}`;
         
         const generationConfig = {
-          temperature: 0.2
+          temperature: 0.2,
+          maxOutputTokens: options.maxTokens || (responseSchema ? 8192 : 2048)
         };
         
         if (responseSchema) {
@@ -748,11 +806,11 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
           body.safetySettings = options.safetySettings;
         }
 
-        const res = await fetch(url, {
+        const res = await fetchConTimeout(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body)
-        });
+        }, timeoutMs);
 
         if (!res.ok) {
           const errorData = await res.json().catch(() => ({}));
@@ -5061,7 +5119,7 @@ No repitas los datos que ya te mandé. No me pidas registrar nada.`;
     if (pdfBusy) return;
     setPdfBusy(true);
     const w = window.open('', '_blank');
-    if (w) w.document.write('<html><body style="background:#0c0e0b;color:#cdff4a;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center"><div><p style="font-size:22px;margin-bottom:8px">⏳ Generando reporte…</p><p style="font-size:13px;color:#9aa088">Analizando 8 semanas de entrenamiento con IA</p><p style="font-size:12px;color:#666;margin-top:10px;">Esto puede tardar 30–60 segundos ☕</p></div></body></html>');
+    if (w) w.document.write(htmlEsperaIA("Generando reporte…", "Analizando 8 semanas de entrenamiento"));
     try {
       const last7 = [...Array(7)].map((_,i)=>{ const d=new Date(); d.setDate(d.getDate()-i); return getLocalDateStr(d); }).reverse();
       const weekStart = last7[0], weekEnd = last7[6];
@@ -5204,16 +5262,18 @@ ${overloadStr||'Sin sugerencias disponibles'}
 NECESIDAD DE DELOAD: ${deload.recommended?`SÍ — urgencia ${deload.urgency} (${deload.reason})`:'No detectada'} · Semanas sin deload: ${deload.weeksSinceDeload}
 
 INSTRUCCIONES PARA EL ANÁLISIS:
-1. "valoracion": puntúa la semana del 1 al 10 con un resumen de una línea.
-2. "analisis": 3 párrafos detallados — (a) análisis global de volumen e intensidad, (b) qué ejercicios evolucionaron bien y cuáles no según tendencia 1RM, (c) balance muscular push/pull/piernas con datos de series.
-3. "progresion": párrafo específico sobre tendencia de 1RM estimado por ejercicio clave, si la sobrecarga es correcta según el historial de 8 semanas.
-4. "recuperacion": evaluación del estado de fatiga, si necesita deload, calidad del volumen (demasiado/poco).
-5. "fortalezas": mínimo 4 puntos concretos con datos reales (cita ejercicios, pesos, 1RM).
-6. "mejorar": mínimo 4 puntos cada uno con una acción concreta y accionable.
-7. "cargas": para CADA ejercicio realizado esta semana, da la carga actual, la sugerencia concreta en kg para la próxima sesión basada en la tendencia de 1RM, el esquema recomendado (ej. "4×6" o "3×10-12") y el razonamiento técnico.
-8. "variaciones": para cada ejercicio en ESTANCAMIENTOS DETECTADOS, propón 1 variación específica (nombre exacto del ejercicio alternativo) y el motivo técnico.
-9. "planProximaSemana": lista de 5-7 prioridades concretas para la próxima semana, ordenadas por impacto.
-10. "focoProximaSemana": UN párrafo claro de foco principal.`;
+Sé DENSO y CONCRETO: cita cifras reales y evita rodeos, adjetivos y frases de relleno.
+Respeta los límites de longitud — un informe largo no es mejor, y tarda más en llegar.
+1. "valoracion": puntúa la semana del 1 al 10 con un resumen de UNA línea (máx 20 palabras).
+2. "analisis": 3 párrafos de máx 45 palabras cada uno — (a) volumen e intensidad, (b) qué ejercicios evolucionaron bien y cuáles no según tendencia 1RM, (c) balance push/pull/piernas con datos de series.
+3. "progresion": UN párrafo de máx 60 palabras sobre la tendencia de 1RM por ejercicio clave y si la sobrecarga es correcta.
+4. "recuperacion": máx 45 palabras — fatiga, necesidad de deload y si el volumen es excesivo o escaso.
+5. "fortalezas": EXACTAMENTE 4 puntos, máx 15 palabras cada uno, citando ejercicio y cifra real.
+6. "mejorar": EXACTAMENTE 4 puntos, cada uno con su acción concreta (máx 15 palabras por campo).
+7. "cargas": SOLO los 8 ejercicios más relevantes de la semana (los de más volumen o con cambio de tendencia). Por cada uno: carga actual, sugerencia en kg para la próxima sesión, esquema (ej. "4×6") y razón en máx 12 palabras.
+8. "variaciones": solo para los ejercicios de ESTANCAMIENTOS DETECTADOS, máx 3. Nombre exacto de la alternativa y motivo en máx 12 palabras.
+9. "planProximaSemana": 5 prioridades, máx 14 palabras cada una, ordenadas por impacto.
+10. "focoProximaSemana": UNA frase de máx 25 palabras.`;
 
       const raw = await callGemini([{role:"user",content:userMsg}], sys, PDF_SCHEMA);
       const ai = cleanAndParseJSON(raw) || {};
@@ -11733,7 +11793,7 @@ function Entreno({
     // Abrir ventana dentro del gesto del click (evita bloqueo de pop-ups en móvil)
     const win = window.open("", "_blank");
     if (win && useAI) {
-      try { win.document.write('<!DOCTYPE html><html><body style="background:#0c0e0b;color:#16a34a;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center"><div><p style="font-size:20px">⏳ El coach está analizando tu sesión…</p><p style="font-size:13px;color:#9aa088">Generando el análisis con IA · 10-30 seg ☕</p></div></body></html>'); } catch (_) {}
+      try { win.document.write(htmlEsperaIA("El coach analiza tu sesión…", "Generando el análisis con IA", "#16a34a")); } catch (_) {}
     }
 
     const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -12179,7 +12239,7 @@ tr:last-child td{border-bottom:none}
     // Abrir la ventana AHORA (dentro del gesto del click) para que móvil no la
     // bloquee; el window.open tras el await de 30-60s sí es bloqueado silenciosamente
     const win = window.open("", "_blank");
-    if (win) { try { win.document.write('<!DOCTYPE html><html><body style="background:#0c0e0b;color:#cdff4a;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center"><div><p style="font-size:20px">⏳ Generando plan con IA…</p><p style="font-size:13px;color:#9aa088">Analizando tu historial · 30-60 seg ☕</p></div></body></html>'); } catch(_){} }
+    if (win) { try { win.document.write(htmlEsperaIA("Generando plan con IA…", "Analizando tu historial de entrenamiento")); } catch(_){} }
     try {
       const allSplits = splits || DEFAULT_SPLITS;
       const dayObj = allSplits.find(d => d.key === splitKey) || allSplits[0];
