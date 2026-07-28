@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W28";
+const APP_VERSION = "v2026.06.23-W29";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1784,7 +1784,7 @@ function calcCarbCycleTargets(base, opts = {}) {
   const baseKcal = p * 4 + Math.round(baseC) * 4 + f * 9;
   return {
     kcal, p, c, f, dayType,
-    label: dayType === "alto" ? "Carbo alto" : dayType === "medio" ? "Carbo medio" : "Carbo bajo (descanso)",
+    label: dayType === "alto" ? "Carbo alto" : dayType === "medio" ? "Carbo medio" : "Carbo bajo",
     deltaKcal: kcal - baseKcal,
     deltaCarbo: c - Math.round(baseC),
   };
@@ -8652,7 +8652,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                 }}
               >
                 <div style={{ width: "100%", height: 100, position: "relative", overflow: "hidden" }}>
-                  <img src={suggestionImg} alt={s.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="lazy" />
+                  <img src={suggestionImg} alt={s.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="lazy" onError={e => { e.currentTarget.style.display = "none"; }} />
                   {s._custom && (
                     <div style={{position:"absolute", top:8, left:8, background:C.lime, color:"#0c0e0b", fontSize:9, fontWeight:900, padding:"2px 6px", borderRadius:99, letterSpacing:".06em"}}>
                       TUYA
@@ -8881,7 +8881,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                   <div key={"c"+idx} style={{display:"flex", gap:10, alignItems:"center", background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:10}}>
                     <div style={{width:54, height:54, borderRadius:10, overflow:"hidden", flexShrink:0, background:C.panel2, display:"flex", alignItems:"center", justifyContent:"center"}}>
                       {s.img
-                        ? <img src={s.img} alt={s.name} style={{width:"100%", height:"100%", objectFit:"cover"}} loading="lazy"/>
+                        ? <img src={s.img} alt={s.name} style={{width:"100%", height:"100%", objectFit:"cover"}} loading="lazy" onError={e => { e.currentTarget.style.display = "none"; }}/>
                         : <Utensils size={20} color={C.muted}/>}
                     </div>
                     <div style={{flex:1, minWidth:0}}>
@@ -8926,7 +8926,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                 {SUGGESTIONS.map((s, idx) => (
                   <div key={"d"+idx} style={{display:"flex", gap:10, alignItems:"center", background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:10}}>
                     <div style={{width:54, height:54, borderRadius:10, overflow:"hidden", flexShrink:0}}>
-                      <img src={s.img} alt={s.name} style={{width:"100%", height:"100%", objectFit:"cover"}} loading="lazy"/>
+                      <img src={s.img} alt={s.name} style={{width:"100%", height:"100%", objectFit:"cover"}} loading="lazy" onError={e => { e.currentTarget.style.display = "none"; }}/>
                     </div>
                     <div style={{flex:1, minWidth:0}}>
                       <div style={{fontSize:13, fontWeight:700, color:C.ink, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{s.name}</div>
@@ -16290,7 +16290,25 @@ function Registro({
     setNotes(next); 
   };
 
-  const weights = notes.filter(n => n.type === "peso" && n.weight).slice().reverse();
+  // Serie de peso para el gráfico y la tendencia. La fuente de verdad es
+  // metricslog: el registro rápido desde Hoy y la restauración desde la nube
+  // escriben ahí sin crear notas, así que derivarla solo de las notas dejaba
+  // el gráfico y la tendencia vacíos aunque hubiera decenas de mediciones.
+  // Las notas antiguas se siguen usando como respaldo y para completar huecos.
+  const weights = useMemo(() => {
+    const porFecha = {};
+    (notes || []).forEach(n => {
+      if (n?.type === "peso" && n.weight && n.date) {
+        const k = localDateKey(n.date);
+        if (k) porFecha[k] = { date: n.date, weight: parseFloat(n.weight) };
+      }
+    });
+    Object.keys(metricslog || {}).forEach(d => {
+      const w = parseFloat(metricslog[d]?.weight);
+      if (w > 0) porFecha[d] = { date: d + "T12:00:00", weight: w };
+    });
+    return Object.keys(porFecha).sort().map(k => porFecha[k]);
+  }, [notes, metricslog]);
   const lastW = activeMetrics.weight;
   const goalW = parseFloat(bodyProfile?.pesoObjetivo) || GOAL_W;
   const startW = parseFloat(bodyProfile?.pesoInicial) || (weights.length ? weights[0].weight : START_W);
@@ -17137,19 +17155,28 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         if (!rec.available) return null;
         const pts = rec.points;
         // Gráfico: peso, masa magra y grasa en kg sobre el mismo eje temporal
-        const W = 300, H = 96, pad = 6;
+        // Cada serie se dibuja en su PROPIA franja y con su PROPIA escala.
+        // Compartir un eje entre peso (~92 kg), magra (~70) y grasa (~22) hacía
+        // que un cambio real de 3 kg ocupara 4 px: las tres líneas salían planas
+        // y el gráfico no informaba de nada.
+        const W = 300, ROW_H = 30, pad = 4;
         const series = [
-          { key: "peso", color: C.ink, label: "Peso" },
-          { key: "magra", color: C.lime, label: "Masa magra" },
-          { key: "grasaKg", color: C.amber, label: "Grasa" },
-        ].filter(s => pts.some(p => p[s.key] != null));
-        const allVals = series.flatMap(s => pts.map(p => p[s.key]).filter(v => v != null));
-        const min = Math.min(...allVals), max = Math.max(...allVals);
-        const range = (max - min) || 1;
+          { key: "peso", color: C.ink, label: "Peso", unidad: "kg" },
+          { key: "magra", color: C.lime, label: "Masa magra", unidad: "kg" },
+          { key: "grasaKg", color: C.amber, label: "Grasa", unidad: "kg" },
+          { key: "cintura", color: C.cyan, label: "Cintura", unidad: "cm" },
+        ].filter(s => pts.filter(p => p[s.key] != null).length >= 2);
         const xAt = (i) => pad + (i * (W - 2 * pad)) / Math.max(1, pts.length - 1);
-        const yAt = (v) => H - pad - ((v - min) / range) * (H - 2 * pad);
-        const pathOf = (key) => pts.map((p, i) => p[key] == null ? null : `${xAt(i).toFixed(1)},${yAt(p[key]).toFixed(1)}`)
-          .filter(Boolean).map((c, i) => `${i === 0 ? "M" : "L"}${c}`).join(" ");
+        // Devuelve el trazo y los extremos de una serie, escalada a su franja
+        const serieInfo = (key) => {
+          const vals = pts.map(p => p[key]).filter(v => v != null);
+          const min = Math.min(...vals), max = Math.max(...vals);
+          const range = (max - min) || 1;
+          const yAt = (v) => ROW_H - pad - ((v - min) / range) * (ROW_H - 2 * pad);
+          const d = pts.map((p, i) => p[key] == null ? null : `${xAt(i).toFixed(1)},${yAt(p[key]).toFixed(1)}`)
+            .filter(Boolean).map((c, i) => `${i === 0 ? "M" : "L"}${c}`).join(" ");
+          return { d, min, max, primero: vals[0], ultimo: vals[vals.length - 1] };
+        };
 
         const deltaChip = (label, val, unit, mejorSiBaja) => {
           if (val == null) return null;
@@ -17169,7 +17196,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               <Activity size={15} color={C.lime}/> Recomposición corporal
             </div>
             <div style={{fontSize:10.5, color:C.muted, marginBottom:10, lineHeight:1.45}}>
-              Peso suavizado, masa magra y grasa en una sola línea. Perder grasa manteniendo la masa magra es el objetivo real — la báscula sola no lo distingue.
+              Perder grasa manteniendo la masa magra es el objetivo real, y la báscula sola no lo distingue.
             </div>
 
             {rec.recomposing && (
@@ -17178,21 +17205,28 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               </div>
             )}
 
-            <div style={{overflowX:"auto", marginBottom:8}}>
-              <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{display:"block", maxWidth:"100%"}}>
-                {series.map(s => (
-                  <path key={s.key} d={pathOf(s.key)} fill="none" stroke={s.color} strokeWidth={1.8}
-                    strokeLinejoin="round" strokeLinecap="round" opacity={s.key === "peso" ? 0.55 : 1}/>
-                ))}
-              </svg>
+            <div style={{marginBottom:10, display:"flex", flexDirection:"column", gap:2}}>
+              {series.map(s => {
+                const info = serieInfo(s.key);
+                const sube = info.ultimo > info.primero;
+                return (
+                  <div key={s.key} style={{display:"flex", alignItems:"center", gap:8}}>
+                    <span style={{fontSize:10, fontWeight:700, color:C.muted, width:74, flexShrink:0}}>{s.label}</span>
+                    <svg width={W} height={ROW_H} viewBox={`0 0 ${W} ${ROW_H}`} preserveAspectRatio="none"
+                      style={{flex:1, minWidth:0, height:ROW_H}}>
+                      <path d={info.d} fill="none" stroke={s.color} strokeWidth={1.6}
+                        strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"/>
+                    </svg>
+                    <span style={{fontSize:9.5, color:C.muted, width:78, flexShrink:0, textAlign:"right"}}>
+                      {info.primero.toFixed(1)}<span style={{opacity:.6}}>→</span>
+                      <b style={{color: sube ? C.ink : s.color}}>{info.ultimo.toFixed(1)}</b> {s.unidad}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
-            <div style={{display:"flex", gap:10, flexWrap:"wrap", marginBottom:10}}>
-              {series.map(s => (
-                <span key={s.key} style={{display:"inline-flex", alignItems:"center", gap:4, fontSize:10, color:C.muted, fontWeight:700}}>
-                  <span style={{width:9, height:2.5, background:s.color, borderRadius:2, display:"inline-block"}}/>
-                  {s.label}
-                </span>
-              ))}
+            <div style={{fontSize:9, color:C.muted, marginBottom:10, opacity:.75}}>
+              Cada línea usa su propia escala para que se vea su tendencia, no su magnitud.
             </div>
 
             <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
@@ -17230,10 +17264,17 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         const subcutFat = fatKg * 0.82;
 
         // Porcentajes barra segmentada
-        const pMusc = Math.round(M / W * 100);
-        const pAgua = Math.round(waterEst / W * 100);
+        // Descomposición del peso en partes que NO se solapan y suman 100%.
+        // Antes se mezclaban músculo, agua y grasa como si fueran excluyentes,
+        // pero el agua está DENTRO de la masa magra: los porcentajes sumaban
+        // ~150% y los segmentos desbordaban la barra.
+        // Reparto: grasa + (agua + hueso + resto magro seco) = peso total.
+        const restoMagro = Math.max(0, leanKg - waterEst - boneEst);
         const pGras = Math.round(fatKg / W * 100);
-        const pHues = Math.max(0, 100 - pMusc - pAgua - pGras);
+        const pAgua = Math.round(waterEst / W * 100);
+        const pHues = Math.round(boneEst / W * 100);
+        // El resto absorbe el redondeo para que el total sea exactamente 100
+        const pMusc = Math.max(0, 100 - pGras - pAgua - pHues);
 
         // Puntuación corporal (25 pts cada dimensión)
         const sBmi  = bmi>=18.5&&bmi<25?25:bmi<27?17:bmi<30?10:5;
@@ -17340,8 +17381,8 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                 <div style={{width:`${pHues}%`, background:C.line}} title="Hueso"/>
               </div>
               <div style={{display:"flex", gap:8, fontSize:9, color:C.muted, marginTop:5, flexWrap:"wrap"}}>
-                <span><span style={{color:C.lime}}>■</span> Músculo {pMusc}%</span>
-                <span><span style={{color:C.cyan}}>■</span> Agua {pAgua}%</span>
+                <span title="Masa magra sin agua ni hueso (músculo, órganos, proteína)"><span style={{color:C.lime}}>■</span> Magro seco {pMusc}%</span>
+                <span title="Agua corporal, contenida en la masa magra"><span style={{color:C.cyan}}>■</span> Agua {pAgua}%</span>
                 <span><span style={{color:G>25?C.rose:C.amber}}>■</span> Grasa {pGras}%</span>
                 <span><span style={{color:C.muted}}>■</span> Hueso ~{pHues}%</span>
               </div>

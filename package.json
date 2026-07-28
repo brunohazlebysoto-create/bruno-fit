@@ -4,7 +4,8 @@
   "description": "",
   "main": "app.js",
   "scripts": {
-    "test": "jest"
+    "test": "jest",
+    "preview": "node tools/preview.mjs --seed"
   },
   "repository": {
     "type": "git",
@@ -27,7 +28,8 @@
     "babel-jest": "^30.4.1",
     "identity-obj-proxy": "^3.0.0",
     "jest": "^30.4.2",
-    "jest-environment-jsdom": "^30.4.1"
+    "jest-environment-jsdom": "^30.4.1",
+    "esbuild": "^0.28.1"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.107.0",
