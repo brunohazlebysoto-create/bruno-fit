@@ -13769,9 +13769,9 @@ tr:last-child td{border-bottom:none}
                     const cd = isOpen ? chartData(exName) : null;
                     return (
                       <div key={exName} style={{background:C.panel2, border:`1px solid ${isOpen ? C.lime : C.line}`, borderRadius:13, marginBottom:4, overflow:"hidden", position:"relative"}}>
-                        <div style={{display:"flex", alignItems:"center"}}>
+                        <div style={{display:"flex", alignItems:"flex-start"}}>
                           {orden.length > 1 && (
-                            <div style={{display:"flex", flexDirection:"column", gap:3, paddingLeft:8}}>
+                            <div style={{display:"flex", flexDirection:"column", gap:3, paddingLeft:8, paddingTop:13}}>
                               <button onClick={() => moveEx(pos, pos - 1)} disabled={pos === 0} title="Hacerlo antes en la sesión" style={btnOrden(pos === 0)}>▲</button>
                               <button onClick={() => moveEx(pos, pos + 1)} disabled={pos === orden.length - 1} title="Hacerlo después en la sesión" style={btnOrden(pos === orden.length - 1)}>▼</button>
                             </div>
@@ -13790,12 +13790,17 @@ tr:last-child td{border-bottom:none}
                                 setReps("");
                               }
                             }} 
-                            style={{flex:1, background:"none", border:"none", cursor:"pointer", padding:"12px 14.5px 12px 14px", display:"flex", alignItems:"center", gap:10, color:C.ink, textAlign:"left"}}
+                            style={{flex:1, background:"none", border:"none", cursor:"pointer", padding:"12px 14.5px 12px 14px", display:"flex", alignItems:"flex-start", gap:10, color:C.ink, textAlign:"left"}}
                           >
-                            <div style={{flex:1, paddingRight:32}}>
+                            <div style={{flex:1, paddingRight:32, minWidth:0}}>
                               <div style={{display:"flex", alignItems:"center", gap:6, flexWrap:"wrap"}}>
-                                <span style={{fontSize:10.5, fontWeight:800, color:C.lime, background:"rgba(205,255,74,.1)", border:"1px solid rgba(205,255,74,.22)", borderRadius:5, padding:"1px 5px", minWidth:20, textAlign:"center"}}>{pos + 1}º</span>
-                                <div style={{fontSize:13.5, fontWeight:600}}>{exName}</div>
+                                {/* El número y el nombre van juntos pase lo que pase: si el
+                                    nombre es largo, envuelve DENTRO de este bloque en vez de
+                                    saltar entero a la línea siguiente dejando el número solo */}
+                                <div style={{display:"flex", alignItems:"baseline", gap:6, minWidth:0, flex:"1 1 auto"}}>
+                                  <span style={{fontSize:10.5, fontWeight:800, color:C.lime, background:"rgba(205,255,74,.1)", border:"1px solid rgba(205,255,74,.22)", borderRadius:5, padding:"1px 5px", minWidth:20, textAlign:"center", flexShrink:0}}>{pos + 1}º</span>
+                                  <div style={{fontSize:13.5, fontWeight:600, minWidth:0}}>{exName}</div>
+                                </div>
                                 {(() => {
                                   const allSetsForEx = exlog[findExlogKey(exName)] || [];
                                   const todaySets = (workoutSessions[selectedDateStr]?.[exName] || []).filter(s => s.type !== "warmup");

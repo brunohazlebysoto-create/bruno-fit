@@ -73,7 +73,7 @@ const ESCENAS = [
       await page.waitForTimeout(700);
       await page.mouse.wheel(0, 900);
       await page.waitForTimeout(500);
-      await page.getByRole("button", { name: /Prensa 45/ }).first().click({ timeout: 5000 });
+      await page.getByRole("button", { name: /Prensa de piernas/ }).first().click({ timeout: 5000 });
     },
     scrollDespues: 600,
   },

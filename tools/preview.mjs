@@ -120,7 +120,10 @@ function buildSeed() {
   const exlog = {};
   const rutinas = [
     ["A", [["Press banca", 82, 1.0, 6], ["Press inclinado mancuerna", 30, 0.5, 9], ["Curl martillo", 16, 0, 10]]],
-    ["B", [["Sentadilla", 110, 1.2, 5], ["Prensa 45°", 180, 2.0, 8], ["Vuelos laterales", 10, 0.25, 14]]],
+    // El nombre largo no está de adorno: reproduce el caso real en que el
+    // título envuelve a dos líneas, y además no existe en el catálogo, así que
+    // ejercita la deducción de músculos por el nombre.
+    ["B", [["Sentadilla", 110, 1.2, 5], ["Prensa de piernas 45 grados unilateral", 60, 1.0, 10], ["Vuelos laterales", 10, 0.25, 14]]],
     ["C", [["Remo barra", 70, 0.8, 8], ["Dominadas / Jalón", 8, 0.4, 7], ["Press francés", 28, 0.5, 10]]],
     ["D", [["Peso muerto", 130, 1.5, 5], ["Leg curl sentado", 45, 0.8, 11]]],
   ];
