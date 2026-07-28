@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W40";
+const APP_VERSION = "v2026.06.23-W42";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -4547,6 +4547,18 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
   // Memoizado: recorría y ordenaba TODO el historial de métricas en cada
   // render del componente raíz (es decir, en cada pulsación de tecla).
+  // El análisis local (tendencias, proyección, mesetas, sobrecarga y alertas)
+  // solo corría al GUARDAR algo. Al abrir la app con datos ya registrados
+  // nunca se ejecutaba, así que la proyección decía "sin datos" y ninguna
+  // alerta aparecía hasta que tocabas algo. Se dispara una vez al cargar.
+  const analisisInicialRef = useRef(false);
+  useEffect(() => {
+    if (!loaded || analisisInicialRef.current) return;
+    analisisInicialRef.current = true;
+    // Sin llamadas a la IA: es cálculo local e instantáneo
+    try { runLocalAnalysis(exlog, foodlog, metricslog, notes, target); } catch (e) { console.warn("análisis inicial:", e); }
+  }, [loaded]);
+
   const activeMetrics = React.useMemo(() => getMetricsForDate(selectedDateStr) || {
     weight: parseFloat(bodyProfile?.pesoInicial) || START_W, musculo: 64.7, grasaPct: 26.2, visceral: 9,
     brazoDer: "", brazoIzq: "", musloDer: "", musloIzq: "", pantorrillaDer: "", pantorrillaIzq: "", cintura: "", pecho: ""
@@ -12022,6 +12034,55 @@ tr:last-child td{border-bottom:none}
     return { splitKey: mejor?.key || null, musculoPrincipal: principal, volumen: Math.round(volumen), series };
   };
 
+  // Recomendación por ejercicio a partir de TODO su historial. La del día solo
+  // existe si ya entrenaste hoy, pero el momento en que necesitas saber qué peso
+  // poner es JUSTO ANTES de entrenar, cuando aún no hay nada registrado.
+  const recHistorico = React.useMemo(() => {
+    const map = {};
+    buildPRHistory(exlog, exercises, { phase: caloricPhase }).forEach(r => { map[r.name] = r; });
+    return map;
+  }, [exlog, exercises, caloricPhase]);
+
+  /**
+   * Banner con la carga recomendada de un ejercicio. Se usa tanto en la lista
+   * de la sesión como en la de ejercicios del split: al abrir un ejercicio
+   * PARA ENTRENAR es justo cuando necesitas saber qué peso poner, y ahí antes
+   * no aparecía nada.
+   */
+  const renderRecomendacion = (exName) => {
+// Primero lo de hoy (con las series ya hechas);
+                              // si aún no has entrenado, lo que dice el historial.
+                              const hoy = dayRecMap[exName];
+                              const hist = recHistorico[exName];
+                              const dr = hoy || (hist ? {
+                                recommendation: hist.recommendation,
+                                deltaVsPrev: null,
+                                prevMaxW: hist.lastMaxW,
+                                desdeHistorial: true,
+                                ultima: hist.lastMaxW, ultimaReps: hist.lastMaxReps, ultimaFecha: hist.lastDate,
+                              } : null);
+                              if (!dr || !dr.recommendation) return null;
+                              const rec = dr.recommendation;
+                              const col = rec.kind === "overload" ? C.limeGreen || C.lime : rec.kind === "variation" ? C.amber : C.cyan;
+                              const lbl = rec.kind === "overload" ? "SUBIR CARGA" : rec.kind === "variation" ? "ROTAR / FORZAR REP" : "CONSOLIDAR";
+                              const prog = dr.deltaVsPrev != null
+                                ? `${dr.deltaVsPrev > 0 ? "↑ +" + dr.deltaVsPrev + " kg" : dr.deltaVsPrev < 0 ? "↓ " + dr.deltaVsPrev + " kg" : "= igual"} vs anterior (${dr.prevMaxW} kg)`
+                                : dr.desdeHistorial && dr.ultima
+                                  ? `Última vez: ${dr.ultima} kg × ${dr.ultimaReps} (${fdate(dr.ultimaFecha + "T12:00:00Z")})`
+                                  : "1ª sesión registrada";
+                              return (
+                                <div style={{background:`${col}14`, border:`1px solid ${col}44`, borderRadius:10, padding:"8px 10px", marginBottom:10}}>
+                                  <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:3, flexWrap:"wrap"}}>
+                                    <TrendingUp size={13} color={col}/>
+                                    <span style={{fontSize:9.5, fontWeight:800, color:col, textTransform:"uppercase", letterSpacing:".05em"}}>{lbl}</span>
+                                    <span style={{fontSize:13, fontWeight:900, color:C.ink, marginLeft:"auto"}}>{rec.weight}kg × {rec.reps}</span>
+                                  </div>
+                                  <div style={{fontSize:11, color:C.muted, lineHeight:1.4}}>{rec.note}</div>
+                                  <div style={{fontSize:10, fontWeight:700, color: dr.deltaVsPrev > 0 ? (C.limeGreen||C.lime) : dr.deltaVsPrev < 0 ? C.amber : C.muted, marginTop:4}}>{prog}</div>
+                                </div>
+                              );
+  };
+
   const dayRecMap = React.useMemo(() => {
     const summary = buildDaySummary(exlog, exercises, selectedDateStr, { phase: caloricPhase });
     const map = {};
@@ -13572,28 +13633,7 @@ tr:last-child td{border-bottom:none}
                               </div>
                             )}
 
-                            {/* Recomendación de carga para la próxima sesión */}
-                            {(() => {
-                              const dr = dayRecMap[exName];
-                              if (!dr || !dr.recommendation) return null;
-                              const rec = dr.recommendation;
-                              const col = rec.kind === "overload" ? C.limeGreen || C.lime : rec.kind === "variation" ? C.amber : C.cyan;
-                              const lbl = rec.kind === "overload" ? "SUBIR CARGA" : rec.kind === "variation" ? "ROTAR / FORZAR REP" : "CONSOLIDAR";
-                              const prog = dr.deltaVsPrev != null
-                                ? `${dr.deltaVsPrev > 0 ? "↑ +" + dr.deltaVsPrev + " kg" : dr.deltaVsPrev < 0 ? "↓ " + dr.deltaVsPrev + " kg" : "= igual"} vs anterior (${dr.prevMaxW} kg)`
-                                : "1ª sesión registrada";
-                              return (
-                                <div style={{background:`${col}14`, border:`1px solid ${col}44`, borderRadius:10, padding:"8px 10px", marginBottom:10}}>
-                                  <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:3, flexWrap:"wrap"}}>
-                                    <TrendingUp size={13} color={col}/>
-                                    <span style={{fontSize:9.5, fontWeight:800, color:col, textTransform:"uppercase", letterSpacing:".05em"}}>{lbl}</span>
-                                    <span style={{fontSize:13, fontWeight:900, color:C.ink, marginLeft:"auto"}}>{rec.weight}kg × {rec.reps}</span>
-                                  </div>
-                                  <div style={{fontSize:11, color:C.muted, lineHeight:1.4}}>{rec.note}</div>
-                                  <div style={{fontSize:10, fontWeight:700, color: dr.deltaVsPrev > 0 ? (C.limeGreen||C.lime) : dr.deltaVsPrev < 0 ? C.amber : C.muted, marginTop:4}}>{prog}</div>
-                                </div>
-                              );
-                            })()}
+                            {renderRecomendacion(exName)}
 
                             {/* Tipo de set */}
                             <div style={{display:"flex", gap:6, marginBottom:8}}>
@@ -14072,39 +14112,11 @@ tr:last-child td{border-bottom:none}
                   </div>
                 )}
 
-                {/* 1RM histórico mini chart */}
-                {(() => {
-                  const rmHistory = (chartData(ex.name) || []).slice(-12).map(s => {
-                    const reps = parseInt(s.reps)||0;
-                    const rir = parseInt(s.rir)||0;
-                    const rm = (reps > 0 && s.w) ? Math.round(parseFloat(s.w) * (1 + (reps+rir)/30)) : null;
-                    return rm;
-                  }).filter(Boolean).slice(-8);
-                  if (rmHistory.length < 2) return null;
-                  const min = Math.min(...rmHistory), max = Math.max(...rmHistory);
-                  const range = max - min || 1;
-                  const pts = rmHistory.map((v,i) => {
-                    const x = (i / (rmHistory.length-1)) * 100;
-                    const y = 30 - ((v-min)/range)*24;
-                    return `${x},${y}`;
-                  }).join(" ");
-                  return (
-                    <div style={{marginBottom:8}}>
-                      <div style={{fontSize:10, fontWeight:700, color:C.muted, marginBottom:4}}>1RM estimado histórico (kg)</div>
-                      <svg viewBox="0 0 100 36" style={{width:"100%", height:36, overflow:"visible"}}>
-                        <polyline points={pts} fill="none" stroke={C.lime} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                        {rmHistory.map((v,i) => {
-                          const x = (i / (rmHistory.length-1)) * 100;
-                          const y = 30 - ((v-min)/range)*24;
-                          return <circle key={i} cx={x} cy={y} r={i===rmHistory.length-1?2.5:1.5} fill={i===rmHistory.length-1?C.lime:"rgba(205,255,74,0.5)"}/>;
-                        })}
-                      </svg>
-                      <div style={{display:"flex", justifyContent:"space-between", fontSize:9, color:C.muted, marginTop:2}}>
-                        <span>{min} kg</span><span>{max} kg</span>
-                      </div>
-                    </div>
-                  );
-                })()}
+                {/* El mini gráfico de 1RM estaba aquí, pero el gráfico grande
+                    de más abajo ya tiene un selector Peso / Esfuerzo (1RM):
+                    eran dos vistas del mismo dato una encima de la otra. */}
+
+                {renderRecomendacion(ex.name)}
 
                 {/* Tipo de set */}
                 <div style={{display:"flex", gap:6, marginBottom:8}}>
