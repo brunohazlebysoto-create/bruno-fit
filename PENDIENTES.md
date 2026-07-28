@@ -125,3 +125,26 @@ Segunda pasada, esta vez mirando las pantallas una a una en el preview local.
 El preview sembraba los 8 ejercicios el mismo día, lo cual no ocurre en uso
 real y **ocultó el fallo de detección de split**. Ahora cada sesión usa solo
 los ejercicios de su split y rotan A→B→C→D.
+
+---
+
+## Revisión de pantallas desplegables (W41–W44)
+
+Tercera pasada, abriendo modales, paneles expandidos y desplegables — las
+superficies que solo existen al interactuar y que las capturas estáticas no
+alcanzaban.
+
+### Fallos con impacto real
+
+| Fallo | Por qué importaba |
+|-------|-------------------|
+| **El análisis local solo corría al GUARDAR algo** | Al abrir la app con datos ya registrados nunca se ejecutaba: "Proyección a 12 semanas" decía *"no hay datos"* con 46 pesos y 45 días de comida, y ninguna alerta (mesetas, sobrecarga, pérdida de fuerza, refeed, adaptación, recomposición) aparecía hasta tocar algo. Ahora se dispara una vez al terminar la carga |
+| **La carga recomendada no salía al registrar** | El banner SUBIR/CONSOLIDAR/ROTAR solo existía en la lista del detalle de sesión (lo ya entrenado). Al abrir un ejercicio del split para registrar series — justo cuando necesitas saber qué peso poner — no aparecía nada. Ahora sale en ambas, y si aún no entrenaste hoy la saca del historial |
+
+### Pulido visual
+
+| Antes | Ahora |
+|-------|-------|
+| El panel del ejercicio tenía dos gráficos del mismo dato (mini 1RM + gráfico grande con selector Peso/1RM) | Solo el grande |
+| El buscador del modal de PRs compartía fila con dos botones y no cabía ni su texto | Ocupa su línea; los botones van debajo al 50% con etiquetas completas |
+| La lista del editor de splits se cortaba a media tarjeta sin señal de que hubiera más | Degradado al pie cuando hay más de 4 ejercicios |

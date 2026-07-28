@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W43";
+const APP_VERSION = "v2026.06.23-W44";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -15086,7 +15086,10 @@ tr:last-child td{border-bottom:none}
 
                 <div>
                   <label style={{fontSize:11, color:C.muted, fontWeight:700, display:"block", marginBottom:6}}>Ejercicios ({editSplitsData[editingSplitIdx].ex.length})</label>
-                  <div style={{display:"flex", flexDirection:"column", gap:6, maxHeight:180, overflowY:"auto", marginBottom:10}}>
+                  {/* Contenedor relativo para el degradado del pie: la lista se
+                      cortaba a media tarjeta sin señal de que hubiera más. */}
+                  <div style={{position:"relative", marginBottom:10}}>
+                  <div style={{display:"flex", flexDirection:"column", gap:6, maxHeight:180, overflowY:"auto", paddingBottom:4}}>
                     {editSplitsData[editingSplitIdx].ex.map((name, exIdx) => (
                       <div key={exIdx} style={{display:"flex", alignItems:"center", justifyContent:"space-between", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:8, padding:"6px 10px"}}>
                         <span style={{fontSize:12.5, color:C.ink, fontWeight:600}}>{name}</span>
@@ -15143,6 +15146,11 @@ tr:last-child td{border-bottom:none}
                     {editSplitsData[editingSplitIdx].ex.length === 0 && (
                       <div style={{fontSize:12, color:C.muted, textAlign:"center", padding:"10px 0"}}>Sin ejercicios asignados a este split.</div>
                     )}
+                  </div>
+                  {editSplitsData[editingSplitIdx].ex.length > 4 && (
+                    <div style={{position:"absolute", left:0, right:0, bottom:0, height:24, pointerEvents:"none",
+                      background:`linear-gradient(to bottom, transparent, ${C.panel})`}}/>
+                  )}
                   </div>
 
                   <div style={{display:"flex", gap:6}}>
