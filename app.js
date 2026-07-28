@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W39";
+const APP_VERSION = "v2026.06.23-W40";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -7335,7 +7335,7 @@ const PlantaHidratacion = React.memo(function PlantaHidratacion({ water, waterGo
 
   let statusText, statusColor;
   if (pct >= 0.85) { statusText = "¡Floreciendo! 🌿"; statusColor = C.lime; }
-  else if (pct >= 0.6) { statusText = "Bien hidratada 💧"; statusColor = C.cyan; }
+  else if (pct >= 0.6) { statusText = "Buena hidratación 💧"; statusColor = C.cyan; }
   else if (pct >= 0.3) { statusText = "Sedienta… 🥤"; statusColor = C.amber; }
   else { statusText = "¡Se marchita! 🥀"; statusColor = C.rose; }
 
@@ -8154,27 +8154,57 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
       </div>
 
       {weekKcal.some(d => d.kcal > 0) && (() => {
-        const maxK = Math.max(...weekKcal.map(d=>d.kcal), target?.kcal||2200);
         const tgt = target?.kcal || 2200;
+        // Se deja un 15% de aire por encima del valor más alto para que la
+        // línea de objetivo no quede pegada al borde y se pueda ver.
+        const maxK = Math.max(...weekKcal.map(d=>d.kcal), tgt) * 1.15;
         const DAYS = ['L','M','X','J','V','S','D'];
         return (
           <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"12px 14px", marginBottom:12}}>
             <div style={{fontSize:11, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:8}}>Calorías · 7 días</div>
-            <div style={{display:"flex", alignItems:"flex-end", gap:4, height:44}}>
-              {weekKcal.map((d,i) => {
-                const h = d.kcal > 0 ? Math.max(4, Math.round((d.kcal/maxK)*44)) : 3;
-                const isToday = d.date === selectedDateStr;
-                const aboveTarget = d.kcal > tgt * 1.05;
-                const col = d.kcal === 0 ? C.line : aboveTarget ? C.amber : isToday ? C.lime : C.cyan;
-                return (
-                  <div key={i} style={{flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:2}}>
-                    <div style={{width:"100%", height:h, background:col, borderRadius:3, transition:"height .3s"}}/>
-                    <div style={{fontSize:8, color: isToday ? C.lime : C.muted, fontWeight: isToday ? 800 : 500}}>{DAYS[(new Date(d.date+'T12:00:00').getDay()+6)%7]}</div>
+            {/* Línea de objetivo sobre las barras. Las etiquetas de día van
+                FUERA del área del gráfico: si van dentro, la escala no cuadra
+                y la línea acaba justo encima de las barras, invisible. */}
+            {(() => {
+              const H = 46;                                  // alto solo de las barras
+              const yObjetivo = Math.round((tgt / maxK) * H); // px desde abajo
+              return (
+                <>
+                  <div style={{position:"relative", height:H, marginBottom:3}}>
+                    <div style={{position:"absolute", left:0, right:0, bottom:yObjetivo, borderTop:`1px dashed ${C.muted}`, opacity:.6, zIndex:2}}/>
+                    <div style={{position:"absolute", right:0, bottom:yObjetivo + 1, fontSize:8, color:C.muted, opacity:.85, zIndex:3, background:C.panel, padding:"0 3px"}}>
+                      objetivo {tgt}
+                    </div>
+                    <div style={{display:"flex", alignItems:"flex-end", gap:4, height:H}}>
+                      {weekKcal.map((d,i) => {
+                        const h = d.kcal > 0 ? Math.max(3, Math.round((d.kcal / maxK) * H)) : 2;
+                        const isToday = d.date === selectedDateStr;
+                        const aboveTarget = d.kcal > tgt * 1.05;
+                        const col = d.kcal === 0 ? C.line : aboveTarget ? C.amber : isToday ? C.lime : C.cyan;
+                        return (
+                          <div key={i} style={{flex:1, height:h, background:col, borderRadius:3, transition:"height .3s"}}
+                            title={d.kcal > 0 ? `${d.kcal} kcal` : "Sin registro"}/>
+                        );
+                      })}
+                    </div>
                   </div>
-                );
-              })}
+                  <div style={{display:"flex", gap:4}}>
+                    {weekKcal.map((d,i) => {
+                      const isToday = d.date === selectedDateStr;
+                      return (
+                        <div key={i} style={{flex:1, textAlign:"center", fontSize:8, color: isToday ? C.lime : C.muted, fontWeight: isToday ? 800 : 500}}>
+                          {DAYS[(new Date(d.date+'T12:00:00').getDay()+6)%7]}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              );
+            })()}
+            <div style={{fontSize:9.5, color:C.muted, marginTop:4}}>
+              Media de la semana: <b style={{color:C.ink}}>{Math.round(weekKcal.filter(d=>d.kcal>0).reduce((a,d)=>a+d.kcal,0) / Math.max(1, weekKcal.filter(d=>d.kcal>0).length))} kcal</b>
+              {" · "}{weekKcal.filter(d => d.kcal > tgt * 1.05).length} día(s) por encima
             </div>
-            <div style={{fontSize:9.5, color:C.muted, marginTop:4}}>Objetivo: {tgt} kcal · Hoy: {weekKcal[6]?.kcal || 0} kcal</div>
           </div>
         );
       })()}
@@ -9479,28 +9509,28 @@ function Coach({
         <button
           onClick={() => sendCoachMessage('Analiza TODOS mis datos actuales en conjunto: composición corporal Fitdays (peso, grasa, SMM, Score), análisis de fotos de progreso, historial de entrenamiento y nutrición de las últimas semanas. Con base en todo esto: 1) ¿Son óptimos mis objetivos actuales de calorías y macros? Si no, actualízalos con UPDATE_TARGET. 2) ¿Mi split es el adecuado para mi objetivo actual? Si no, ajústalo con UPDATE_SPLITS. 3) Dame 3 acciones concretas prioritarias para las próximas 4 semanas.')}
           disabled={chatBusy}
-          style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid #cdff4a`, background:"rgba(205,255,74,0.08)", color:"#cdff4a", cursor:"pointer", opacity: chatBusy ? 0.5 : 1, fontWeight:800}}
+          style={{fontSize:11, padding:"6px 11px", borderRadius:8, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", opacity: chatBusy ? 0.5 : 1, fontWeight:800, width:"100%"}}
         >
-          ✦ Análisis Global + Actualizar Objetivos
+          ✦ Analizarlo todo y ajustar mis objetivos
         </button>
         <button
           onClick={() => sendCoachMessage('Haceme un análisis completo de mi semana de entrenamiento: PRs actuales, progresión de fuerza, volumen total, si estoy progresando en cada ejercicio y qué debo mejorar la semana que viene.')}
           disabled={chatBusy}
-          style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.cyan}`, background:"transparent", color:C.cyan, cursor:"pointer", opacity: chatBusy ? 0.5 : 1}}
+          style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.line}`, background:C.panel, color:C.muted, cursor:"pointer", opacity: chatBusy ? 0.5 : 1, fontWeight:600}}
         >
           📊 Analizar mi semana
         </button>
         <button
           onClick={() => sendCoachMessage('¿Qué músculo me conviene entrenar hoy según mi split y mi historial reciente? ¿Estoy descansando suficiente?')}
           disabled={chatBusy}
-          style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.lime}`, background:"transparent", color:C.lime, cursor:"pointer", opacity: chatBusy ? 0.5 : 1}}
+          style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.line}`, background:C.panel, color:C.muted, cursor:"pointer", opacity: chatBusy ? 0.5 : 1, fontWeight:600}}
         >
           💪 ¿Qué entreno hoy?
         </button>
         <button
           onClick={() => sendCoachMessage('Basándote en mi progresión histórica y PRs actuales, ¿cuánto debería cargar esta semana en cada ejercicio para seguir progresando sin lesionarme?')}
           disabled={chatBusy}
-          style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.rose}`, background:"transparent", color:C.rose, cursor:"pointer", opacity: chatBusy ? 0.5 : 1}}
+          style={{fontSize:11, padding:"5px 10px", borderRadius:8, border:`1px solid ${C.line}`, background:C.panel, color:C.muted, cursor:"pointer", opacity: chatBusy ? 0.5 : 1, fontWeight:600}}
         >
           🎯 Cargas recomendadas
         </button>
@@ -13086,11 +13116,21 @@ tr:last-child td{border-bottom:none}
               });
               const progressScore = Math.min(3, topProgress.length);
               const totalScore = Math.round((trainDaysScore + volumeScore + progressScore) * 10) / 10;
-              const filled = Math.round(totalScore);
-              const squares = [...Array(10)].map((_, i) => i < filled ? "⬛" : "⬜").join("");
               return (
-                <div style={{background:"rgba(205,255,74,0.05)", border:"1px solid rgba(205,255,74,0.12)", borderRadius:8, padding:"6px 10px", fontSize:11, color:C.muted, marginBottom:8, display:"flex", alignItems:"center", gap:6}}>
-                  Rendimiento este mes: <span style={{letterSpacing:1}}>{squares}</span> <span style={{color:C.lime, fontWeight:800}}>{totalScore}/10</span>
+                // Los cuadraditos no decían qué medían: ahora se desglosa de
+                // dónde sale la nota y una barra sustituye a los emojis.
+                <div title={`Constancia ${trainDaysScore}/4 · Volumen ${volumeScore}/3 · Progreso ${progressScore}/3`}
+                  style={{background:"rgba(205,255,74,0.05)", border:"1px solid rgba(205,255,74,0.12)", borderRadius:8, padding:"7px 10px", fontSize:11, color:C.muted, marginBottom:8}}>
+                  <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:5}}>
+                    <span>Rendimiento este mes</span>
+                    <span style={{color:C.lime, fontWeight:800}}>{totalScore}/10</span>
+                  </div>
+                  <div style={{height:5, background:C.panel2, borderRadius:3, overflow:"hidden", marginBottom:5}}>
+                    <div style={{height:"100%", width:`${totalScore * 10}%`, background:C.lime, borderRadius:3}}/>
+                  </div>
+                  <div style={{fontSize:9.5, opacity:.85}}>
+                    Constancia {trainDaysScore}/4 · Volumen {volumeScore}/3 · Progreso {progressScore}/3
+                  </div>
                 </div>
               );
             })()}
