@@ -1638,3 +1638,74 @@ describe('nombres de músculo equivalentes', () => {
     expect(r).toEqual(['Pectoral', 'Deltoides']); // pectoral en 2 ejercicios, deltoides en 1
   });
 });
+
+describe('mover un ejercicio de día', () => {
+  const { moveExerciseBetweenSplits, splitOfExercise } = require('./app.js');
+
+  const base = () => ({
+    exercises: {
+      A: [{ name: 'Press banca', musculos: ['Pectoral'] }],
+      B: [{ name: 'Sentadilla', musculos: ['Cuádriceps'] }, { name: 'Pullover', musculos: ['Espalda'] }],
+      C: [],
+    },
+    splits: [
+      { key: 'A', name: 'Pecho + Bíceps', ex: ['Press banca'] },
+      { key: 'B', name: 'Pierna Cuádriceps', ex: ['Sentadilla', 'Pullover'] },
+      { key: 'C', name: 'Espalda + Tríceps', ex: [] },
+    ],
+  });
+
+  test('sale del día viejo y entra en el nuevo, en las dos listas', () => {
+    const { exercises, splits } = base();
+    const r = moveExerciseBetweenSplits(exercises, splits, 'Pullover', 'C');
+    expect(r.exercises.B.map(e => e.name)).toEqual(['Sentadilla']);
+    expect(r.exercises.C.map(e => e.name)).toEqual(['Pullover']);
+    expect(r.splits.find(s => s.key === 'B').ex).toEqual(['Sentadilla']);
+    expect(r.splits.find(s => s.key === 'C').ex).toEqual(['Pullover']);
+  });
+
+  test('conserva los datos del ejercicio', () => {
+    const { exercises, splits } = base();
+    const r = moveExerciseBetweenSplits(exercises, splits, 'Pullover', 'A');
+    expect(r.exercises.A.find(e => e.name === 'Pullover').musculos).toEqual(['Espalda']);
+  });
+
+  test('no muta lo que recibe', () => {
+    const { exercises, splits } = base();
+    moveExerciseBetweenSplits(exercises, splits, 'Pullover', 'C');
+    expect(exercises.B.map(e => e.name)).toEqual(['Sentadilla', 'Pullover']);
+    expect(splits.find(s => s.key === 'B').ex).toEqual(['Sentadilla', 'Pullover']);
+  });
+
+  test('un destino inexistente no cambia nada', () => {
+    const { exercises, splits } = base();
+    const r = moveExerciseBetweenSplits(exercises, splits, 'Pullover', 'Z');
+    expect(r.exercises).toBe(exercises);
+    expect(r.splits).toBe(splits);
+  });
+
+  test('moverlo a su propio día no lo duplica', () => {
+    const { exercises, splits } = base();
+    const r = moveExerciseBetweenSplits(exercises, splits, 'Pullover', 'B');
+    expect(r.exercises.B.filter(e => e.name === 'Pullover')).toHaveLength(1);
+    expect(r.splits.find(s => s.key === 'B').ex.filter(n => n === 'Pullover')).toHaveLength(1);
+  });
+
+  test('un ejercicio que solo estaba en la lista de nombres también se mueve', () => {
+    const splits = [
+      { key: 'A', name: 'Pecho', ex: ['Fondos'] },
+      { key: 'C', name: 'Espalda', ex: [] },
+    ];
+    expect(splitOfExercise({}, splits, 'Fondos')).toBe('A');
+    const r = moveExerciseBetweenSplits({}, splits, 'Fondos', 'C');
+    expect(r.splits.find(s => s.key === 'A').ex).toEqual([]);
+    expect(r.splits.find(s => s.key === 'C').ex).toEqual(['Fondos']);
+    expect(r.exercises.C.map(e => e.name)).toEqual(['Fondos']); // se crea la ficha
+  });
+
+  test('el día de un ejercicio se lee del catálogo primero', () => {
+    const { exercises, splits } = base();
+    expect(splitOfExercise(exercises, splits, 'Sentadilla')).toBe('B');
+    expect(splitOfExercise(exercises, splits, 'No existe')).toBeNull();
+  });
+});

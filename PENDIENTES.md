@@ -245,6 +245,26 @@ Con `flexWrap`, un nombre largo saltaba entero a la línea siguiente y dejaba el
 nombre van ahora en su propio bloque. El sembrado del preview usa un nombre
 largo de verdad para que el caso quede cubierto por las capturas.
 
+---
+
+## Mover un ejercicio de día (W49)
+
+Un ejercicio quedaba atado al día en que se creó. Cambiarlo de sitio obligaba a
+borrarlo y volver a crearlo en el otro día — y eso **se llevaba por delante todo
+el historial**, porque al borrar se elimina también su entrada en `exlog`.
+
+Ahora, en *Opciones de Ejercicio* → **↔️ Mover a otro día**, con la lista de
+splits y el día actual marcado y deshabilitado.
+
+`moveExerciseBetweenSplits` es pura y no toca `exlog`: las series están
+indexadas por nombre y siguen donde estaban. Actualiza **las dos** listas a la
+vez —el catálogo `exercises` y los nombres de `splits`—, que es justo lo que
+suele desincronizarse y hace que un ejercicio aparezca en un sitio y no en otro.
+
+Comprobado de punta a punta en el navegador: "Press banca" sale de A (catálogo y
+nombres), entra en C (catálogo y nombres) y conserva sus 12 series.
+
+
 ### El orden de la sesión
 
 Saber con cuánta fatiga llegó cada grupo muscular a cada ejercicio depende de en

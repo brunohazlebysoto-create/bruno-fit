@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W48";
+const APP_VERSION = "v2026.06.23-W49";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -2210,6 +2210,42 @@ function listUncountedExercises(exlog, exercises, days = 28) {
       !musclesOfExercise(exName, exercises).some(m => normalizeMuscle(m))
     )
     .map(([exName]) => exName);
+}
+
+// ¿En qué día del split está este ejercicio? El catálogo manda; si solo aparece
+// en la lista de nombres del split, vale igual.
+function splitOfExercise(exercises, splits, name) {
+  const porCatalogo = Object.keys(exercises || {}).find(k => (exercises[k] || []).some(e => e?.name === name));
+  if (porCatalogo) return porCatalogo;
+  return ((splits || []).find(s => (s.ex || []).includes(name)) || {}).key || null;
+}
+
+// Mueve un ejercicio de un día del split a otro.
+// El historial de series vive en `exlog`, indexado por NOMBRE, así que no entra
+// aquí: cambiar de día no puede costarte meses de registros ni los PRs. Se
+// actualizan las dos listas a la vez (el catálogo `exercises` y los nombres de
+// `splits`) porque tenerlas desincronizadas es lo que hace que un ejercicio
+// aparezca en un sitio y no en el otro.
+function moveExerciseBetweenSplits(exercises, splits, name, toKey) {
+  const listas = exercises || {};
+  const destinoExiste = (splits || []).some(s => s.key === toKey);
+  if (!name || !destinoExiste) return { exercises: listas, splits: splits || [] };
+
+  const objeto = Object.values(listas).flat().find(e => e?.name === name)
+    || { name, tecnico: "", equipo: "peso libre", musculos: [] };
+
+  const nextExercises = {};
+  Object.keys(listas).forEach(k => { nextExercises[k] = (listas[k] || []).filter(e => e?.name !== name); });
+  nextExercises[toKey] = [...(nextExercises[toKey] || []), objeto];
+
+  const nextSplits = (splits || []).map(s => ({
+    ...s,
+    ex: s.key === toKey
+      ? [...new Set([...(s.ex || []), name])]
+      : (s.ex || []).filter(n => n !== name),
+  }));
+
+  return { exercises: nextExercises, splits: nextSplits };
 }
 
 function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
@@ -12504,6 +12540,14 @@ tr:last-child td{border-bottom:none}
     setExlog(next);
   };
 
+  // Cambia un ejercicio de día del split. No toca exlog: las series y los PRs
+  // están indexados por nombre y siguen donde estaban.
+  const moveExercise = (name, toKey) => {
+    const r = moveExerciseBetweenSplits(exercises, splits || DEFAULT_SPLITS, name, toKey);
+    setExercises(r.exercises);
+    setSplits(r.splits);
+  };
+
   const delExercise = (n) => { 
     const updatedExercises = { ...exercises };
     Object.keys(updatedExercises).forEach(k => {
@@ -13860,6 +13904,8 @@ tr:last-child td{border-bottom:none}
                               e.stopPropagation();
                               setEditExObj({ ex: globalEx, isEditing: false, isSession: true, sessionDate: selectedDateStr });
                             }}
+                            title="Opciones del ejercicio"
+                            aria-label="Opciones del ejercicio"
                             style={{
                               position:"absolute",
                               right:12,
@@ -14380,6 +14426,8 @@ tr:last-child td{border-bottom:none}
                   e.stopPropagation();
                   setEditExObj({ ex, isEditing: false });
                 }}
+                title="Opciones del ejercicio"
+                aria-label="Opciones del ejercicio"
                 style={{
                   position:"absolute",
                   right:12,
@@ -15074,7 +15122,47 @@ tr:last-child td{border-bottom:none}
             background: C.panel, border:`1px solid ${C.line}`, borderRadius:16,
             padding:20, width:"100%", maxWidth:320, display:"flex", flexDirection:"column", gap:12
           }} onClick={e => e.stopPropagation()}>
-            {!editExObj.isEditing && !editExObj.isMerging ? (
+            {!editExObj.isEditing && editExObj.isMoving ? (
+              <>
+                <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Mover a otro día</div>
+                <div style={{fontSize:12, color:C.muted, textAlign:"center", lineHeight:1.5}}>
+                  <strong style={{color:C.ink}}>{editExObj.ex.name}</strong> pasará al día que elijas.
+                  <br/>Sus series, récords y gráficos no se tocan.
+                </div>
+                {(() => {
+                  const origen = splitOfExercise(exercises, splits || DEFAULT_SPLITS, editExObj.ex.name);
+                  return (splits || DEFAULT_SPLITS).map(s => {
+                    const actual = s.key === origen;
+                    const color = COLOR_SPLIT[s.key] || C.lime;
+                    return (
+                      <button
+                        key={s.key}
+                        disabled={actual}
+                        onClick={() => { moveExercise(editExObj.ex.name, s.key); setEditExObj(null); }}
+                        style={{
+                          display:"flex", alignItems:"center", gap:10, textAlign:"left",
+                          background: actual ? "transparent" : `${color}12`,
+                          border:`1px solid ${actual ? C.line : color + "55"}`,
+                          borderRadius:12, padding:"10px 12px",
+                          cursor: actual ? "default" : "pointer", opacity: actual ? .5 : 1,
+                        }}
+                      >
+                        <span style={{fontFamily:"'Bebas Neue'", fontSize:22, color: actual ? C.muted : color, minWidth:16}}>{s.key}</span>
+                        <span style={{flex:1, minWidth:0}}>
+                          <span style={{display:"block", fontSize:12.5, fontWeight:700, color: actual ? C.muted : C.ink}}>{s.name}</span>
+                          {actual && <span style={{fontSize:10, color:C.muted}}>día actual</span>}
+                        </span>
+                      </button>
+                    );
+                  });
+                })()}
+                {/* "Volver", no "Cancelar": el modal ya tiene su Cancelar al pie
+                    y dos botones iguales seguidos no dicen cuál hace qué */}
+                <button onClick={() => setEditExObj({...editExObj, isMoving: false})} style={{background:"none", border:"none", color:C.muted, fontWeight:700, padding:8, cursor:"pointer", fontSize:12.5}}>
+                  ← Volver a las opciones
+                </button>
+              </>
+            ) : !editExObj.isEditing && !editExObj.isMerging ? (
               <>
                 <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Opciones de Ejercicio</div>
                 <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>
@@ -15082,6 +15170,12 @@ tr:last-child td{border-bottom:none}
                 </div>
                 <button onClick={() => setEditExObj({...editExObj, isEditing: true})} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
                   ✏️ Editar Ejercicio
+                </button>
+                <button
+                  onClick={() => setEditExObj({...editExObj, isMoving: true})}
+                  style={{background:"rgba(205,255,74,0.08)", color:C.lime, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.lime}44`, cursor:"pointer"}}
+                >
+                  ↔️ Mover a otro día
                 </button>
                 <button
                   onClick={() => { setMergeTarget(""); setEditExObj({...editExObj, isMerging: true}); }}
@@ -18910,6 +19004,7 @@ if (typeof module !== 'undefined' && module.exports) {
     RECOVERY_FIELDS, getLocalDateStr,
     normalizeMuscle, canonMuscleName, dedupeMuscles, calcMuscleVolumeBalance, SLUG_MUSCLE,
     inferMusclesFromName, musclesOfExercise, listUncountedExercises,
+    splitOfExercise, moveExerciseBetweenSplits,
     default: App
   };
 }

@@ -89,6 +89,17 @@ const ESCENAS = [
   { id: "entreno-08-balance-muscular", tab: "Entreno", scroll: 0,
     accion: async (page) => { await page.getByRole("button", { name: "Agente" }).first().click({ timeout: 5000 }); },
     scrollDespues: 700 },
+  {
+    // Mover un ejercicio de día: solo existe dentro del menú del ejercicio
+    id: "entreno-09-mover-de-dia",
+    tab: "Entreno",
+    scroll: 1700,
+    accion: async (page) => {
+      await page.getByRole("button", { name: "Opciones del ejercicio" }).first().click({ timeout: 5000 });
+      await page.waitForTimeout(500);
+      await page.getByRole("button", { name: /Mover a otro día/ }).click({ timeout: 5000 });
+    },
+  },
   { id: "registro-01-peso-y-tendencia", tab: "Registro", scroll: 0 },
   { id: "registro-02-objetivos", tab: "Registro", scroll: 1150 },
   { id: "registro-03-composicion", tab: "Registro", scroll: 1900 },
@@ -143,13 +154,16 @@ async function capturar() {
   await page.waitForTimeout(3500); // arranque de la app y carga de estado
 
   let tabActual = null;
+  let sucia = false; // la escena anterior dejó un modal o un panel abierto
   for (const esc of ESCENAS) {
-    // Una escena anterior pudo dejar un modal abierto: taparía la escena
-    // siguiente e impediría hasta cambiar de pestaña
-    const abierta = page.locator(".trainer-agent-sheet");
-    if (await abierta.count()) {
-      await page.getByRole("button", { name: "Cerrar" }).first().click({ timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(500);
+    // Cerrar modales "a mano" es frágil: basta con que uno cambie de estructura
+    // para que la escena siguiente capture la pantalla equivocada o falle al
+    // pulsar algo tapado. Recargar deja el estado limpio siempre.
+    if (sucia) {
+      await page.reload({ waitUntil: "load" });
+      await page.waitForTimeout(3500);
+      tabActual = null;
+      sucia = false;
     }
     if (esc.tab !== tabActual) {
       await page.getByText(esc.tab, { exact: true }).first().click({ timeout: 10000 });
@@ -171,6 +185,7 @@ async function capturar() {
     // Algunas pantallas solo aparecen tras interactuar (abrir un día, un modal)
     if (esc.accion) {
       await esc.accion(page);
+      sucia = true;
       await page.waitForTimeout(800);
       if (esc.scrollDespues) { await page.mouse.wheel(0, esc.scrollDespues); await page.waitForTimeout(600); }
     }
