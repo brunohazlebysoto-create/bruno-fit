@@ -335,9 +335,6 @@ button:disabled {
   line-height: 1.5;
   margin-bottom: 12px;
   word-break: break-word;
-}
-
-.chat-bubble {
   animation: bubbleIn 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 

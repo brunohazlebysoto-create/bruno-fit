@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W27";
+const APP_VERSION = "v2026.06.23-W28";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -4567,10 +4567,12 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     }
   };
 
-  const activeMetrics = getMetricsForDate(selectedDateStr) || {
+  // Memoizado: recorría y ordenaba TODO el historial de métricas en cada
+  // render del componente raíz (es decir, en cada pulsación de tecla).
+  const activeMetrics = React.useMemo(() => getMetricsForDate(selectedDateStr) || {
     weight: parseFloat(bodyProfile?.pesoInicial) || START_W, musculo: 64.7, grasaPct: 26.2, visceral: 9,
     brazoDer: "", brazoIzq: "", musloDer: "", musloIzq: "", pantorrillaDer: "", pantorrillaIzq: "", cintura: "", pecho: ""
-  };
+  }, [selectedDateStr, metricslog, bodyComp, notes, bodyProfile]);
 
   // Objetivos sugeridos a partir del perfil + composición corporal real.
   // Se recalculan solos al cambiar el peso, el % de grasa o el perfil.
