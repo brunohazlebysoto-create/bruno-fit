@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W32";
+const APP_VERSION = "v2026.06.23-W33";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -15853,6 +15853,10 @@ function Registro({
   }, [selectedDateStr, metricslog, statsPeriod]);
   const [text, setText] = useState("");
   const [weight, setWeight] = useState("");
+  // Bitácora: plegada por defecto, con filtro por tipo y paginación
+  const [bitacoraAbierta, setBitacoraAbierta] = useState(false);
+  const [notaFiltro, setNotaFiltro] = useState("todos");
+  const [notaLimite, setNotaLimite] = useState(20);
 
   // Cargar análisis guardado cuando cambia la fecha seleccionada
   const [muscInput, setMuscInput] = useState("");
@@ -17533,39 +17537,106 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
 
 
 
-      {notes.length === 0 && <div style={{color:C.muted, fontSize:13, textAlign:"center", padding:"16px 0"}}>Tu bitácora está vacía.</div>}
+      {/* ===== BITÁCORA (colapsable) =====
+          Antes cada entrada ocupaba una tarjeta suelta al final de la pestaña:
+          con meses de uso son cientos de tarjetas empujando todo lo demás.
+          Ahora va plegada, con recuento y filtro por tipo. */}
+      {(() => {
+        const TIPOS_FILTRO = [
+          { k: "todos", lbl: "Todas" },
+          { k: "peso", lbl: "Peso" },
+          { k: "composicion", lbl: "Composición" },
+          { k: "sensacion", lbl: "Sensación" },
+        ];
+        const visibles = notaFiltro === "todos"
+          ? notes
+          : notes.filter(n => (n.type || "nota") === notaFiltro);
+        const mostradas = visibles.slice(0, notaLimite);
 
-      {notes.map(n => {
-        const col = (TYPES[n.type] || ["", C.muted])[1]; 
-        const d = new Date(n.date);
         return (
-          <div key={n.id} className="pop" style={{
-            background:C.panel, 
-            border:`1px solid ${C.line}`, 
-            borderRadius:13, 
-            padding:"11px 14px", 
-            marginBottom:9, 
-            display:"flex", 
-            gap:10, 
-            alignItems:"flex-start"
-          }}>
-            <div style={{flex:1}}>
-              <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:3}}>
-                <span style={{fontSize:10, fontWeight:800, letterSpacing:".08em", textTransform:"uppercase", color:col}}>
-                  {(TYPES[n.type] || ["Nota"])[0]}
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
+            <button
+              onClick={() => setBitacoraAbierta(v => !v)}
+              style={{background:"none", border:"none", cursor:"pointer", width:"100%", display:"flex", justifyContent:"space-between", alignItems:"center", padding:0}}
+            >
+              <span style={{fontSize:12.5, fontWeight:800, color:C.ink, display:"flex", alignItems:"center", gap:6}}>
+                <NotebookPen size={14} color={C.muted}/> Bitácora
+                <span style={{fontSize:11, fontWeight:600, color:C.muted}}>
+                  {notes.length === 0 ? "vacía" : `${notes.length} entrada${notes.length !== 1 ? "s" : ""}`}
                 </span>
-                <span style={{fontSize:11, color:C.muted}}>
-                  {fdate(n.date)} · {d.toLocaleTimeString("es",{hour:"2-digit",minute:"2-digit"})}
-                </span>
-              </div>
-              <div style={{fontSize:13.5}}>{n.text}</div>
-            </div>
-            <button onClick={() => del(n.id)} style={{background:"none", border:"none", cursor:"pointer", color:C.muted}}>
-              <Trash2 size={16}/>
+              </span>
+              <span style={{color:C.muted, fontSize:12}}>{bitacoraAbierta ? "▲" : "▼"}</span>
             </button>
+
+            {bitacoraAbierta && notes.length > 0 && (
+              <div style={{marginTop:10}}>
+                <div style={{display:"flex", gap:5, marginBottom:10, flexWrap:"wrap"}}>
+                  {TIPOS_FILTRO.map(t => {
+                    const n = t.k === "todos" ? notes.length : notes.filter(x => (x.type || "nota") === t.k).length;
+                    if (n === 0 && t.k !== "todos") return null;
+                    const on = notaFiltro === t.k;
+                    return (
+                      <button key={t.k} className="btn-active-scale"
+                        onClick={() => { setNotaFiltro(t.k); setNotaLimite(20); }}
+                        style={{background: on ? "rgba(205,255,74,0.12)" : "transparent",
+                          border:`1px solid ${on ? C.lime : C.line}`, borderRadius:20, padding:"4px 10px",
+                          color: on ? C.lime : C.muted, fontSize:10.5, fontWeight:700}}>
+                        {t.lbl} <span style={{opacity:.7}}>{n}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {mostradas.map(n => {
+                  const col = (TYPES[n.type] || ["", C.muted])[1];
+                  const d = new Date(n.date);
+                  return (
+                    <div key={n.id} style={{
+                      background:C.panel2,
+                      border:`1px solid ${C.line}`,
+                      borderRadius:11,
+                      padding:"9px 11px",
+                      marginBottom:6,
+                      display:"flex",
+                      gap:10,
+                      alignItems:"flex-start"
+                    }}>
+                      <div style={{flex:1, minWidth:0}}>
+                        <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:2}}>
+                          <span style={{fontSize:9.5, fontWeight:800, letterSpacing:".07em", textTransform:"uppercase", color:col}}>
+                            {(TYPES[n.type] || ["Nota"])[0]}
+                          </span>
+                          <span style={{fontSize:10.5, color:C.muted}}>
+                            {fdate(n.date)} · {d.toLocaleTimeString("es",{hour:"2-digit",minute:"2-digit"})}
+                          </span>
+                        </div>
+                        <div style={{fontSize:12.5, lineHeight:1.4}}>{n.text}</div>
+                      </div>
+                      <button onClick={() => del(n.id)} title="Borrar entrada"
+                        style={{background:"none", border:"none", cursor:"pointer", color:C.muted, flexShrink:0, padding:2}}>
+                        <Trash2 size={15}/>
+                      </button>
+                    </div>
+                  );
+                })}
+
+                {visibles.length > mostradas.length && (
+                  <button className="btn-active-scale" onClick={() => setNotaLimite(l => l + 30)}
+                    style={{width:"100%", marginTop:4, padding:"8px 0", borderRadius:9, border:`1px solid ${C.line}`,
+                      background:"transparent", color:C.muted, fontSize:11.5, fontWeight:700}}>
+                    Ver más ({visibles.length - mostradas.length} restantes)
+                  </button>
+                )}
+                {visibles.length === 0 && (
+                  <div style={{color:C.muted, fontSize:12, textAlign:"center", padding:"10px 0"}}>
+                    Sin entradas de este tipo.
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         );
-      })}
+      })()}
     </div>
   );
 }
