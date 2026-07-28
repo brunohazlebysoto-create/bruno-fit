@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W36";
+const APP_VERSION = "v2026.06.23-W37";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -463,10 +463,10 @@ async function fetchStateFromCloud(syncCode) {
 
 /* ===== INTEGRACIÓN DE LA API DE GEMINI (1.5 FLASH) ===== */
 const aiErr = (e) => {
-  if (!e) return "⚠️ Sin clave API. Ve a Perfil → Ajustes y agrega tu clave de Google AI Studio (gemini.google.com) — es gratuita.";
+  if (!e) return "⚠️ Sin clave API. Ve a Perfil → Ajustes y agrega tu clave de Google AI Studio (aistudio.google.com) — es gratuita.";
   const msg = e.message || "";
   if (msg.includes("No se pudo conectar") || msg.includes("No API Key")) {
-    return "⚠️ Sin clave API configurada. Ve a Perfil → Ajustes → Clave Gemini y agrega tu clave gratuita de gemini.google.com";
+    return "⚠️ Sin clave API configurada. Ve a Perfil → Ajustes y agrega tu clave gratuita de aistudio.google.com";
   }
   if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota") || msg.includes("limit")) {
     return "⏱️ Límite de API superado. Espera unos segundos o agrega más claves en Perfil → Ajustes (se rotan automáticamente).";
@@ -646,7 +646,7 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
   });
 
   if (apiKeys.length === 0) {
-    throw new Error("No API Key configurada. Ve a Perfil → Ajustes y agrega tu clave Gemini gratuita de gemini.google.com");
+    throw new Error("No API Key configurada. Ve a Perfil → Ajustes y agrega tu clave gratuita de aistudio.google.com");
   }
 
   // Solo se usan claves nativas de Gemini. Las de OpenRouter (sk-or-) se
@@ -13258,7 +13258,7 @@ tr:last-child td{border-bottom:none}
                           <div style={{fontSize:10, color:C.muted, fontWeight:700, marginBottom:4}}>{label}</div>
                           <div style={{fontSize:13, fontWeight:800, color: i===0 ? C.lime : C.muted}}>{stats.sets} series</div>
                           <div style={{fontSize:10.5, color:C.muted}}>{stats.vol.toLocaleString()} kg vol</div>
-                          <div style={{fontSize:10, color:C.muted}}>{stats.days} días</div>
+                          <div style={{fontSize:10, color:C.muted}}>{stats.days} día{stats.days !== 1 ? "s" : ""}</div>
                         </div>
                       ))}
                     </div>
