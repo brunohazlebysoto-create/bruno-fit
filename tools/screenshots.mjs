@@ -50,6 +50,7 @@ const ESCENAS = [
   { id: "registro-01-peso-y-tendencia", tab: "Registro", scroll: 0 },
   { id: "registro-02-objetivos", tab: "Registro", scroll: 1150 },
   { id: "registro-03-composicion", tab: "Registro", scroll: 1900 },
+  { id: "registro-04-final", tab: "Registro", scroll: 6000 },
   { id: "perfil-01", tab: "Perfil", scroll: 0 },
   { id: "coach-01", tab: "Coach", scroll: 0 },
 ];
