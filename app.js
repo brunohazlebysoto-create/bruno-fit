@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W29";
+const APP_VERSION = "v2026.06.23-W30";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -15335,6 +15335,14 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
       const newImagesData = [];
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
+        if (file.type === "application/pdf") {
+          // Los PDF no se pueden redimensionar en canvas: se envían tal cual
+          // y se muestra un marcador en la tira de miniaturas.
+          const b64 = (await fileToBase64(file)).split(",")[1];
+          newPreviews.push("pdf:" + file.name);
+          newImagesData.push({ b64, mime: "application/pdf" });
+          continue;
+        }
         const dataUrl = await compressImage(file);
         newPreviews.push(dataUrl);
         const b64 = dataUrl.split(",")[1];
@@ -15349,7 +15357,7 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
       setPreviews(prev => [...prev, ...newPreviews]);
       setImagesData(prev => [...prev, ...newImagesData]);
     } catch(ex) {
-      setErr("No se pudieron leer las imágenes: " + (ex.message || ex));
+      setErr("No se pudieron leer los archivos: " + (ex.message || ex));
     }
   };
 
@@ -15484,13 +15492,18 @@ CRÍTICO: "Masa Esquelética" ≠ "Músculo esquelético". Masa Esquelética = h
 
   return (
     <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 14px", marginBottom:12}}>
-      <div style={{fontSize:12.5, fontWeight:800, marginBottom:10}}>📊 Importar Fitdays</div>
+      <div style={{display:"flex", alignItems:"center", gap:7, fontSize:12.5, fontWeight:800, color:C.ink, marginBottom:3}}>
+        <Camera size={15} color={C.cyan}/> Importar medición
+      </div>
+      <div style={{fontSize:10.5, color:C.muted, marginBottom:10, lineHeight:1.45}}>
+        Sube la captura de tu báscula, InBody o Fitdays y la IA extrae los valores. Podrás revisarlos antes de guardar.
+      </div>
 
       <label
         style={{display:"flex", alignItems:"center", justifyContent:"center", gap:6, width:"100%", height:38, borderRadius:10, border:`1px solid ${C.cyan}`, background:`${C.cyan}18`, color:C.cyan, fontSize:12.5, fontWeight:800, cursor:"pointer", marginBottom:8, boxSizing:"border-box"}}
       >
-        📷 {previews.length > 0 ? `Agregar más fotos (+${previews.length} ya cargada${previews.length !== 1 ? 's' : ''})` : "Cargar capturas (múltiples)"}
-        <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={onFiles}/>
+        📷 {previews.length > 0 ? `Añadir más (+${previews.length} cargada${previews.length !== 1 ? 's' : ''})` : "Elegir capturas o PDF"}
+        <input type="file" accept="image/*,application/pdf" multiple style={{display:"none"}} onChange={onFiles}/>
       </label>
 
       {previews.length > 0 && (
@@ -15499,7 +15512,17 @@ CRÍTICO: "Masa Esquelética" ≠ "Músculo esquelético". Masa Esquelética = h
           <div style={{display:"flex", gap:8, marginBottom:10, overflowX:"auto", paddingBottom:4}}>
             {previews.map((prev, idx) => (
               <div key={idx} style={{position:"relative", flexShrink:0}}>
-                <img src={prev} alt={`preview-${idx}`} style={{width:75, height:75, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`}}/>
+                {String(prev).startsWith("pdf:") ? (
+                  // Los PDF no tienen miniatura: se muestra su nombre
+                  <div style={{width:75, height:75, borderRadius:8, border:`1px solid ${C.line}`, background:C.panel2, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:3, padding:4}}>
+                    <FileText size={20} color={C.muted}/>
+                    <span style={{fontSize:8, color:C.muted, textAlign:"center", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:"100%"}}>
+                      {String(prev).slice(4)}
+                    </span>
+                  </div>
+                ) : (
+                  <img src={prev} alt={`preview-${idx}`} style={{width:75, height:75, objectFit:"cover", borderRadius:8, border:`1px solid ${C.line}`}}/>
+                )}
                 <div style={{position:"absolute", top:2, right:2, background:C.panel, border:`1px solid ${C.line}`, borderRadius:4, fontSize:10, fontWeight:700, color:C.muted, padding:"2px 6px"}}>{idx + 1}</div>
               </div>
             ))}
@@ -15955,6 +15978,11 @@ function Registro({
   const [pantorrillaDer, setPantorrillaDer] = useState("");
   const [pantorrillaIzq, setPantorrillaIzq] = useState("");
   const [cintura, setCintura] = useState("");
+  // Evolución corporal: rango, métricas visibles y punto inspeccionado.
+  // Sustituye a los tres gráficos que mostraban lo mismo por separado.
+  const [evoRango, setEvoRango] = useState(90);      // días (0 = todo)
+  const [evoMetricas, setEvoMetricas] = useState({ peso: true, magra: true, grasaKg: true, cintura: false });
+  const [evoIdx, setEvoIdx] = useState(null);        // índice inspeccionado
   // Contexto de la medición y datos de recuperación del día
   const [fuente, setFuente] = useState("bascula");   // bascula | inbody | manual
   const [ayunas, setAyunas] = useState(true);
@@ -16002,118 +16030,7 @@ function Registro({
     })();
   }, []);
   
-  const [busyComp, setBusyComp] = useState(false);
-  const [errComp, setErrComp] = useState("");
-  const fileCompRef = useRef(null);
 
-  const onPhotoComp = async(e) => {
-    const file = e.target.files && e.target.files[0];
-    if(!file) return;
-    setBusyComp(true);
-    setErrComp("");
-    const isPdf = file.type === "application/pdf";
-    if (isPdf) setErrComp("📄 PDF detectado — esto puede tardar 20-40 s. Para ir más rápido, usa una captura de pantalla.");
-    try{
-      let b64, media;
-      if (isPdf) {
-        // PDFs: enviar tal cual (no podemos renderizar sin PDF.js)
-        b64 = await fileToBase64(file);
-        media = "application/pdf";
-      } else {
-        // Imágenes: comprimir a 700px máx, calidad 0.82 → reduce payload 5-10x
-        b64 = stripDataUrl(await compressImageToDataUrl(file, 700, 0.82));
-        media = "image/jpeg";
-      }
-      if (!isPdf) setErrComp(""); // limpiar aviso PDF si era imagen
-      
-      // Se usa el FITDAYS_SCHEMA completo (no un esquema reducido de 4 campos):
-      // así se conservan agua, masa ósea, segmental, WHR, IMC, etc. en vez de
-      // descartarlos. Los campos ausentes simplemente no vienen.
-      const prompt = "Analiza esta foto o documento (InBody, Fitdays, PDF o foto de balanza/reporte) de composición corporal y extrae TODOS los valores que aparezcan. Obligatorios: peso total (kg) y porcentaje de grasa (%). Extrae también masa muscular, músculo esquelético, agua, proteína, masa ósea, IMC, BMR, grasa visceral y los valores segmentales si figuran. No inventes datos que no estén en el documento.";
-      const sys = "Eres un analista de datos de salud experto. Extrae los números del archivo (foto o PDF) y responde estrictamente con el formato JSON. CRÍTICO: 'Masa Esquelética' = huesos (~4.9 kg) → masaOsea; 'Músculo esquelético' = SMM (~42 kg) → smmKg. Omite los campos que no aparezcan en el documento.";
-
-      const out = await callGemini([
-        {
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: media, data: b64 } },
-            { type: "text", text: prompt }
-          ]
-        }
-      ], sys, FITDAYS_SCHEMA);
-
-      const parsedRaw = cleanAndParseJSON(out);
-      // Normaliza al shape que espera el resto del componente, conservando
-      // todos los campos extra para guardarlos en metricslog.
-      const o = {
-        ...parsedRaw,
-        peso: parsedRaw.peso,
-        // masaMuscular es el campo de Fitdays; si no viene, cae a músculo esquelético
-        musculo: parsedRaw.masaMuscular ?? parsedRaw.musculo ?? parsedRaw.smmKg,
-        grasaPct: parsedRaw.grasaPct,
-        visceral: parsedRaw.visceral,
-      };
-      if (o.peso == null || o.grasaPct == null) {
-        throw new Error("Faltan peso o % de grasa en el documento");
-      }
-
-      // Si el documento no trae masa muscular, se mantiene la última conocida
-      // en vez de dejarla indefinida.
-      if (o.musculo == null) o.musculo = activeMetrics.musculo;
-      const nextComp = { musculo: o.musculo, grasaPct: o.grasaPct, visceral: o.visceral || activeMetrics.visceral || 9 };
-      setBodyComp(nextComp);
-      
-      const currentMetric = metricslog[selectedDateStr] || {};
-      // Conserva todos los campos extra que haya extraído la IA (agua, masa
-      // ósea, IMC, segmental, WHR…) además de los cuatro principales.
-      const extras = {};
-      Object.keys(FITDAYS_SCHEMA.properties).forEach(k => {
-        if (k === "peso" || k === "musculo") return; // ya mapeados abajo
-        if (parsedRaw[k] != null) extras[k] = parsedRaw[k];
-      });
-      const nextMetricObj = {
-        ...currentMetric,
-        ...extras,
-        weight: o.peso,
-        musculo: o.musculo,
-        grasaPct: o.grasaPct,
-        visceral: o.visceral || nextComp.visceral
-      };
-      const newMetricslog = {
-        ...metricslog,
-        [selectedDateStr]: nextMetricObj
-      };
-      setMetricslog(newMetricslog);
-      saveKey("metricslog", newMetricslog);
-
-      const noteDate = new Date(selectedDateStr + "T" + new Date().toTimeString().slice(0, 8)).toISOString();
-      const eWeight = {
-        id: uid(),
-        type: "peso",
-        date: noteDate,
-        text: `${o.peso} kg`,
-        weight: o.peso
-      };
-      
-      const eComp = {
-        id: uid(),
-        type: "composicion",
-        date: noteDate,
-        text: `Composición (Reporte/Archivo): Músculo ${o.musculo} kg, Grasa ${o.grasaPct}%, Visceral Grado ${o.visceral || nextComp.visceral}`
-      };
-      
-      const nextNotes = [eComp, eWeight, ...notes];
-      setNotes(nextNotes);
-      
-      const nextWeights = nextNotes.filter(n => n.type === "peso" && n.weight).slice().reverse();
-      analyze(nextWeights, nextMetricObj);
-
-    } catch(err) {
-      setErrComp("No pude extraer los datos del archivo. Asegúrate de que los números sean legibles y el archivo sea válido.");
-    }
-    setBusyComp(false);
-    e.target.value = "";
-  };
   
   const TYPES = {
     peso: ["Peso", C.cyan],
@@ -16312,7 +16229,6 @@ function Registro({
   const lastW = activeMetrics.weight;
   const goalW = parseFloat(bodyProfile?.pesoObjetivo) || GOAL_W;
   const startW = parseFloat(bodyProfile?.pesoInicial) || (weights.length ? weights[0].weight : START_W);
-  const chartW = weights.map(x => ({date: x.date, w: x.weight}));
   const goalPct = Math.max(0, Math.min(100, ((startW - lastW) / ((startW - goalW) || 1)) * 100));
   const toGoal = (lastW - goalW);
 
@@ -16354,32 +16270,7 @@ function Registro({
     }
   }
 
-  const getBodyCompHistory = () => {
-    const sortedDates = Object.keys(metricslog || {}).sort();
-    if (sortedDates.length === 0) return [];
-    
-    let lastWVal = START_W;
-    let lastMVal = bodyComp ? bodyComp.musculo : 64.7;
-    let lastGVal = bodyComp ? bodyComp.grasaPct : 26.2;
-    
-    return sortedDates.map(date => {
-      const e = (metricslog || {})[date] || {};
-      if (e.weight !== undefined) lastWVal = e.weight;
-      if (e.musculo !== undefined) lastMVal = e.musculo;
-      if (e.grasaPct !== undefined) lastGVal = e.grasaPct;
-      
-      const lean = lastWVal * (1 - lastGVal / 100);
-      const fat = lastWVal * (lastGVal / 100);
-      return {
-        date: date + "T12:00:00.000Z",
-        lean: parseFloat(lean.toFixed(1)),
-        fat: parseFloat(fat.toFixed(1)),
-        w: lastWVal
-      };
-    });
-  };
 
-  const bodyCompHistory = getBodyCompHistory();
 
   const bD = parseFloat(brazoDer);
   const bI = parseFloat(brazoIzq);
@@ -16570,68 +16461,6 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
     );
   };
 
-  const renderBodyCompChart = (data) => {
-    if (!data || data.length < 2) {
-      return (
-        <div style={{textAlign:"center", color:C.muted, fontSize:12, padding:"24px 0", background:C.panel2, border:`1px dashed ${C.line}`, borderRadius:12, margin:"8px 0"}}>
-          Registra peso y composición en al menos 2 días para ver la tendencia de masa magra vs grasa
-        </div>
-      );
-    }
-    
-    const W = 320, H = 160, pad = 24;
-    const allVals = data.flatMap(d => [d.lean, d.fat]);
-    const minY = Math.max(0, Math.min(...allVals) - 4);
-    const maxY = Math.max(...allVals) + 4;
-    const YRange = (maxY - minY) || 1;
-    
-    const X = i => pad + (i / (data.length - 1)) * (W - 2 * pad);
-    const Y = v => H - pad - ((v - minY) / YRange) * (H - 2 * pad);
-    
-    const leanLine = data.map((d, i) => `${X(i).toFixed(1)},${Y(d.lean).toFixed(1)}`).join(" ");
-    const fatLine = data.map((d, i) => `${X(i).toFixed(1)},${Y(d.fat).toFixed(1)}`).join(" ");
-    
-    const leanArea = `${pad},${H - pad} ${leanLine} ${(W - pad).toFixed(1)},${H - pad}`;
-    const fatArea = `${pad},${H - pad} ${fatLine} ${(W - pad).toFixed(1)},${H - pad}`;
-    
-    return (
-      <div style={{margin:"12px 0 6px"}}>
-        <div style={{display:"flex", gap:14, fontSize:11, color:C.muted, marginBottom:6, justifyContent:"center"}}>
-          <span style={{display:"flex", alignItems:"center", gap:4}}><span style={{width:8, height:8, borderRadius:"50%", background:C.cyan}}/> Masa Magra (kg)</span>
-          <span style={{display:"flex", alignItems:"center", gap:4}}><span style={{width:8, height:8, borderRadius:"50%", background:C.amber}}/> Masa Grasa (kg)</span>
-        </div>
-        <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%", height:H, display:"block"}}>
-          {[0, 0.25, 0.5, 0.75, 1].map((p, idx) => {
-            const yVal = minY + p * YRange;
-            const yPos = Y(yVal);
-            return (
-              <g key={idx}>
-                <line x1={pad} y1={yPos} x2={W - pad} y2={yPos} stroke={C.line} strokeWidth="0.8" strokeDasharray="3,3"/>
-                <text x={pad - 4} y={yPos + 3.5} fill={C.muted} fontSize="8.5" textAnchor="end">{yVal.toFixed(0)}</text>
-              </g>
-            );
-          })}
-          
-          <polygon points={leanArea} fill={C.cyan} opacity="0.08"/>
-          <polygon points={fatArea} fill={C.amber} opacity="0.08"/>
-          
-          <polyline points={leanLine} fill="none" stroke={C.cyan} strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round"/>
-          <polyline points={fatLine} fill="none" stroke={C.amber} strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round"/>
-          
-          {data.map((d, i) => (
-            <g key={i}>
-              <circle cx={X(i)} cy={Y(d.lean)} r="3" fill={C.cyan}/>
-              <circle cx={X(i)} cy={Y(d.fat)} r="3" fill={C.amber}/>
-            </g>
-          ))}
-        </svg>
-        <div style={{display:"flex", justifyContent:"space-between", fontSize:9, color:C.muted, marginTop:2, padding:`0 ${pad}px`}}>
-          <span>{fdate(data[0].date)}</span>
-          <span>{fdate(data[data.length - 1].date)}</span>
-        </div>
-      </div>
-    );
-  };
 
   const renderProjectionChart = () => {
     if (!projections || projections.length === 0) {
@@ -16893,32 +16722,10 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               <span style={{color:C.muted, fontSize:13}}>Nivel</span>
             </div>
 
-            <div style={{marginTop:8, display:"flex", gap:8}}>
-              <button 
-                onClick={() => fileCompRef.current.click()} 
-                disabled={busyComp} 
-                style={{
-                  flex: 1,
-                  padding: "10px",
-                  borderRadius: 10,
-                  border: `1px solid ${C.line}`,
-                  background: C.panel2,
-                  color: C.lime,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 8,
-                  fontSize: 13,
-                  fontWeight: 700
-                }}
-              >
-                {busyComp ? <Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/> : <Camera size={16}/>}
-                <span>{busyComp ? "Analizando… (20-40 s si es PDF)" : "Escanear foto / captura / PDF"}</span>
-              </button>
-              <input ref={fileCompRef} type="file" accept="image/*,application/pdf" onChange={onPhotoComp} style={{display:"none"}}/>
-            </div>
-            {errComp && <div style={{color: errComp.startsWith("📄") ? C.amber : C.rose, fontSize:12, marginTop:6}}>{errComp}</div>}
+            {/* La importación desde foto/PDF vive en un único bloque
+                ("Importar medición") justo debajo: antes había dos flujos
+                distintos haciendo lo mismo, y este guardaba sin dejar revisar
+                lo que la IA había leído. */}
           </div>
         )}
 
@@ -16926,6 +16733,15 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           {buttonLabels[type] || "Guardar"}
         </button>
       </div>
+
+      {/* Importar en lugar de teclear: única vía de carga desde imagen/PDF.
+          Va aquí, pegada al formulario manual, porque son las dos formas de
+          registrar la MISMA medición — antes estaban en extremos opuestos. */}
+      <FitdaysImport
+        metricslog={metricslog}
+        setMetricslog={setMetricslog}
+        geminiKey={geminiKey}
+      />
 
       {/* ── Directrices personalizadas ── */}
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:14, marginBottom:12}}>
@@ -17149,95 +16965,186 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         );
       })()}
 
-      {/* ===== PANEL DE RECOMPOSICIÓN ===== */}
+      {/* ===== EVOLUCIÓN CORPORAL (gráfico único e interactivo) =====
+          Antes había tres bloques distintos dibujando el mismo histórico:
+          este panel, "Evolución: Masa Magra vs Masa Grasa" y "Tendencia de
+          Peso". Ahora hay uno solo, con rango temporal, métricas
+          seleccionables y lectura del valor en cualquier fecha. */}
       {(() => {
-        const rec = buildRecompositionSeries(metricslog);
-        if (!rec.available) return null;
-        const pts = rec.points;
-        // Gráfico: peso, masa magra y grasa en kg sobre el mismo eje temporal
-        // Cada serie se dibuja en su PROPIA franja y con su PROPIA escala.
-        // Compartir un eje entre peso (~92 kg), magra (~70) y grasa (~22) hacía
-        // que un cambio real de 3 kg ocupara 4 px: las tres líneas salían planas
-        // y el gráfico no informaba de nada.
-        const W = 300, ROW_H = 30, pad = 4;
-        const series = [
-          { key: "peso", color: C.ink, label: "Peso", unidad: "kg" },
-          { key: "magra", color: C.lime, label: "Masa magra", unidad: "kg" },
-          { key: "grasaKg", color: C.amber, label: "Grasa", unidad: "kg" },
-          { key: "cintura", color: C.cyan, label: "Cintura", unidad: "cm" },
-        ].filter(s => pts.filter(p => p[s.key] != null).length >= 2);
-        const xAt = (i) => pad + (i * (W - 2 * pad)) / Math.max(1, pts.length - 1);
-        // Devuelve el trazo y los extremos de una serie, escalada a su franja
-        const serieInfo = (key) => {
+        const recTodo = buildRecompositionSeries(metricslog);
+        if (!recTodo.available) return null;
+
+        const SERIES = [
+          { key: "peso",    color: C.ink,   label: "Peso",       unidad: "kg" },
+          { key: "magra",   color: C.lime,  label: "Masa magra", unidad: "kg" },
+          { key: "grasaKg", color: C.amber, label: "Grasa",      unidad: "kg" },
+          { key: "cintura", color: C.cyan,  label: "Cintura",    unidad: "cm" },
+        ];
+        const RANGOS = [{ d: 30, l: "30 d" }, { d: 90, l: "90 d" }, { d: 0, l: "Todo" }];
+
+        // Recorte por rango sobre la serie completa
+        const todos = recTodo.points;
+        const corte = (() => {
+          if (!evoRango) return todos;
+          const lim = new Date(selectedDateStr + "T12:00:00");
+          lim.setDate(lim.getDate() - evoRango);
+          const limStr = getLocalDateStr(lim);
+          const rec2 = todos.filter(p => p.date >= limStr);
+          return rec2.length >= 2 ? rec2 : todos;
+        })();
+        const pts = corte;
+
+        // Solo las métricas activas Y con datos suficientes en el rango
+        const activas = SERIES.filter(s => evoMetricas[s.key] && pts.filter(p => p[s.key] != null).length >= 2);
+        const disponibles = SERIES.filter(s => todos.filter(p => p[s.key] != null).length >= 2);
+
+        const W = 300, H = 132, padX = 4, padY = 8;
+        const xAt = (i) => padX + (i * (W - 2 * padX)) / Math.max(1, pts.length - 1);
+        // Cada métrica conserva su propia escala: comparten el lienzo pero no el
+        // eje, porque peso (~92 kg) y grasa (~22 kg) aplastarían la otra curva.
+        const infoDe = (key) => {
           const vals = pts.map(p => p[key]).filter(v => v != null);
           const min = Math.min(...vals), max = Math.max(...vals);
-          const range = (max - min) || 1;
-          const yAt = (v) => ROW_H - pad - ((v - min) / range) * (ROW_H - 2 * pad);
+          // Suelo de escala: una métrica que apenas se mueve no debe estirarse
+          // a toda la banda, o el ruido de medición (décimas de kg y de %) se
+          // amplifica y parece variación real. Mínimo un 4% del valor típico.
+          const tipico = (min + max) / 2 || 1;
+          const rango = Math.max(max - min, Math.abs(tipico) * 0.04) || 1;
+          const centro = (min + max) / 2;
+          const base = centro - rango / 2;
+          const yAt = (v) => H - padY - ((v - base) / rango) * (H - 2 * padY);
           const d = pts.map((p, i) => p[key] == null ? null : `${xAt(i).toFixed(1)},${yAt(p[key]).toFixed(1)}`)
             .filter(Boolean).map((c, i) => `${i === 0 ? "M" : "L"}${c}`).join(" ");
-          return { d, min, max, primero: vals[0], ultimo: vals[vals.length - 1] };
+          return { d, yAt, min, max, primero: vals[0], ultimo: vals[vals.length - 1] };
+        };
+        const infos = {};
+        activas.forEach(s => { infos[s.key] = infoDe(s.key); });
+
+        const idx = evoIdx != null && evoIdx >= 0 && evoIdx < pts.length ? evoIdx : null;
+        const punto = idx != null ? pts[idx] : null;
+        // Al inspeccionar se comparan los valores con el inicio del rango
+        const desdeIdx = (key) => {
+          const inf = infos[key];
+          if (!inf || punto?.[key] == null) return null;
+          return Math.round((punto[key] - inf.primero) * 10) / 10;
         };
 
-        const deltaChip = (label, val, unit, mejorSiBaja) => {
-          if (val == null) return null;
-          const bueno = mejorSiBaja ? val < 0 : val > 0;
-          const col = val === 0 ? C.muted : bueno ? C.lime : C.amber;
-          return (
-            <div key={label} style={{flex:1, minWidth:64, background:C.bg, borderRadius:8, padding:"6px 8px", textAlign:"center"}}>
-              <div style={{fontSize:9, color:C.muted, fontWeight:700}}>{label}</div>
-              <div style={{fontSize:13, fontWeight:900, color:col}}>{val > 0 ? "+" : ""}{val}<span style={{fontSize:9, fontWeight:600}}>{unit}</span></div>
-            </div>
-          );
+        const alSenalar = (e) => {
+          const caja = e.currentTarget.getBoundingClientRect();
+          const x = ((e.clientX ?? e.touches?.[0]?.clientX) - caja.left) / caja.width;
+          const i = Math.round(x * (pts.length - 1));
+          setEvoIdx(Math.max(0, Math.min(pts.length - 1, i)));
         };
 
         return (
           <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:14, marginBottom:12}}>
             <div style={{display:"flex", alignItems:"center", gap:7, fontSize:12.5, fontWeight:800, color:C.ink, marginBottom:3}}>
-              <Activity size={15} color={C.lime}/> Recomposición corporal
+              <Activity size={15} color={C.lime}/> Evolución corporal
             </div>
             <div style={{fontSize:10.5, color:C.muted, marginBottom:10, lineHeight:1.45}}>
-              Perder grasa manteniendo la masa magra es el objetivo real, y la báscula sola no lo distingue.
+              Perder grasa manteniendo la masa magra es el objetivo real, y la báscula sola no lo distingue. Toca el gráfico para ver cualquier fecha.
             </div>
 
-            {rec.recomposing && (
-              <div style={{background:"rgba(205,255,74,0.10)", border:`1px solid ${C.lime}55`, borderRadius:10, padding:"8px 11px", marginBottom:10, fontSize:11, color:C.muted, lineHeight:1.45}}>
-                <b style={{color:C.lime}}>Vas bien.</b> Estás perdiendo grasa manteniendo (o ganando) masa magra.
-              </div>
-            )}
+            {/* Rango temporal */}
+            <div style={{display:"flex", gap:5, marginBottom:8}}>
+              {RANGOS.map(r => (
+                <button key={r.d} className="btn-active-scale"
+                  onClick={() => { setEvoRango(r.d); setEvoIdx(null); }}
+                  style={{flex:1, background: evoRango===r.d ? "rgba(205,255,74,0.12)" : "transparent",
+                    border:`1px solid ${evoRango===r.d ? C.lime : C.line}`, borderRadius:8, padding:"5px 4px",
+                    color: evoRango===r.d ? C.lime : C.muted, fontSize:11, fontWeight:700}}>
+                  {r.l}
+                </button>
+              ))}
+            </div>
 
-            <div style={{marginBottom:10, display:"flex", flexDirection:"column", gap:2}}>
-              {series.map(s => {
-                const info = serieInfo(s.key);
-                const sube = info.ultimo > info.primero;
+            {/* Métricas activables */}
+            <div style={{display:"flex", gap:5, marginBottom:10, flexWrap:"wrap"}}>
+              {disponibles.map(s => {
+                const on = !!evoMetricas[s.key];
                 return (
-                  <div key={s.key} style={{display:"flex", alignItems:"center", gap:8}}>
-                    <span style={{fontSize:10, fontWeight:700, color:C.muted, width:74, flexShrink:0}}>{s.label}</span>
-                    <svg width={W} height={ROW_H} viewBox={`0 0 ${W} ${ROW_H}`} preserveAspectRatio="none"
-                      style={{flex:1, minWidth:0, height:ROW_H}}>
-                      <path d={info.d} fill="none" stroke={s.color} strokeWidth={1.6}
-                        strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"/>
-                    </svg>
-                    <span style={{fontSize:9.5, color:C.muted, width:78, flexShrink:0, textAlign:"right"}}>
-                      {info.primero.toFixed(1)}<span style={{opacity:.6}}>→</span>
-                      <b style={{color: sube ? C.ink : s.color}}>{info.ultimo.toFixed(1)}</b> {s.unidad}
-                    </span>
-                  </div>
+                  <button key={s.key} className="btn-active-scale"
+                    onClick={() => setEvoMetricas(m => ({ ...m, [s.key]: !m[s.key] }))}
+                    style={{display:"inline-flex", alignItems:"center", gap:5, background: on ? `${s.color}18` : "transparent",
+                      border:`1px solid ${on ? s.color : C.line}`, borderRadius:20, padding:"4px 10px",
+                      color: on ? s.color : C.muted, fontSize:10.5, fontWeight:700}}>
+                    <span style={{width:8, height:8, borderRadius:"50%", background: on ? s.color : C.line, display:"inline-block"}}/>
+                    {s.label}
+                  </button>
                 );
               })}
             </div>
-            <div style={{fontSize:9, color:C.muted, marginBottom:10, opacity:.75}}>
-              Cada línea usa su propia escala para que se vea su tendencia, no su magnitud.
-            </div>
 
-            <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
-              {deltaChip("Peso", rec.deltas.peso, "kg", true)}
-              {deltaChip("Masa magra", rec.deltas.magra, "kg", false)}
-              {deltaChip("Grasa", rec.deltas.grasaKg, "kg", true)}
-              {deltaChip("Cintura", rec.deltas.cintura, "cm", true)}
-            </div>
-            <div style={{fontSize:9.5, color:C.muted, marginTop:7}}>
-              Cambio desde {fdate(rec.first.date + "T12:00:00Z")} · {pts.length} mediciones
-            </div>
+            {activas.length === 0 ? (
+              <div style={{fontSize:11, color:C.muted, background:C.panel2, borderRadius:10, padding:"14px 12px", textAlign:"center"}}>
+                Activa al menos una métrica para ver su evolución.
+              </div>
+            ) : (
+              <>
+                <div style={{position:"relative", cursor:"crosshair", touchAction:"none"}}
+                  onMouseMove={alSenalar} onMouseLeave={() => setEvoIdx(null)}
+                  onTouchStart={alSenalar} onTouchMove={alSenalar}>
+                  <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{display:"block", height:H}}>
+                    {activas.map(s => (
+                      <path key={s.key} d={infos[s.key].d} fill="none" stroke={s.color} strokeWidth={1.7}
+                        strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"/>
+                    ))}
+                    {idx != null && (
+                      <>
+                        <line x1={xAt(idx)} y1={0} x2={xAt(idx)} y2={H} stroke={C.muted} strokeWidth={1}
+                          strokeDasharray="3 3" vectorEffect="non-scaling-stroke" opacity={0.7}/>
+                        {activas.map(s => punto[s.key] == null ? null : (
+                          <circle key={s.key} cx={xAt(idx)} cy={infos[s.key].yAt(punto[s.key])} r={3}
+                            fill={s.color} stroke={C.panel} strokeWidth={1.5}/>
+                        ))}
+                      </>
+                    )}
+                  </svg>
+                </div>
+
+                {/* Lectura: fecha inspeccionada o resumen del rango */}
+                <div style={{marginTop:8, background:C.bg, borderRadius:10, padding:"9px 11px"}}>
+                  <div style={{fontSize:9.5, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em", marginBottom:6}}>
+                    {punto
+                      ? fdate(punto.date + "T12:00:00Z")
+                      : `Cambio en ${evoRango ? `los últimos ${evoRango} días` : "todo el histórico"}`}
+                  </div>
+                  <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
+                    {activas.map(s => {
+                      const inf = infos[s.key];
+                      const valor = punto ? punto[s.key] : inf.ultimo;
+                      if (valor == null) return null;
+                      const delta = punto ? desdeIdx(s.key) : Math.round((inf.ultimo - inf.primero) * 10) / 10;
+                      const mejorSiBaja = s.key !== "magra";
+                      const colDelta = delta === 0 || delta == null ? C.muted
+                        : (mejorSiBaja ? delta < 0 : delta > 0) ? C.lime : C.amber;
+                      return (
+                        <div key={s.key} style={{flex:1, minWidth:66, background:C.panel2, borderRadius:8, padding:"6px 8px"}}>
+                          <div style={{fontSize:9, color:s.color, fontWeight:700}}>{s.label}</div>
+                          <div style={{fontSize:13, fontWeight:900, color:C.ink}}>
+                            {valor}<span style={{fontSize:8.5, fontWeight:600, color:C.muted}}> {s.unidad}</span>
+                          </div>
+                          {delta != null && (
+                            <div style={{fontSize:9.5, fontWeight:700, color:colDelta}}>
+                              {delta > 0 ? "+" : ""}{delta} {s.unidad}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {recTodo.recomposing && !punto && (
+                  <div style={{marginTop:8, background:"rgba(205,255,74,0.10)", border:`1px solid ${C.lime}55`, borderRadius:10, padding:"8px 11px", fontSize:11, color:C.muted, lineHeight:1.45}}>
+                    <b style={{color:C.lime}}>Vas bien.</b> Estás perdiendo grasa manteniendo (o ganando) masa magra.
+                  </div>
+                )}
+                <div style={{fontSize:9.5, color:C.muted, marginTop:7}}>
+                  {pts.length} mediciones · cada métrica usa su propia escala para que se vea su tendencia
+                </div>
+              </>
+            )}
           </div>
         );
       })()}
@@ -17475,11 +17382,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         );
       })()}
 
-      {/* Gráfico Histórico de Masa Magra vs Masa Grasa */}
-      <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
-        <div style={{fontSize:12.5, fontWeight:800, marginBottom:2}}>Evolución: Masa Magra vs Masa Grasa</div>
-        {renderBodyCompChart(bodyCompHistory)}
-      </div>
+      {/* El histórico de masa magra vs grasa vive ahora en "Evolución corporal" */}
 
       {/* Radar chart de medidas corporales */}
       {(() => {
@@ -17734,12 +17637,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         </div>
       </div>
 
-      {chartW.length >= 2 && (
-        <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 16px 6px", marginBottom:12}}>
-          <div style={{fontSize:12.5, fontWeight:800, marginBottom:2}}>Tendencia de Peso (kg)</div>
-          <Chart entries={chartW} color={C.cyan} height={140}/>
-        </div>
-      )}
+      {/* La tendencia de peso vive ahora en "Evolución corporal" */}
 
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 16px 12px", marginBottom:12}}>
         <div style={{fontSize:12.5, fontWeight:800, marginBottom:2}}>Proyección Corporal a 12 Semanas (IA)</div>
@@ -17827,12 +17725,6 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
 
       {/* Fitdays Trends + Import */}
       <FitdaysTrends metricslog={metricslog}/>
-      <FitdaysImport
-        metricslog={metricslog}
-        setMetricslog={setMetricslog}
-        geminiKey={geminiKey}
-      />
-
       {/* Galería de fotos de progreso */}
       {(() => {
         // Soporte para photos[] (nuevo) y photo string (legacy) → helper de módulo getEntryPhotos
