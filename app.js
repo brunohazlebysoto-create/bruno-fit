@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W35";
+const APP_VERSION = "v2026.06.23-W36";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -224,7 +224,7 @@ const suppsKey = () => "supps-" + getLocalDateStr(new Date());
 const uid = () => Math.random().toString(36).slice(2,9);
 const fdate = (iso)=> new Date(iso).toLocaleDateString("es",{day:"2-digit",month:"short"});
 
-// Clave Gemini/OpenRouter por defecto
+// Clave de Gemini por defecto
 const DEFAULT_GEMINI_KEY = "";
 
 const COACH_SCHEMA = {
@@ -649,23 +649,20 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
     throw new Error("No API Key configurada. Ve a Perfil → Ajustes y agrega tu clave Gemini gratuita de gemini.google.com");
   }
 
-  // Priorizar las llaves de Gemini nativas primero y usar las de OpenRouter como respaldo/fallback
+  // Solo se usan claves nativas de Gemini. Las de OpenRouter (sk-or-) se
+  // descartan: iban por cola compartida en los modelos gratuitos y eran la
+  // causa principal de las esperas largas.
   const geminiKeys = apiKeys.filter(k => !k.startsWith("sk-or-"));
-  const openRouterKeys = apiKeys.filter(k => k.startsWith("sk-or-"));
-
-  const orderedKeys = [];
-  if (geminiKeys.length > 0) {
-    // Round-robin estricto: cada llamada empieza en la siguiente clave
-    const startGemini = _rrIdx % geminiKeys.length;
-    _rrIdx = (_rrIdx + 1) % geminiKeys.length;
-    for (let count = 0; count < geminiKeys.length; count++) {
-      orderedKeys.push(geminiKeys[(startGemini + count) % geminiKeys.length]);
-    }
+  if (geminiKeys.length === 0) {
+    throw new Error("Necesitas una API Key de Gemini. Consíguela gratis en aistudio.google.com y añádela en Perfil → Ajustes.");
   }
-  if (openRouterKeys.length > 0) {
-    for (let count = 0; count < openRouterKeys.length; count++) {
-      orderedKeys.push(openRouterKeys[count % openRouterKeys.length]);
-    }
+
+  // Round-robin estricto: cada llamada empieza en la siguiente clave
+  const orderedKeys = [];
+  const startGemini = _rrIdx % geminiKeys.length;
+  _rrIdx = (_rrIdx + 1) % geminiKeys.length;
+  for (let count = 0; count < geminiKeys.length; count++) {
+    orderedKeys.push(geminiKeys[(startGemini + count) % geminiKeys.length]);
   }
 
   let lastError = null;
@@ -676,85 +673,6 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
   for (let idx = 0; idx < orderedKeys.length; idx++) {
     const apiKey = orderedKeys[idx];
     try {
-      const isOpenRouter = apiKey.startsWith("sk-or-");
-      
-      if (isOpenRouter) {
-        // Carga el modelo guardado, por defecto moonshotai/kimi-k2.6:free
-        const model = await loadKey("gemini_model", "moonshotai/kimi-k2.6:free");
-        
-        const formattedMessages = [
-          { role: "system", content: systemInstruction }
-        ];
-        
-        messages.forEach(m => {
-          if (Array.isArray(m.content)) {
-            const contentParts = [];
-            m.content.forEach(part => {
-              if (part.type === "image") {
-                contentParts.push({
-                  type: "image_url",
-                  image_url: {
-                    url: `data:${part.source.media_type};base64,${part.source.data}`
-                  }
-                });
-              } else {
-                contentParts.push({
-                  type: "text",
-                  text: part.text
-                });
-              }
-            });
-            formattedMessages.push({
-              role: m.role === "assistant" ? "assistant" : "user",
-              content: contentParts
-            });
-          } else {
-            formattedMessages.push({
-              role: m.role === "assistant" ? "assistant" : "user",
-              content: m.content
-            });
-          }
-        });
-
-        const body = {
-          model: model,
-          messages: formattedMessages,
-          temperature: 0.2,
-          // Techo de generación: evita respuestas desbocadas que multiplican la
-          // espera. Con esquema se deja amplio porque truncar rompe el JSON.
-          max_tokens: options.maxTokens || (responseSchema ? 8192 : 2048)
-        };
-
-        if (responseSchema) {
-          body.response_format = { type: "json_object" };
-          // En OpenRouter para asegurar JSON podemos indicarlo en el system prompt
-          body.messages.push({
-            role: "system",
-            content: "IMPORTANT: You must respond with a JSON object that strictly complies with this JSON schema: " + JSON.stringify(responseSchema)
-          });
-        }
-
-        const res = await fetchConTimeout("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiKey}`,
-            "HTTP-Referer": "https://brunoeduardo-bruno-fit.static.hf.space",
-            "X-Title": "Centro de Mando Fitness"
-          },
-          body: JSON.stringify(body)
-        }, timeoutMs);
-
-        if (!res.ok) {
-          const errorData = await res.json().catch(() => ({}));
-          throw new Error(errorData.error?.message || `HTTP ${res.status}`);
-        }
-
-        const data = await res.json();
-        const textOut = data.choices?.[0]?.message?.content || "";
-        return textOut.trim();
-
-      } else {
         // Endpoint directo de Google Gemini
         const contents = messages.map(m => {
           if (Array.isArray(m.content)) {
@@ -834,7 +752,6 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
           throw new Error("El modelo devolvió una respuesta vacía. Intenta de nuevo o cambia el modelo en Perfil → Ajustes.");
         }
         return textOut.trim();
-      }
     } catch (e) {
       lastError = e;
       const is429 = e.message && (e.message.includes("429") || e.message.includes("RESOURCE_EXHAUSTED") || e.message.includes("quota") || e.message.includes("limit"));
@@ -2479,7 +2396,6 @@ export default function App(){
   const [chatBusy, setChatBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [geminiKey, setGeminiKey] = useState("");
-  const [aiModel, setAiModel] = useState("moonshotai/kimi-k2.6:free");
   const [prAlerts, setPrAlerts] = useState([]);
   const [workoutDurations, setWorkoutDurations] = useState({});
   const [exerciseTechNotes, setExerciseTechNotes] = useState({});
@@ -3017,7 +2933,6 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       setSupplements((localSuppslog || {})[selectedDateStr] || { Creatina: false, "Whey Protein": false, "Vitamina D": false, "Multivitamínico": false });
 
       setGeminiKey(await loadKey("gemini_api_key", DEFAULT_GEMINI_KEY));
-      setAiModel(await loadKey("gemini_model", "moonshotai/kimi-k2.6:free"));
       setLoaded(true);
 
       // Load persisted AI data
@@ -3978,11 +3893,6 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
   const saveGeminiKey = (k) => {
     setGeminiKey(k);
     saveKey("gemini_api_key", k);
-  };
-
-  const saveAiModel = (m) => {
-    setAiModel(m);
-    saveKey("gemini_model", m);
   };
 
   // Activa o desactiva la sincronización en la nube
@@ -5873,8 +5783,6 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             bodyProfile={bodyProfile}
             geminiKey={geminiKey}
             saveGeminiKey={saveGeminiKey}
-            aiModel={aiModel}
-            saveAiModel={saveAiModel}
             cloudSync={cloudSync}
             syncCode={syncCode}
             syncStatus={syncStatus}
@@ -9545,8 +9453,6 @@ function Perfil({
   bodyProfile,
   geminiKey,
   saveGeminiKey,
-  aiModel,
-  saveAiModel,
   cloudSync,
   syncCode,
   syncStatus,
@@ -9587,18 +9493,9 @@ function Perfil({
     const id = key.slice(0, 12);
     setKeyStatuses(prev => ({ ...prev, [id]: "testing" }));
     try {
-      let ok = false;
-      if (key.startsWith("sk-or-")) {
-        // OpenRouter: verificar con models list
-        const res = await fetch("https://openrouter.ai/api/v1/models", {
-          headers: { "Authorization": `Bearer ${key}` }
-        });
-        ok = res.ok;
-      } else {
-        // Gemini: listar modelos — no gasta cuota de generación
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}&pageSize=1`);
-        ok = res.ok;
-      }
+      // Gemini: listar modelos — no gasta cuota de generación
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}&pageSize=1`);
+      const ok = res.ok;
       setKeyStatuses(prev => ({ ...prev, [id]: ok ? "ok" : "error" }));
     } catch {
       setKeyStatuses(prev => ({ ...prev, [id]: "error" }));
@@ -9615,17 +9512,6 @@ function Perfil({
   const [emailInput, setEmailInput] = useState("");
   const [showEmailInput, setShowEmailInput] = useState(false);
   const [emailErr, setEmailErr] = useState("");
-  
-  const predefinedModels = ["google/gemini-2.5-flash", "google/gemini-2.5-pro", "deepseek/deepseek-chat", "moonshotai/kimi-k2.6:free"];
-  const [customModelMode, setCustomModelMode] = useState(!predefinedModels.includes(aiModel));
-
-  useEffect(() => {
-    if (!predefinedModels.includes(aiModel)) {
-      setCustomModelMode(true);
-    } else {
-      setCustomModelMode(false);
-    }
-  }, [aiModel]);
   
   const [sbUrlInput, setSbUrlInput] = useState(supabaseUrl || "");
   const [sbKeyInput, setSbKeyInput] = useState(supabaseAnonKey || "");
@@ -9823,7 +9709,7 @@ function Perfil({
                 value={newKeyInput}
                 onChange={e => setNewKeyInput(e.target.value)}
                 type="password"
-                placeholder="Pegar nueva API Key (OpenRouter/Gemini)..."
+                placeholder="Pegar nueva API Key de Gemini..."
                 style={{ flex: 1, background: "var(--panel-bg-sec)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: "10px 12px", fontSize: 12, color: "var(--text-ink)" }}
               />
               <button 
@@ -9853,7 +9739,7 @@ function Perfil({
                       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                         <div style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor, flexShrink: 0, boxShadow: st === "ok" ? "0 0 6px #7fff6a" : st === "error" ? "0 0 6px var(--accent-rose)" : "none", animation: st === "testing" ? "pulse 1s infinite" : "none" }} />
                         <span style={{ fontFamily: "monospace", color: "var(--text-ink)" }}>
-                          {k.startsWith("sk-or-") ? "OpenRouter · " : "Gemini · "}{k.length > 15 ? `${k.slice(0, 6)}...${k.slice(-4)}` : "Clave"}
+                          {"Gemini · "}{k.length > 15 ? `${k.slice(0, 6)}...${k.slice(-4)}` : "Clave"}
                         </span>
                         <span style={{ fontSize: 10, color: dotColor, fontWeight: 700 }}>{dotLabel}</span>
                       </div>
@@ -9871,45 +9757,13 @@ function Perfil({
               </div>
             )}
 
-            {/* Selector de modelo */}
-            {keysList.some(k => k.startsWith("sk-or-")) && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, background: "var(--panel-bg-sec)", padding: 10, borderRadius: "var(--radius-md)", border: "1px solid var(--line-color)" }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: "var(--accent-lime)", textTransform: "uppercase", letterSpacing: ".05em" }}>Modelo de OpenRouter:</div>
-                <select 
-                  value={customModelMode ? "custom" : aiModel} 
-                  onChange={e => {
-                    if (e.target.value === "custom") {
-                      setCustomModelMode(true);
-                    } else {
-                      setCustomModelMode(false);
-                      saveAiModel(e.target.value);
-                    }
-                  }} 
-                  style={{ background: "var(--panel-bg)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-sm)", padding: "8px 10px", fontSize: 12, color: "var(--text-ink)", width: "100%" }}
-                >
-                  <option value="google/gemini-2.5-flash">Gemini 2.5 Flash</option>
-                  <option value="google/gemini-2.5-pro">Gemini 2.5 Pro</option>
-                  <option value="deepseek/deepseek-chat">DeepSeek Chat (V3)</option>
-                  <option value="moonshotai/kimi-k2.6:free">Kimi K2.6 (Gratis)</option>
-                  <option value="custom">Otro (Ingresar ID abajo)</option>
-                </select>
-                {customModelMode && (
-                  <input 
-                    value={aiModel === "custom" ? "" : aiModel} 
-                    onChange={e => saveAiModel(e.target.value)} 
-                    placeholder="Ej: meta-llama/llama-3.1-70b-instruct" 
-                    style={{ background: "var(--panel-bg)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-sm)", padding: "8px 10px", fontSize: 12, color: "var(--text-ink)", marginTop: 4 }}
-                  />
-                )}
-              </div>
-            )}
             {/* Selector de modelo Gemini nativo */}
-            {keysList.some(k => !k.startsWith("sk-or-")) && (
+            {keysList.length > 0 && (
               <div style={{ display: "flex", flexDirection: "column", gap: 6, background: "var(--panel-bg-sec)", padding: 10, borderRadius: "var(--radius-md)", border: "1px solid var(--line-color)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div style={{ fontSize: 10, fontWeight: 800, color: "var(--accent-cyan)", textTransform: "uppercase", letterSpacing: ".05em" }}>Modelo Gemini:</div>
                   <button onClick={async () => {
-                    const firstKey = keysList.find(k => !k.startsWith("sk-or-"));
+                    const firstKey = keysList[0];
                     if (!firstKey) return;
                     try {
                       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${firstKey}&pageSize=50`);
@@ -9941,7 +9795,7 @@ function Perfil({
               </div>
             )}
             <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.4 }}>
-              Las claves de OpenRouter deben iniciar con <code>sk-or-</code>. Se rotarán automáticamente para evitar límites.
+              Consigue tu clave gratis en <code>aistudio.google.com</code>. Si añades varias, se rotan automáticamente para no agotar la cuota.
             </div>
           </div>
         )}
