@@ -148,3 +148,43 @@ alcanzaban.
 | El panel del ejercicio tenía dos gráficos del mismo dato (mini 1RM + gráfico grande con selector Peso/1RM) | Solo el grande |
 | El buscador del modal de PRs compartía fila con dos botones y no cabía ni su texto | Ocupa su línea; los botones van debajo al 50% con etiquetas completas |
 | La lista del editor de splits se cortaba a media tarjeta sin señal de que hubiera más | Degradado al pie cuando hay más de 4 ejercicios |
+
+---
+
+## Arranque sin CDN y orden de ejecución (W45)
+
+### La app no dependía de sí misma
+
+`index.html` bajaba Babel (~2 MB) desde unpkg y compilaba las 19.000 líneas de
+`app.js` **en el navegador** en cada carga fría, más React, lucide y Supabase
+desde esm.sh. Con esos CDN bloqueados o caídos la app simplemente no arrancaba.
+
+- `npm run build` genera `app.bundle.js`: todo compilado y empaquetado (1 MB)
+- `index.html` lo usa y **cae al camino Babel** si falta o no llega a montar
+- `npm run verify` abre el `index.html` real en Chromium **sin salida a
+  internet** y falla si el preloader no desaparece o `#root` queda vacío
+- `deploy_hf.py` sube el bundle y **aborta si quedó desfasado** de `app.js`
+  (compara el hash del fuente sellado en la cabecera): servir código viejo en
+  silencio sería peor que no desplegar
+
+### El orden de la sesión
+
+Saber con cuánta fatiga llegó cada grupo muscular a cada ejercicio depende de en
+qué orden se hicieron. El registro, sin embargo, suele completarse al final del
+entreno con todas las series marcadas casi en el mismo segundo — y ahí la hora
+deja de distinguir qué fue primero. Además, la lista de la sesión se mostraba en
+el orden en que se creó el registro, no en el de ejecución.
+
+| Antes | Ahora |
+|-------|-------|
+| Los ejercicios del día salían en orden arbitrario | Numerados **1º, 2º, 3º** y reordenables con ▲▼ |
+| Las series se listaban de la más reciente a la más antigua (el PDF las numeraba al revés) | En orden de ejecución, etiquetadas **C / S1 / S2 / S3** y reordenables |
+| Cada fila de serie repetía la misma fecha | La fecha se cambió por el número de serie, que sí informa |
+| La pre-fatiga solo se veía agregada por músculo | Panel **Orden de la sesión**: con qué fatiga llegó el músculo principal a cada ejercicio |
+| La IA recibía los ejercicios sin orden ni pre-fatiga | Los recibe numerados y con su pre-fatiga, y se le pide evaluar si el orden fue el adecuado |
+
+**Cómo se guarda el orden.** No hay campo nuevo: se **permutan las marcas de
+tiempo que ya existen**. No se inventa ninguna hora, se reparten las mismas en
+otro orden. Así todo lo que ya ordenaba por fecha —gráficos, análisis, PDF,
+sincronización con la nube, copias de seguridad— sigue funcionando sin tocarlo,
+y el orden viaja con los datos.

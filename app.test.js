@@ -1340,3 +1340,130 @@ describe('invariantes de los cálculos (barrido amplio)', () => {
     expect(fallos.slice(0, 10)).toEqual([]);
   });
 });
+
+describe('orden de ejecución de la sesión', () => {
+  const {
+    getSessionOrder, getDaySets, moveExerciseInSession, moveSetInSession,
+    buildSessionSequence, calcSessionMuscleSets, buildDaySummary,
+  } = require('./app.js');
+
+  const DIA = '2026-03-10';
+  // Hora local fija: usar Z desplazaría el día en zonas negativas
+  const t = (h, m, s = 0) => new Date(2026, 2, 10, h, m, s).toISOString();
+
+  // exlog tal y como lo deja addSet: cada array de más reciente a más antiguo
+  const hacerLog = () => ({
+    'Press banca': [
+      { date: t(19, 10), w: 80, reps: 8, type: 'work' },
+      { date: t(19, 5), w: 80, reps: 9, type: 'work' },
+      { date: t(19, 0), w: 45, reps: 12, type: 'warmup' },
+    ],
+    // Tres series frente a las dos del press: si fueran simétricas, invertir el
+    // orden daría exactamente el mismo resultado y el test no probaría nada
+    'Aperturas': [
+      { date: t(19, 35), w: 20, reps: 10, type: 'work' },
+      { date: t(19, 30), w: 20, reps: 12, type: 'work' },
+      { date: t(19, 25), w: 20, reps: 12, type: 'work' },
+    ],
+    'Curl martillo': [
+      { date: t(19, 50), w: 16, reps: 10, type: 'work' },
+    ],
+    // Otro día: nunca debe mezclarse
+    'Sentadilla': [{ date: new Date(2026, 2, 9, 19, 0).toISOString(), w: 100, reps: 5, type: 'work' }],
+  });
+
+  const EJERCICIOS = {
+    A: [
+      { name: 'Press banca', musculos: ['Pectoral', 'Tríceps', 'Hombro anterior'] },
+      { name: 'Aperturas', musculos: ['Pectoral', 'Hombro anterior'] },
+      { name: 'Curl martillo', musculos: ['Bíceps', 'Antebrazo'] },
+      { name: 'Sentadilla', musculos: ['Cuádriceps', 'Glúteo'] },
+    ],
+  };
+
+  test('ordena los ejercicios del día por hora y excluye otros días', () => {
+    const nombres = getSessionOrder(hacerLog(), DIA).map(b => b.exName);
+    expect(nombres).toEqual(['Press banca', 'Aperturas', 'Curl martillo']);
+  });
+
+  test('las series de un día salen de la primera a la última', () => {
+    const sets = getDaySets(hacerLog()['Press banca'], DIA);
+    expect(sets.map(s => s.reps)).toEqual([12, 9, 8]); // calentamiento primero
+  });
+
+  test('mover un ejercicio cambia el orden y conserva todas las series', () => {
+    const log = hacerLog();
+    const movido = moveExerciseInSession(log, DIA, 2, 0); // curl al principio
+    expect(getSessionOrder(movido, DIA).map(b => b.exName))
+      .toEqual(['Curl martillo', 'Press banca', 'Aperturas']);
+    // Ni se pierden series ni se tocan las de otros días
+    Object.keys(log).forEach(k => expect(movido[k]).toHaveLength(log[k].length));
+    expect(movido['Sentadilla']).toEqual(log['Sentadilla']);
+  });
+
+  test('reordenar reutiliza las horas ya registradas: no inventa ninguna', () => {
+    const log = hacerLog();
+    const horas = (l) => Object.values(l).flat()
+      .filter(s => s.date.startsWith('2026-03-10') || new Date(s.date).getDate() === 10)
+      .map(s => s.date).sort();
+    const movido = moveExerciseInSession(log, DIA, 0, 2);
+    expect(horas(movido)).toEqual(horas(log));
+  });
+
+  test('el orden manual manda sobre el original en el análisis muscular', () => {
+    const log = hacerLog();
+    const antes = calcSessionMuscleSets(log, EJERCICIOS, DIA);
+    // Aperturas primero: el pectoral llega fresco a ellas y fatigado al press
+    const movido = moveExerciseInSession(log, DIA, 1, 0);
+    const despues = calcSessionMuscleSets(movido, EJERCICIOS, DIA);
+    const pecho = (arr) => arr.find(m => m.muscle === 'Pectoral');
+    // Mismo volumen de series, distinto estímulo fresco según el orden
+    expect(pecho(despues).weightedSets).toBeCloseTo(pecho(antes).weightedSets, 5);
+    expect(pecho(despues).freshSets).not.toBeCloseTo(pecho(antes).freshSets, 5);
+  });
+
+  test('la secuencia numera 1º, 2º, 3º y la pre-fatiga crece con la posición', () => {
+    const sec = buildSessionSequence(hacerLog(), EJERCICIOS, DIA);
+    expect(sec.map(s => [s.pos, s.exName])).toEqual([
+      [1, 'Press banca'], [2, 'Aperturas'], [3, 'Curl martillo'],
+    ]);
+    const pectoralEn = (i) => sec[i].prefatiga.find(p => p.muscle === 'Pectoral').pct;
+    expect(pectoralEn(0)).toBe(0);          // primero: músculo fresco
+    expect(pectoralEn(1)).toBeGreaterThan(0); // ya trabajado en el press
+  });
+
+  test('mover una serie la recoloca sin perder ni duplicar', () => {
+    const log = hacerLog();
+    const movido = moveSetInSession(log, 'Press banca', DIA, 0, 2); // calentamiento al final
+    const sets = getDaySets(movido['Press banca'], DIA);
+    expect(sets.map(s => s.type)).toEqual(['work', 'work', 'warmup']);
+    expect(sets.map(s => s.reps).sort((a, b) => a - b)).toEqual([8, 9, 12]);
+  });
+
+  test('los movimientos fuera de rango no alteran nada', () => {
+    const log = hacerLog();
+    expect(moveExerciseInSession(log, DIA, 0, 9)).toBe(log);
+    expect(moveExerciseInSession(log, DIA, -1, 0)).toBe(log);
+    expect(moveExerciseInSession(log, DIA, 1, 1)).toBe(log);
+    expect(moveSetInSession(log, 'Press banca', DIA, 0, 5)).toBe(log);
+    expect(moveSetInSession(log, 'No existe', DIA, 0, 1)).toBe(log);
+  });
+
+  test('el resumen del día numera los ejercicios y lista las series en orden', () => {
+    const r = buildDaySummary(hacerLog(), EJERCICIOS, DIA);
+    expect(r.exercises.map(e => [e.pos, e.name])).toEqual([
+      [1, 'Press banca'], [2, 'Aperturas'], [3, 'Curl martillo'],
+    ]);
+    // El calentamiento se hizo primero, así que encabeza la lista de series
+    expect(r.exercises[0].sets[0].type).toBe('warmup');
+    expect(r.sequence).toHaveLength(3);
+    expect(r.analysis.join(' ')).toContain('Orden de ejecución');
+  });
+
+  test('un día sin registros no rompe nada', () => {
+    expect(getSessionOrder({}, DIA)).toEqual([]);
+    expect(getSessionOrder(null, DIA)).toEqual([]);
+    expect(buildSessionSequence({}, EJERCICIOS, DIA)).toEqual([]);
+    expect(getDaySets(undefined, DIA)).toEqual([]);
+  });
+});

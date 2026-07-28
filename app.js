@@ -2196,38 +2196,127 @@ function setVolume(s){
   return (parseFloat(s.w)||0)*(parseInt(s.reps)||0);
 }
 
-function calcSessionMuscleSets(exlog, exercises, dateStr) {
+/* ===== ORDEN DE EJECUCIÓN DE LA SESIÓN =====
+ * Saber con cuánta fatiga llegó cada grupo muscular a cada ejercicio depende de
+ * UNA cosa: en qué orden se hicieron. Pero el registro suele completarse al
+ * final del entreno, con todas las series marcadas casi en el mismo segundo, y
+ * ahí la hora deja de distinguir qué fue primero. Por eso el orden se puede
+ * fijar a mano, ejercicio a ejercicio y serie a serie.
+ *
+ * No se guarda en un campo aparte: se PERMUTAN las marcas de tiempo que ya
+ * existen. No se inventa ninguna hora, se reparten las mismas en otro orden.
+ * Así todo lo que ya ordenaba por fecha —gráficos, análisis, PDF, sincronización
+ * con la nube, copias de seguridad— sigue funcionando sin tocar nada.
+ */
+const tiempoSet = (s) => { const t = new Date(s?.date).getTime(); return isNaN(t) ? 0 : t; };
+
+// Ejercicios de un día en orden de ejecución, con los índices de sus series
+// dentro de exlog[exName] (también ordenados). Base de todo lo demás.
+function getSessionOrder(exlog, dateStr) {
+  const bloques = [];
+  Object.entries(exlog || {}).forEach(([exName, sets]) => {
+    const idxs = [];
+    (sets || []).forEach((s, i) => { if (s?.date && localDateKey(s.date) === dateStr) idxs.push(i); });
+    if (!idxs.length) return;
+    idxs.sort((a, b) => tiempoSet(sets[a]) - tiempoSet(sets[b]) || a - b);
+    bloques.push({ exName, idxs, earliest: tiempoSet(sets[idxs[0]]) });
+  });
+  return bloques.sort((a, b) => a.earliest - b.earliest || a.exName.localeCompare(b.exName));
+}
+
+// Series de un ejercicio en un día, de la primera a la última
+function getDaySets(sets, dateStr) {
+  return (sets || [])
+    .filter(s => s?.date && localDateKey(s.date) === dateStr)
+    .sort((a, b) => tiempoSet(a) - tiempoSet(b));
+}
+
+// Reparte las horas del día siguiendo el orden de ejercicios indicado.
+// Los nombres que no aparezcan en `ordenNombres` conservan su posición relativa
+// al final: reordenar nunca puede hacer desaparecer un ejercicio del registro.
+function applySessionOrder(exlog, dateStr, ordenNombres) {
+  const bloques = getSessionOrder(exlog, dateStr);
+  if (bloques.length < 2) return exlog;
+  const porNombre = {};
+  bloques.forEach(b => { porNombre[b.exName] = b; });
+  const pedido = (ordenNombres || []).filter(n => porNombre[n]);
+  const orden = [...pedido, ...bloques.map(b => b.exName).filter(n => !pedido.includes(n))];
+
+  // Todas las horas del día, crecientes de forma estricta: si dos series se
+  // guardaron en el mismo milisegundo, el empate volvería a perder el orden.
+  const horas = bloques
+    .flatMap(b => b.idxs.map(i => tiempoSet((exlog[b.exName] || [])[i])))
+    .sort((a, b) => a - b);
+  for (let i = 1; i < horas.length; i++) if (horas[i] <= horas[i - 1]) horas[i] = horas[i - 1] + 1;
+
+  const next = { ...exlog };
+  let k = 0;
+  orden.forEach(nombre => {
+    const b = porNombre[nombre];
+    const arr = [...(next[nombre] || [])];
+    b.idxs.forEach(i => { arr[i] = { ...arr[i], date: new Date(horas[k++]).toISOString() }; });
+    // El array se mantiene de más reciente a más antiguo, que es como lo deja
+    // addSet y lo que asumen `last()` y el recorte a MAX_SETS_PER_EXERCISE
+    next[nombre] = arr.sort((a, b2) => tiempoSet(b2) - tiempoSet(a));
+  });
+  return next;
+}
+
+// Mueve un ejercicio a otra posición de la sesión (índices 0-based)
+function moveExerciseInSession(exlog, dateStr, from, to) {
+  const nombres = getSessionOrder(exlog, dateStr).map(b => b.exName);
+  if (from < 0 || to < 0 || from >= nombres.length || to >= nombres.length || from === to) return exlog;
+  const arr = [...nombres];
+  arr.splice(to, 0, arr.splice(from, 1)[0]);
+  return applySessionOrder(exlog, dateStr, arr);
+}
+
+// Mueve una serie a otra posición dentro del mismo ejercicio y día
+function moveSetInSession(exlog, exName, dateStr, from, to) {
+  const todas = (exlog || {})[exName];
+  if (!todas) return exlog;
+  const idxs = [];
+  todas.forEach((s, i) => { if (s?.date && localDateKey(s.date) === dateStr) idxs.push(i); });
+  idxs.sort((a, b) => tiempoSet(todas[a]) - tiempoSet(todas[b]) || a - b);
+  if (from < 0 || to < 0 || from >= idxs.length || to >= idxs.length || from === to) return exlog;
+
+  const horas = idxs.map(i => todas[i].date);
+  const objetos = idxs.map(i => todas[i]);
+  objetos.splice(to, 0, objetos.splice(from, 1)[0]);
+  const arr = [...todas];
+  objetos.forEach((s, k) => { arr[idxs[k]] = { ...s, date: horas[k] }; });
+  return { ...exlog, [exName]: arr.sort((a, b) => tiempoSet(b) - tiempoSet(a)) };
+}
+
+const FATIGUE_K = 0.07; // rendimientos decrecientes por serie efectiva acumulada
+
+// Recorre la sesión en orden acumulando trabajo por músculo. Devuelve tanto el
+// reparto muscular final como la secuencia: con qué fatiga previa llegó cada
+// ejercicio. Lo segundo es lo que permite juzgar si el orden fue el adecuado.
+function analyzeSession(exlog, exercises, dateStr) {
   const allExObjects = Object.values(exercises || {}).flat();
 
-  // 1) Recolectar los ejercicios del día con su instante más temprano (orden cronológico)
   const dayExercises = [];
-  Object.entries(exlog || {}).forEach(([exName, allSets]) => {
-    const daySets = (allSets || []).filter(s =>
-      s?.date && s.type !== "warmup" &&
-      (() => { try { const d = new Date(s.date); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; } catch(e){ return ""; } })() === dateStr
-    );
-    if (!daySets.length) return;
-    const exObj = allExObjects.find(e => e.name === exName);
-    const musculos = exObj?.musculos || [];
+  getSessionOrder(exlog, dateStr).forEach(({ exName, idxs }) => {
+    const sets = idxs.filter(i => (exlog[exName] || [])[i]?.type !== "warmup").length;
+    if (!sets) return;
+    const musculos = allExObjects.find(e => e.name === exName)?.musculos || [];
     if (!musculos.length) return;
-    const times = daySets.map(s => { try { return new Date(s.date).getTime(); } catch(e){ return 0; } });
-    dayExercises.push({ exName, sets: daySets.length, musculos, earliest: Math.min(...times) });
+    dayExercises.push({ exName, sets, musculos });
   });
 
-  // 2) Ordenar por momento de ejecución (lo que se hizo primero, primero)
-  dayExercises.sort((a, b) => a.earliest - b.earliest);
-
-  // 3) Acumular trabajo ponderado por % de participación + decaimiento por fatiga
   const muscleMap = {};   // músculo → { sets, weightedSets, freshSets, exNames }
   const accumulated = {}; // músculo → carga efectiva ya realizada antes (proxy de fatiga)
-  const FATIGUE_K = 0.07; // rendimientos decrecientes por serie efectiva acumulada
+  const sequence = [];
 
-  dayExercises.forEach(({ exName, sets, musculos }) => {
+  dayExercises.forEach(({ exName, sets, musculos }, pos) => {
+    const prefatiga = [];
     musculos.forEach((m, idx) => {
       const w = MUSCLE_ACTIVATION_WEIGHTS[idx] ?? 0.1;
-      const eff = sets * w;                          // series efectivas por participación
+      const eff = sets * w;                            // series efectivas por participación
       const prior = accumulated[m] || 0;
       const freshFactor = 1 / (1 + prior * FATIGUE_K); // el estímulo fresco baja si el músculo viene fatigado
+      if (idx < 3) prefatiga.push({ muscle: m, pct: Math.round((1 - freshFactor) * 100) });
       if (!muscleMap[m]) muscleMap[m] = { sets: 0, weightedSets: 0, freshSets: 0, exNames: [] };
       muscleMap[m].sets += sets;
       muscleMap[m].weightedSets += eff;
@@ -2235,17 +2324,29 @@ function calcSessionMuscleSets(exlog, exercises, dateStr) {
       if (!muscleMap[m].exNames.includes(exName)) muscleMap[m].exNames.push(exName);
       accumulated[m] = prior + eff;
     });
+    sequence.push({ pos: pos + 1, exName, sets, musculos, prefatiga });
   });
 
-  // 4) Ordenar por trabajo efectivo total (mayor participación primero)
-  return Object.entries(muscleMap)
+  const muscles = Object.entries(muscleMap)
     .map(([muscle, d]) => {
       const weightedSets = Math.round(d.weightedSets * 10) / 10;
       const freshSets = Math.round(d.freshSets * 10) / 10;
       const fatiguePct = weightedSets > 0 ? Math.max(0, Math.round((1 - freshSets / weightedSets) * 100)) : 0;
       return { muscle, sets: d.sets, weightedSets, freshSets, fatiguePct, exNames: d.exNames };
     })
-    .sort((a, b) => b.weightedSets - a.weightedSets);
+    .sort((a, b) => b.weightedSets - a.weightedSets); // mayor participación primero
+
+  return { muscles, sequence };
+}
+
+function calcSessionMuscleSets(exlog, exercises, dateStr) {
+  return analyzeSession(exlog, exercises, dateStr).muscles;
+}
+
+// Secuencia de la sesión: 1º, 2º, 3º… con la pre-fatiga de cada músculo al
+// empezar ese ejercicio. Se muestra en la app y se manda a la IA.
+function buildSessionSequence(exlog, exercises, dateStr) {
+  return analyzeSession(exlog, exercises, dateStr).sequence;
 }
 
 // Fecha local YYYY-MM-DD desde un ISO (coherente con el resto de la app)
@@ -2268,7 +2369,9 @@ function buildDaySummary(exlog, exercises, dateStr, opts = {}) {
   let totalWorkSets = 0, totalWarmup = 0, totalVolume = 0, prCount = 0;
 
   Object.entries(exlog || {}).forEach(([exName, allSets]) => {
-    const daySets = (allSets || []).filter(s => s && s.date && localDateKey(s.date) === dateStr);
+    // En orden de ejecución: el array de exlog va de más reciente a más antiguo,
+    // así que sin ordenar aquí las series salían numeradas al revés en el PDF.
+    const daySets = getDaySets(allSets, dateStr);
     if (!daySets.length) return;
 
     const work = daySets.filter(s => s.type !== "warmup");
@@ -2329,9 +2432,10 @@ function buildDaySummary(exlog, exercises, dateStr, opts = {}) {
     });
   });
 
-  exList.sort((a, b) => a.earliest - b.earliest); // orden cronológico de ejecución
+  exList.sort((a, b) => a.earliest - b.earliest || a.name.localeCompare(b.name)); // orden de ejecución
+  exList.forEach((e, i) => { e.pos = i + 1; });                                   // 1º, 2º, 3º…
 
-  const muscles = calcSessionMuscleSets(exlog, exercises, dateStr);
+  const { muscles, sequence } = analyzeSession(exlog, exercises, dateStr);
 
   // Media histórica de volumen (hasta 8 sesiones previas) para comparar
   const sessionVolByDay = {};
@@ -2363,6 +2467,17 @@ function buildDaySummary(exlog, exercises, dateStr, opts = {}) {
     if (fatigued) analysis.push(`${fatigued.muscle} acumuló ${fatigued.fatiguePct}% de pre-fatiga por el orden de ejercicios: considera moverlo antes la próxima vez.`);
   }
 
+  if (sequence.length > 1) {
+    analysis.push(`Orden de ejecución: ${sequence.map(s => `${s.pos}º ${s.exName}`).join(" → ")}.`);
+    // Un ejercicio que llega con el músculo principal ya cansado rinde menos de
+    // lo que podría: vale la pena saber cuál y cuánto.
+    const tarde = sequence
+      .map(s => ({ exName: s.exName, pos: s.pos, ...(s.prefatiga[0] || { muscle: "", pct: 0 }) }))
+      .filter(s => s.pct >= 30)
+      .sort((a, b) => b.pct - a.pct)[0];
+    if (tarde) analysis.push(`${tarde.exName} se hizo en ${tarde.pos}º lugar, con ${tarde.muscle} ya al ${tarde.pct}% de pre-fatiga: si es prioritario, adelántalo.`);
+  }
+
   const prExs = exList.filter(e => e.isPR);
   if (prExs.length) analysis.push(`🏆 ${prExs.length} PR de peso: ${prExs.map(e => `${e.name} ${e.topW}kg`).join(", ")}. ¡Excelente!`);
   else analysis.push(`Sin PRs de peso hoy: el progreso también se construye acumulando volumen de calidad.`);
@@ -2385,6 +2500,7 @@ function buildDaySummary(exlog, exercises, dateStr, opts = {}) {
     dateStr,
     exercises: exList,
     muscles,
+    sequence,
     totals: { exercises: exList.length, workSets: totalWorkSets, warmupSets: totalWarmup, volume: roundVol, prCount },
     avgHistVol, volDiffPct,
     analysis,
@@ -11782,11 +11898,15 @@ function Entreno({
     // Bloques de ejercicios con sus series
     let exBlocks = "";
     summary.exercises.forEach((ex, i) => {
-      const setRows = ex.sets.map((s, j) => {
+      // Las series van en orden de ejecución; el número es el de serie efectiva,
+      // contado sobre la marcha para que un calentamiento intercalado no lo rompa
+      let nSerie = 0;
+      const setRows = ex.sets.map((s) => {
         const isW = s.type === "warmup";
         const tipo = isW ? "Calent." : s.type === "dropset" ? "Dropset" : "Trabajo";
+        if (!isW) nSerie++;
         return `<tr class="${isW ? "rw" : ""}">
-          <td>${isW ? "—" : j + 1 - ex.warmupCount > 0 ? j + 1 - ex.warmupCount : "—"}</td>
+          <td>${isW ? "—" : nSerie}</td>
           <td class="tp">${tipo}</td>
           <td class="num"><strong>${s.w}</strong> kg</td>
           <td class="num">${s.reps}</td>
@@ -11798,11 +11918,13 @@ function Entreno({
       const prog = ex.deltaVsPrev != null
         ? `<span class="prog ${ex.deltaVsPrev > 0 ? "up" : ex.deltaVsPrev < 0 ? "down" : "eq"}">${ex.deltaVsPrev > 0 ? "↑ +" + ex.deltaVsPrev + "kg" : ex.deltaVsPrev < 0 ? "↓ " + ex.deltaVsPrev + "kg" : "= igual"} vs anterior (${ex.prevMaxW}kg)</span>`
         : `<span style="color:#9ca3af">1ª sesión registrada</span>`;
+      const preEx = (summary.sequence.find(s => s.exName === ex.name)?.prefatiga || [])[0];
+      const preTxt = preEx && preEx.pct >= 15 ? ` <span class="pre">💤 ${esc(preEx.muscle)} al ${preEx.pct}%</span>` : "";
       exBlocks += `
       <div class="ex">
         <div class="exh">
-          <span class="exn">${i + 1}. ${esc(ex.name)}</span>
-          <span class="exm">${ex.muscle ? esc(ex.muscle) : ""}${ex.isPR ? ' <span class="pr">★ PR ' + ex.topW + 'kg</span>' : ""}</span>
+          <span class="exn">${ex.pos || i + 1}º ${esc(ex.name)}</span>
+          <span class="exm">${ex.muscle ? esc(ex.muscle) : ""}${preTxt}${ex.isPR ? ' <span class="pr">★ PR ' + ex.topW + 'kg</span>' : ""}</span>
         </div>
         <table>
           <thead><tr><th>Serie</th><th>Tipo</th><th class="num">Carga</th><th class="num">Reps</th><th class="num">RIR</th></tr></thead>
@@ -11872,6 +11994,7 @@ h1{font-size:18pt;font-weight:900;letter-spacing:-.5px;line-height:1.1}
 .exn{font-size:10.5pt;font-weight:800}
 .exm{font-size:8pt;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.03em}
 .pr{color:#a16207;background:#fef9c3;border-radius:20px;padding:1px 7px;font-size:7.5pt}
+.pre{color:#9a3412;background:#ffedd5;border-radius:20px;padding:1px 7px;font-size:7.5pt;text-transform:none;letter-spacing:0}
 table{width:100%;border-collapse:collapse;font-size:9pt}
 th{text-align:left;font-size:6.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;border-bottom:1.5px solid #e5e7eb;padding:4px 10px}
 th.num,td.num{text-align:center}
@@ -11947,17 +12070,23 @@ tr:last-child td{border-bottom:none}
     // ── Modo IA: pedir un análisis narrativo al coach ──
     setDayPdfAiBusy(true);
     try {
+      // El orden va explícito y con la fatiga con la que llegó cada ejercicio:
+      // sin eso la IA no puede juzgar si la secuencia fue la adecuada
+      const preDe = (name) => {
+        const pf = (summary.sequence.find(s => s.exName === name)?.prefatiga || []).filter(p => p.pct >= 10);
+        return pf.length ? `, empezado con ${pf.map(p => `${p.muscle} al ${p.pct}% de pre-fatiga`).join(" y ")}` : ", con el músculo fresco";
+      };
       const exLines = summary.exercises.map(e =>
-        `- ${e.name} [${e.muscle || "?"}]: ${e.workSetsCount} series de trabajo, tope ${e.topW}kg×${e.topReps} reps, volumen ${e.volume}kg, 1RM~${e.e1rm}kg${e.isPR ? " (PR de peso)" : ""}`
+        `- ${e.pos}º ${e.name} [${e.muscle || "?"}]: ${e.workSetsCount} series de trabajo, tope ${e.topW}kg×${e.topReps} reps, volumen ${e.volume}kg, 1RM~${e.e1rm}kg${e.isPR ? " (PR de peso)" : ""}${preDe(e.name)}`
       ).join("\n");
       const muscLine = summary.muscles.map(m => `${m.muscle} ${m.weightedSets} series${m.fatiguePct >= 25 ? ` (pre-fatiga ${m.fatiguePct}%)` : ""}`).join(", ");
       const volCtx = summary.volDiffPct !== null ? ` (${summary.volDiffPct >= 0 ? "+" : ""}${summary.volDiffPct}% vs media reciente de ${summary.avgHistVol}kg)` : "";
       const userMsg = `Analiza esta sesión de entrenamiento de Bruno.\n` +
         `Fecha: ${dateLong}.\n` +
         `Volumen total: ${summary.totals.volume}kg${volCtx}. Series de trabajo: ${summary.totals.workSets}. ${durationMin > 0 ? `Duración: ${durationMin} min.` : ""} ${sensation ? `Sensación reportada: ${sensation}.` : ""}\n` +
-        `Ejercicios:\n${exLines}\n` +
+        `Ejercicios en el orden en que se hicieron:\n${exLines}\n` +
         `Trabajo muscular: ${muscLine}.`;
-      const sys = `Eres el coach de fuerza e hipertrofia de Bruno. Analiza su sesión con tono cercano, técnico y motivador. Responde en español, en TEXTO PLANO (sin markdown, sin viñetas, sin títulos), en EXACTAMENTE 2 párrafos separados por un salto de línea: (1) evaluación de la sesión — volumen e intensidad, foco muscular, PRs y fatiga acumulada; (2) recomendaciones concretas para la próxima sesión de estos músculos (qué carga intentar, qué priorizar, qué rotar si hay estancamiento). Máximo 130 palabras en total. No inventes datos que no estén en el contexto.`;
+      const sys = `Eres el coach de fuerza e hipertrofia de Bruno. Analiza su sesión con tono cercano, técnico y motivador. Responde en español, en TEXTO PLANO (sin markdown, sin viñetas, sin títulos), en EXACTAMENTE 2 párrafos separados por un salto de línea: (1) evaluación de la sesión — volumen e intensidad, foco muscular, PRs y, sobre todo, si el ORDEN de los ejercicios fue el adecuado según la pre-fatiga con la que llegó cada uno; (2) recomendaciones concretas para la próxima sesión de estos músculos (qué carga intentar, qué priorizar, qué adelantar o retrasar en el orden, qué rotar si hay estancamiento). Máximo 130 palabras en total. No inventes datos que no estén en el contexto.`;
       const raw = await callGemini([{ role: "user", content: userMsg }], sys);
       const aiText = (typeof raw === "string" ? raw : (raw?.text || "")).trim();
       if (aiText) write(aiText);
@@ -12248,9 +12377,24 @@ tr:last-child td{border-bottom:none}
     setRir("-");
   };
 
-  const delSet = (n, i) => { 
-    const arr = [...(exlog[n] || [])]; 
-    arr.splice(i, 1); 
+  // ── Reordenar la sesión ──
+  // Mover un ejercicio o una serie reparte entre ellos las horas ya registradas
+  // (ver applySessionOrder): el orden queda explícito sin inventar marcas de
+  // tiempo, y con él la app puede calcular con qué fatiga llegó cada músculo.
+  const moveEx = (from, to) => setExlog(moveExerciseInSession(exlog, selectedDateStr, from, to));
+  const moveSet = (exName, from, to) => setExlog(moveSetInSession(exlog, findExlogKey(exName), selectedDateStr, from, to));
+  const btnOrden = (off) => ({
+    width: 22, height: 17, borderRadius: 5, padding: 0,
+    border: `1px solid ${off ? "rgba(154,160,136,.12)" : C.line}`,
+    background: "transparent",
+    color: off ? "rgba(154,160,136,.25)" : C.muted,
+    cursor: off ? "default" : "pointer",
+    fontSize: 9, lineHeight: 1, display: "grid", placeItems: "center",
+  });
+
+  const delSet = (n, i) => {
+    const arr = [...(exlog[n] || [])];
+    arr.splice(i, 1);
     const next = {...exlog, [n]: arr}; 
     setExlog(next); // setExlog prop ya guarda en saveState automáticamente
   };
@@ -13407,8 +13551,33 @@ tr:last-child td{border-bottom:none}
               {selectedDayWorkouts && (() => {
                 const muscleSets = calcSessionMuscleSets(exlog, exercises, selectedDateStr);
                 if (!muscleSets.length) return null;
+                const secuencia = buildSessionSequence(exlog, exercises, selectedDateStr);
                 return (
                   <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", marginBottom:10}}>
+                    {secuencia.length > 1 && (
+                      <div style={{marginBottom:10}}>
+                        <div style={{fontSize:10, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", marginBottom:5}}>
+                          Orden de la sesión
+                        </div>
+                        <div style={{display:"flex", flexDirection:"column", gap:3}}>
+                          {secuencia.map(s => {
+                            const pre = s.prefatiga[0];
+                            return (
+                              <div key={s.exName} style={{display:"flex", alignItems:"center", gap:7, fontSize:11}}>
+                                <span style={{fontWeight:800, color:C.lime, minWidth:18}}>{s.pos}º</span>
+                                <span style={{flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", color:C.ink}}>{s.exName}</span>
+                                <span style={{fontSize:10, color: pre && pre.pct >= 30 ? C.amber : C.muted}}>
+                                  {pre ? (pre.pct >= 10 ? `${pre.muscle} 💤${pre.pct}%` : `${pre.muscle} fresco`) : ""}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div style={{fontSize:9, color:C.muted, marginTop:5, opacity:.8}}>
+                          Con qué fatiga llegó el músculo principal a cada ejercicio. Reordena con ▲▼ en la lista de abajo.
+                        </div>
+                      </div>
+                    )}
                     <div style={{fontSize:10, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", marginBottom:3}}>
                       Músculos trabajados hoy
                     </div>
@@ -13493,7 +13662,10 @@ tr:last-child td{border-bottom:none}
 
               {selectedDayWorkouts ? (
                 <div style={{display:"flex", flexDirection:"column", gap:8}}>
-                  {Object.entries(selectedDayWorkouts).map(([exName, sets]) => {
+                  {/* En orden de ejecución, no en el orden en que se creó el
+                      registro: es lo que hace comparable la fatiga acumulada */}
+                  {(() => { const orden = getSessionOrder(exlog, selectedDateStr); return orden.map(({ exName }, pos) => {
+                    const sets = getDaySets(exlog[exName], selectedDateStr);
                     const globalEx = exerciseByName[exName] || { name: exName };
                     const isOpen = open === "session-" + exName;
                     const l = last(exName);
@@ -13504,7 +13676,13 @@ tr:last-child td{border-bottom:none}
                     return (
                       <div key={exName} style={{background:C.panel2, border:`1px solid ${isOpen ? C.lime : C.line}`, borderRadius:13, marginBottom:4, overflow:"hidden", position:"relative"}}>
                         <div style={{display:"flex", alignItems:"center"}}>
-                          <button 
+                          {orden.length > 1 && (
+                            <div style={{display:"flex", flexDirection:"column", gap:3, paddingLeft:8}}>
+                              <button onClick={() => moveEx(pos, pos - 1)} disabled={pos === 0} title="Hacerlo antes en la sesión" style={btnOrden(pos === 0)}>▲</button>
+                              <button onClick={() => moveEx(pos, pos + 1)} disabled={pos === orden.length - 1} title="Hacerlo después en la sesión" style={btnOrden(pos === orden.length - 1)}>▼</button>
+                            </div>
+                          )}
+                          <button
                             onClick={() => {
                               const nextOpen = isOpen ? null : "session-" + exName;
                               setOpen(nextOpen);
@@ -13522,6 +13700,7 @@ tr:last-child td{border-bottom:none}
                           >
                             <div style={{flex:1, paddingRight:32}}>
                               <div style={{display:"flex", alignItems:"center", gap:6, flexWrap:"wrap"}}>
+                                <span style={{fontSize:10.5, fontWeight:800, color:C.lime, background:"rgba(205,255,74,.1)", border:"1px solid rgba(205,255,74,.22)", borderRadius:5, padding:"1px 5px", minWidth:20, textAlign:"center"}}>{pos + 1}º</span>
                                 <div style={{fontSize:13.5, fontWeight:600}}>{exName}</div>
                                 {(() => {
                                   const allSetsForEx = exlog[findExlogKey(exName)] || [];
@@ -13789,9 +13968,24 @@ tr:last-child td{border-bottom:none}
                               <div style={{fontSize:12, color:C.muted, padding:"4px 0"}}>Sin registros en esta sesión.</div>
                             )}
 
+                            {sets.length > 1 && (
+                              <div style={{fontSize:9.5, color:C.muted, opacity:.8, padding:"2px 0 1px"}}>
+                                Series en orden de ejecución · usa ▲▼ si las registraste desordenadas
+                              </div>
+                            )}
                             {sets.map((s, i) => (
-                              <div key={i} style={{display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:`1px solid ${C.line}`, opacity: s.type === "warmup" ? 0.6 : 1}}>
-                                <span style={{fontSize:12.5, color:C.muted, minWidth:54}}>{formatDay(s.date)}</span>
+                              <div key={i} style={{display:"flex", alignItems:"center", gap:8, padding:"7px 0", borderTop:`1px solid ${C.line}`, opacity: s.type === "warmup" ? 0.6 : 1}}>
+                                {sets.length > 1 && (
+                                  <div style={{display:"flex", flexDirection:"column", gap:2}}>
+                                    <button onClick={() => moveSet(exName, i, i - 1)} disabled={i === 0} title="Antes" style={btnOrden(i === 0)}>▲</button>
+                                    <button onClick={() => moveSet(exName, i, i + 1)} disabled={i === sets.length - 1} title="Después" style={btnOrden(i === sets.length - 1)}>▼</button>
+                                  </div>
+                                )}
+                                {/* Antes iba la fecha, idéntica en todas las filas por ser el
+                                    mismo día. El número de serie sí informa: es el orden real */}
+                                <span style={{fontSize:11, fontWeight:700, color:C.muted, minWidth:26}}>
+                                  {s.type === "warmup" ? "C" : `S${sets.slice(0, i + 1).filter(x => x.type !== "warmup").length}`}
+                                </span>
                                 {s.drops?.length > 1 ? (
                                   <div style={{flex:1, minWidth:0}}>
                                     <div style={{fontSize:13, fontWeight:600, lineHeight:1.3}}>
@@ -13861,7 +14055,7 @@ tr:last-child td{border-bottom:none}
                         )}
                       </div>
                     );
-                  })}
+                  }); })()}
                 </div>
               ) : (
                 <div style={{textAlign:"center", color:C.muted, fontSize:12, padding:"16px 0", background:C.panel2, border:`1px dashed ${C.line}`, borderRadius:10}}>
@@ -18598,6 +18792,8 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     loadKey, buildPRHistory, buildDaySummary, loadRecommendation, localDateKey,
     isCompoundExercise, estimate1RM,
+    calcSessionMuscleSets, buildSessionSequence, getSessionOrder, getDaySets,
+    applySessionOrder, moveExerciseInSession, moveSetInSession,
     calcLeanMass, calcBMRMifflin, calcBMRKatch, calcBMR, calcNutritionTargets,
     calcWaterGoalGlasses, calcWeightEMASeries, getTrendWeight,
     DEFAULT_BODY_PROFILE, GOAL_PRESETS,

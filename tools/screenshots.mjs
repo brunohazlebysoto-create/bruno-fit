@@ -47,6 +47,36 @@ const ESCENAS = [
   { id: "entreno-01-cabecera", tab: "Entreno", scroll: 0 },
   { id: "entreno-02-calendario", tab: "Entreno", scroll: 900 },
   { id: "entreno-03-detalle-sesion", tab: "Entreno", scroll: 1700 },
+  // El detalle de una sesión solo existe tras elegir un día entrenado en el
+  // calendario: sin este clic, el orden de ejercicios no se ve en ninguna captura
+  {
+    id: "entreno-04-orden-sesion",
+    tab: "Entreno",
+    scroll: 900,
+    accion: async (page) => { await page.getByText("27", { exact: true }).first().click({ timeout: 5000 }); },
+    scrollDespues: 900,
+  },
+  {
+    id: "entreno-05-secuencia-y-fatiga",
+    tab: "Entreno",
+    scroll: 900,
+    accion: async (page) => { await page.getByText("27", { exact: true }).first().click({ timeout: 5000 }); },
+    scrollDespues: 450,
+  },
+  {
+    // Panel abierto: es donde se registran las series y donde se reordenan
+    id: "entreno-06-series-de-un-ejercicio",
+    tab: "Entreno",
+    scroll: 900,
+    accion: async (page) => {
+      await page.getByText("27", { exact: true }).first().click({ timeout: 5000 });
+      await page.waitForTimeout(700);
+      await page.mouse.wheel(0, 900);
+      await page.waitForTimeout(500);
+      await page.getByRole("button", { name: /Prensa 45/ }).first().click({ timeout: 5000 });
+    },
+    scrollDespues: 600,
+  },
   { id: "registro-01-peso-y-tendencia", tab: "Registro", scroll: 0 },
   { id: "registro-02-objetivos", tab: "Registro", scroll: 1150 },
   { id: "registro-03-composicion", tab: "Registro", scroll: 1900 },
@@ -119,6 +149,12 @@ async function capturar() {
     await page.mouse.move(210, 450);
     if (esc.scroll) await page.mouse.wheel(0, esc.scroll);
     await page.waitForTimeout(600);
+    // Algunas pantallas solo aparecen tras interactuar (abrir un día, un modal)
+    if (esc.accion) {
+      await esc.accion(page);
+      await page.waitForTimeout(800);
+      if (esc.scrollDespues) { await page.mouse.wheel(0, esc.scrollDespues); await page.waitForTimeout(600); }
+    }
     await page.screenshot({ path: join(dirActual, esc.id + ".png") });
   }
 

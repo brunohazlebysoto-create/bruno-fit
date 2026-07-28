@@ -129,15 +129,26 @@ function buildSeed() {
     const [, ejercicios] = rutinas[sesion % rutinas.length];
     sesion++;
     const d = diasAtras(s * 3 + 1); d.setHours(19, 0, 0, 0);
+    // Cada serie con su propia hora: es lo que ocurre al registrar sobre la
+    // marcha y lo que hace visible el orden de ejecución de la sesión
+    let minuto = 0;
+    const hora = () => { const x = new Date(d); x.setMinutes(minuto); minuto += 3; return x.toISOString(); };
     ejercicios.forEach(([nombre, base, inc, reps]) => {
       exlog[nombre] = exlog[nombre] || [];
       const w = Math.round((base + inc * (9 - s)) * 2) / 2;
-      exlog[nombre].push({ date: d.toISOString(), w: Math.round(w * 0.55 * 2) / 2, reps: 12, rir: "-", type: "warmup" });
+      const delEjercicio = [{ date: hora(), w: Math.round(w * 0.55 * 2) / 2, reps: 12, rir: "-", type: "warmup" }];
       for (let k2 = 0; k2 < 3; k2++) {
-        exlog[nombre].push({ date: d.toISOString(), w, reps: reps - k2 > 3 ? reps - k2 : 4, rir: String(k2), type: "work" });
+        delEjercicio.push({ date: hora(), w, reps: reps - k2 > 3 ? reps - k2 : 4, rir: String(k2), type: "work" });
       }
+      // exlog va de la serie más reciente a la más antigua, como lo deja addSet
+      exlog[nombre].push(...delEjercicio.reverse());
     });
   }
+
+  // La app asume que cada ejercicio va de la serie más reciente a la más
+  // antigua (`last()` lee la posición 0); el sembrado va de la sesión más
+  // vieja a la más nueva, así que hay que invertirlo al final.
+  Object.keys(exlog).forEach(k => exlog[k].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)));
 
   const notes = [
     { id: "n1", type: "sensacion", date: diasAtras(1).toISOString(), text: "Óptimo" },
