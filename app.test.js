@@ -1467,3 +1467,174 @@ describe('orden de ejecución de la sesión', () => {
     expect(getDaySets(undefined, DIA)).toEqual([]);
   });
 });
+
+describe('mapa muscular y balance (misma fuente de verdad)', () => {
+  const { normalizeMuscle, calcMuscleVolumeBalance, SLUG_MUSCLE } = require('./app.js');
+
+  const CANONICOS = ['Pectoral','Espalda','Cuádriceps','Isquios','Deltoides','Bíceps','Tríceps','Glúteos','Antebrazo','Core','Pantorrillas'];
+
+  test('todo músculo del dibujo es uno de los 11 canónicos', () => {
+    // "Abdominales" y "Gemelos" no lo eran: el abdomen y las pantorrillas no se
+    // pintaban nunca porque el nombre no casaba con el del cálculo
+    const invalidos = [];
+    Object.entries(SLUG_MUSCLE).forEach(([lado, mapa]) => {
+      Object.entries(mapa).forEach(([slug, m]) => {
+        if (!CANONICOS.includes(m)) invalidos.push(`${lado}.${slug} → ${m}`);
+        else if (normalizeMuscle(m) !== m) invalidos.push(`${lado}.${slug}: normalizeMuscle("${m}") = ${normalizeMuscle(m)}`);
+      });
+    });
+    expect(invalidos).toEqual([]);
+  });
+
+  test('cada canónico se dibuja en alguna parte del cuerpo', () => {
+    const dibujados = new Set([...Object.values(SLUG_MUSCLE.front), ...Object.values(SLUG_MUSCLE.back)]);
+    expect(CANONICOS.filter(m => !dibujados.has(m))).toEqual([]);
+  });
+
+  test('un ejercicio propio con músculos detallados sí cuenta', () => {
+    // Ni el nombre ni los músculos están en la tabla fija MUSCLES: antes esto
+    // daba cero en el mapa aunque las tarjetas lo contaran
+    const hoy = new Date().toISOString();
+    const exlog = {
+      'Sentadilla en multipower': [
+        { date: hoy, w: 75, reps: 5, type: 'work' },
+        { date: hoy, w: 75, reps: 5, type: 'work' },
+      ],
+      'Extensión de tríceps en polea alta': [
+        { date: hoy, w: 30, reps: 12, type: 'work' },
+        { date: hoy, w: 20, reps: 15, type: 'warmup' }, // el calentamiento no suma
+      ],
+    };
+    const exercises = {
+      B: [{ name: 'Sentadilla en multipower', musculos: ['Cuádriceps', 'Glúteo mayor', 'Isquiotibiales'] }],
+      C: [{ name: 'Extensión de tríceps en polea alta', musculos: ['Tríceps braquial (cabeza larga)'] }],
+    };
+    const r = calcMuscleVolumeBalance(exlog, exercises, 7);
+    expect(r['Cuádriceps'].setsPerWeek).toBeGreaterThan(0);
+    expect(r['Glúteos'].setsPerWeek).toBeGreaterThan(0);
+    expect(r['Isquios'].setsPerWeek).toBeGreaterThan(0);
+    expect(r['Tríceps'].setsPerWeek).toBe(1);   // 1 serie efectiva, primaria
+    expect(r['Pectoral'].setsPerWeek).toBe(0);
+  });
+
+  test('la ventana de días cambia el resultado', () => {
+    const dias = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString(); };
+    const exlog = { 'Press banca': [{ date: dias(20), w: 80, reps: 8, type: 'work' }] };
+    const exercises = { A: [{ name: 'Press banca', musculos: ['Pectoral'] }] };
+    expect(calcMuscleVolumeBalance(exlog, exercises, 7)['Pectoral'].setsPerWeek).toBe(0);
+    expect(calcMuscleVolumeBalance(exlog, exercises, 30)['Pectoral'].setsPerWeek).toBeGreaterThan(0);
+  });
+});
+
+describe('ejercicios sin músculos asignados', () => {
+  const { inferMusclesFromName, musclesOfExercise, listUncountedExercises,
+          calcMuscleVolumeBalance, normalizeMuscle, buildSessionSequence } = require('./app.js');
+
+  test('deduce el músculo principal del nombre', () => {
+    const casos = [
+      ['Sentadilla en multipower', 'Cuádriceps'],
+      ['Prensa 45 grados', 'Cuádriceps'],
+      ['Peso muerto rumano', 'Isquios'],
+      ['Curl femoral sentado', 'Isquios'],   // "curl" no debe ganarle a "femoral"
+      ['Curl biceps supino inclinado', 'Bíceps'],
+      ['Extensión de tríceps en polea alta', 'Tríceps'],
+      ['Press cerrado', 'Tríceps'],          // "press" no debe ganarle a "cerrado"
+      ['Press banca inclinado', 'Pectoral'],
+      ['Elevación lateral con mancuernas', 'Deltoides'],
+      ['Remo en punta', 'Espalda'],
+      ['Elevación de piernas colgado', 'Core'],
+      ['Gemelos de pie en máquina', 'Pantorrillas'],
+    ];
+    const fallos = casos.filter(([nombre, esperado]) => inferMusclesFromName(nombre)[0] !== esperado)
+      .map(([nombre, esperado]) => `${nombre}: ${inferMusclesFromName(nombre)[0]} ≠ ${esperado}`);
+    expect(fallos).toEqual([]);
+  });
+
+  test('lo deducido siempre es un músculo canónico', () => {
+    const malos = [];
+    ['Sentadilla', 'Press militar', 'Curl martillo', 'Jalón al pecho', 'Plancha abdominal']
+      .forEach(n => inferMusclesFromName(n).forEach(m => { if (normalizeMuscle(m) !== m) malos.push(`${n} → ${m}`); }));
+    expect(malos).toEqual([]);
+  });
+
+  test('el catálogo manda sobre la deducción', () => {
+    const exercises = { A: [{ name: 'Sentadilla en multipower', musculos: ['Glúteo mayor'] }] };
+    expect(musclesOfExercise('Sentadilla en multipower', exercises)).toEqual(['Glúteo mayor']);
+    // Sin catálogo, se deduce en vez de quedarse en nada
+    expect(musclesOfExercise('Sentadilla en multipower', {})[0]).toBe('Cuádriceps');
+  });
+
+  test('un ejercicio guardado sin músculos ya cuenta en el balance', () => {
+    const hoy = new Date().toISOString();
+    const exlog = { 'Sentadilla en multipower': [{ date: hoy, w: 75, reps: 5, type: 'work' }] };
+    const exercises = { B: [{ name: 'Sentadilla en multipower', musculos: [] }] }; // la IA falló al añadirlo
+    expect(calcMuscleVolumeBalance(exlog, exercises, 7)['Cuádriceps'].setsPerWeek).toBeGreaterThan(0);
+    expect(listUncountedExercises(exlog, exercises, 7)).toEqual([]);
+  });
+
+  test('lo que no se reconoce se declara, no se esconde', () => {
+    const hoy = new Date().toISOString();
+    const exlog = { 'Rutina X': [{ date: hoy, w: 20, reps: 10, type: 'work' }] };
+    expect(listUncountedExercises(exlog, {}, 7)).toEqual(['Rutina X']);
+  });
+
+  test('la fatiga se acumula aunque los músculos vengan con nombre detallado', () => {
+    const t = (h) => new Date(2026, 2, 10, h, 0).toISOString();
+    const exlog = {
+      'Press banca': [{ date: t(19), w: 80, reps: 8, type: 'work' }],
+      'Press cerrado': [{ date: t(20), w: 55, reps: 10, type: 'work' }],
+    };
+    const exercises = { A: [
+      { name: 'Press banca', musculos: ['Pectoral mayor', 'Tríceps braquial'] },
+      { name: 'Press cerrado', musculos: ['Tríceps braquial (cabeza larga)'] },
+    ]};
+    const sec = buildSessionSequence(exlog, exercises, '2026-03-10');
+    // El tríceps del press banca y el del press cerrado son el mismo músculo:
+    // el segundo ejercicio debe llegar con pre-fatiga, no a cero
+    const tri = sec[1].prefatiga.find(p => p.muscle === 'Tríceps');
+    expect(tri).toBeDefined();
+    expect(tri.pct).toBeGreaterThan(0);
+  });
+});
+
+describe('nombres de músculo equivalentes', () => {
+  const { canonMuscleName, dedupeMuscles } = require('./app.js');
+
+  test('mayúsculas, acentos y espacios no crean músculos nuevos', () => {
+    const equivalentes = [
+      ['braquial', 'Braquial', 'BRAQUIAL', ' braquial '],
+      ['tríceps braquial', 'Triceps braquial', 'TRÍCEPS BRAQUIAL'],
+      ['deltoides posterior', 'Deltoides Posterior', 'DELTOIDES  POSTERIOR'],
+    ];
+    equivalentes.forEach(grupo => {
+      const distintos = new Set(grupo.map(canonMuscleName));
+      expect([...distintos]).toHaveLength(1);
+    });
+  });
+
+  test('un texto no reconocido se conserva, ordenado', () => {
+    expect(canonMuscleName('  MÚSCULO   raro ')).toBe('Músculo raro');
+    expect(canonMuscleName('')).toBe('');
+    expect(canonMuscleName(null)).toBe('');
+  });
+
+  test('el resumen del día agrupa las variantes en un solo músculo', () => {
+    const r = dedupeMuscles([
+      ['Deltoides anterior', 'Tríceps braquial'],
+      ['Deltoides lateral', 'Trapecio superior'],
+      ['deltoides posterior'],
+      ['Deltoides'],
+    ]);
+    expect(r).toEqual(['Deltoides', 'Espalda', 'Tríceps']); // 4 variantes → 1 entrada
+    expect(r[0]).toBe('Deltoides');                          // el más trabajado, primero
+  });
+
+  test('un músculo repetido dentro del mismo ejercicio no cuenta doble', () => {
+    const r = dedupeMuscles([
+      ['Deltoides anterior', 'Deltoides lateral', 'Deltoides posterior'], // 1 ejercicio
+      ['Pectoral mayor'],
+      ['Pectoral menor'],
+    ]);
+    expect(r).toEqual(['Pectoral', 'Deltoides']); // pectoral en 2 ejercicios, deltoides en 1
+  });
+});

@@ -184,6 +184,51 @@ nada útil ni deja salida.
   (`index.html` red primero para no servir despliegues viejos; el resto caché
   primero, con la versión en la URL). La app abre sin conexión
 
+---
+
+## El trabajo que no se contaba (W47)
+
+Tres fallos encadenados hacían que buena parte del entrenamiento no apareciera
+en ninguna estadística muscular.
+
+### 1. El mapa leía otra cosa que las tarjetas
+
+`MuscleHeatmap` usaba **solo** la tabla fija `MUSCLES[nombreDelEjercicio]`, sin
+pasar por `normalizeMuscle` ni por el catálogo del usuario. Resultado: cualquier
+ejercicio propio no pintaba nada, y el mismo panel mostraba dos cifras distintas
+del mismo entrenamiento (mapa "Espalda 5.2/sem" vs tarjeta "ESPALDA 16.7").
+
+Ahora el mapa es literalmente la versión visual de `calcMuscleVolumeBalance`.
+Además:
+
+- `SLUG_MUSCLE` decía **"Abdominales"** y **"Gemelos"**, que no son ninguno de
+  los 11 canónicos: el abdomen y las pantorrillas **no se pintaban jamás**
+- las tarjetas reusaban `local.muscleVol`, calculado sobre 28 días fijos, bajo
+  la etiqueta "(7d)" — el selector 7/30/Todo no cambiaba nada
+
+### 2. Un ejercicio sin músculos era invisible
+
+Al añadir un ejercicio los músculos los pone la IA. Si esa llamada falla (sin
+clave, sin red), queda guardado con la lista vacía — y desde ese momento no
+cuenta para el mapa, ni el balance, ni la fatiga de la sesión. Sin avisar.
+
+- `inferMusclesFromName` los deduce del nombre ("Sentadilla en multipower" →
+  cuádriceps). El orden de las reglas importa: *press cerrado* es tríceps, no
+  pectoral; *curl femoral* es isquios, no bíceps
+- lo que aun así no se reconoce **se declara**: el panel de balance lista los
+  ejercicios que no suman y explica cómo arreglarlo
+
+### 3. Mayúsculas y acentos multiplicaban los músculos
+
+"braquial", "Braquial" y "Braquial " eran tres músculos distintos. El cuadro del
+split mostraba 23 etiquetas donde había 5 músculos: *Deltoides*, *Deltoides
+anterior*, *Deltoides lateral* y *Deltoides posterior* contaban por separado.
+
+`canonMuscleName` + `dedupeMuscles` agrupan por músculo real y ordenan por
+cuántos ejercicios del día lo trabajan. Lo que no se reconoce se conserva, solo
+que ordenado. La misma regla se aplica al reparto de fatiga de la sesión, donde
+"Tríceps braquial" y "Tríceps" no acumulaban fatiga entre sí.
+
 ### El orden de la sesión
 
 Saber con cuánta fatiga llegó cada grupo muscular a cada ejercicio depende de en

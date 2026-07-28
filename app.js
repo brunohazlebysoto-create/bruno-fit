@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W46";
+const APP_VERSION = "v2026.06.23-W47";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -2133,6 +2133,85 @@ function normalizeMuscle(raw) {
   return null; // no reconocido — no se cuenta en el balance agregado
 }
 
+// Deduce los músculos a partir del NOMBRE del ejercicio.
+// Al añadir un ejercicio, los músculos los pone la IA; si esa llamada falla (sin
+// clave, sin red, error) queda guardado con la lista vacía y a partir de ahí no
+// cuenta para nada: ni mapa, ni balance, ni fatiga de la sesión. Y en silencio.
+// Esto es la red de seguridad: peor que aproximar es no contar el trabajo.
+// El orden de las reglas importa — lo específico antes que lo genérico.
+const REGLAS_MUSCULO = [
+  [/gemelo|pantorrilla|soleo|calf/, ["Pantorrillas"]],
+  [/curl femoral|leg curl|femoral tumbad|femoral sentad|isquiotibial/, ["Isquios", "Glúteos"]],
+  [/peso muerto|deadlift|rumano|buenos dias|good morning/, ["Isquios", "Glúteos", "Espalda"]],
+  [/hip thrust|puente de gluteo|puente gluteo|patada de gluteo|abduccion de cadera/, ["Glúteos", "Isquios"]],
+  [/sentadilla|squat|prensa|hack|zancada|estocada|bulgara|ciclista|extension de cuadricep|extension cuadricep|step up/, ["Cuádriceps", "Glúteos", "Isquios"]],
+  [/aduccion|aductor/, ["Cuádriceps", "Glúteos"]],
+  [/press cerrado|press frances|frances|patada de tricep|copa|rompecraneo|fondo en banco|extension de tricep|extension tricep|jalon de tricep|tricep/, ["Tríceps"]],
+  [/curl|martillo|predicador|concentrado|bicep/, ["Bíceps", "Antebrazo"]],
+  [/dominada|jalon|remo|pull over|pullover|face pull|encogimiento|shrug|dorsal|espalda|trapecio|romboide/, ["Espalda", "Bíceps", "Deltoides"]],
+  [/vuelo|elevacion lateral|elevacion frontal|pajaro|arnold|press militar|press de hombro|hombro|deltoid/, ["Deltoides", "Tríceps", "Espalda"]],
+  [/press banca|press inclinado|press declinado|apertura|aper |cruce|pec deck|contractora|fondo|flexion de brazo|push up|pectoral|pecho|press de pecho/, ["Pectoral", "Tríceps", "Deltoides"]],
+  [/abdominal|crunch|plancha|oblicuo|rueda abdominal|elevacion de pierna|core|hollow/, ["Core"]],
+  [/antebrazo|muneca|grip|farmer|prensa manual/, ["Antebrazo"]],
+  [/press/, ["Pectoral", "Tríceps", "Deltoides"]], // "press" a secas: lo más probable
+];
+
+function inferMusclesFromName(name) {
+  if (!name || typeof name !== "string") return [];
+  const s = name.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  for (const [re, musculos] of REGLAS_MUSCULO) if (re.test(s)) return musculos;
+  return [];
+}
+
+// Nombre único y presentable de un músculo. Si se reconoce, la categoría
+// canónica; si no, el mismo texto ordenado. Sin esto, "braquial", "Braquial" y
+// "Braquial " son tres músculos distintos por una mayúscula o un espacio.
+function canonMuscleName(raw) {
+  const canon = normalizeMuscle(raw);
+  if (canon) return canon;
+  const s = String(raw || "").replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
+// Une listas de músculos sin repetir, ignorando mayúsculas y acentos, y
+// ordenando de más a menos presente (el músculo que más ejercicios trabajan va
+// primero, que es la información útil de un resumen).
+function dedupeMuscles(lists) {
+  const cuenta = new Map();
+  (Array.isArray(lists[0]) ? lists : [lists]).forEach(lista => {
+    const vistos = new Set();
+    (lista || []).forEach(raw => {
+      const m = canonMuscleName(raw);
+      if (!m || vistos.has(m)) return;   // no contar dos veces dentro del mismo ejercicio
+      vistos.add(m);
+      cuenta.set(m, (cuenta.get(m) || 0) + 1);
+    });
+  });
+  return [...cuenta.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([m]) => m);
+}
+
+// Los músculos de un ejercicio, mirando en orden: lo que tenga asignado el
+// catálogo → la tabla fija por nombre exacto → deducción por el nombre.
+function musclesOfExercise(exName, exercises) {
+  const delCatalogo = exercises && Object.values(exercises).flat().find(e => e?.name === exName)?.musculos;
+  if (delCatalogo?.length) return delCatalogo;
+  return MUSCLES[exName] || inferMusclesFromName(exName);
+}
+
+// Ejercicios entrenados en la ventana que no suman a ninguna estadística: sin
+// músculos asignados y sin nombre reconocible. Se muestran para que el usuario
+// pueda arreglarlo en vez de preguntarse por qué le faltan series.
+function listUncountedExercises(exlog, exercises, days = 28) {
+  const cutoff = days >= 999 ? 0 : Date.now() - days * 86400000;
+  return Object.entries(exlog || {})
+    .filter(([exName, sets]) =>
+      (sets || []).some(s => s?.date && s.type !== "warmup" && (days >= 999 || new Date(s.date).getTime() > cutoff)) &&
+      !musclesOfExercise(exName, exercises).some(m => normalizeMuscle(m))
+    )
+    .map(([exName]) => exName);
+}
+
 function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
   const primaryMuscles = ["Pectoral","Espalda","Cuádriceps","Isquios","Deltoides","Bíceps","Tríceps","Glúteos","Antebrazo","Core","Pantorrillas"];
   const counts = {};
@@ -2140,8 +2219,7 @@ function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
   const cutoff = days >= 999 ? 0 : Date.now() - days * 86400000;
   let minDate = Infinity;
   Object.entries(exlog||{}).forEach(([exName, sets])=>{
-    const _exMusculos = exercises && Object.values(exercises).flat().find(e=>e.name===exName)?.musculos;
-    const muscleList = (_exMusculos?.length ? _exMusculos : MUSCLES[exName]) || [];
+    const muscleList = musclesOfExercise(exName, exercises);
     const filteredSets = (sets||[]).filter(s=>s?.date && (days >= 999 || new Date(s.date).getTime()>cutoff) && s?.type!=="warmup");
     filteredSets.forEach(s => {
       const t = new Date(s.date).getTime();
@@ -2294,13 +2372,21 @@ const FATIGUE_K = 0.07; // rendimientos decrecientes por serie efectiva acumulad
 // reparto muscular final como la secuencia: con qué fatiga previa llegó cada
 // ejercicio. Lo segundo es lo que permite juzgar si el orden fue el adecuado.
 function analyzeSession(exlog, exercises, dateStr) {
-  const allExObjects = Object.values(exercises || {}).flat();
-
   const dayExercises = [];
   getSessionOrder(exlog, dateStr).forEach(({ exName, idxs }) => {
     const sets = idxs.filter(i => (exlog[exName] || [])[i]?.type !== "warmup").length;
     if (!sets) return;
-    const musculos = allExObjects.find(e => e.name === exName)?.musculos || [];
+    // Con la deducción por nombre, un ejercicio propio sin músculos asignados
+    // deja de desaparecer del reparto muscular de la sesión
+    // Se agrupan por músculo canónico: sin esto "Tríceps braquial" y "Tríceps"
+    // contaban como dos músculos distintos y la fatiga no se acumulaba entre
+    // ejercicios que trabajan lo mismo. Si un nombre no se reconoce se conserva
+    // tal cual, para no perder trabajo por no saber clasificarlo.
+    const musculos = [];
+    musclesOfExercise(exName, exercises).forEach(raw => {
+      const m = canonMuscleName(raw);
+      if (!musculos.includes(m)) musculos.push(m); // se queda la posición más primaria
+    });
     if (!musculos.length) return;
     dayExercises.push({ exName, sets, musculos });
   });
@@ -10408,48 +10494,31 @@ const MUSCLE_PATHS = {
 
 // slug -> nombre muscular español (slugs no listados se dibujan como base)
 const SLUG_MUSCLE = {
+  // Los nombres tienen que ser EXACTAMENTE los 11 canónicos de normalizeMuscle:
+  // "Abdominales" y "Gemelos" no lo eran, así que el abdomen y las pantorrillas
+  // nunca se pintaban por mucho que se entrenaran.
   front: { chest:"Pectoral", deltoids:"Deltoides", biceps:"Bíceps", triceps:"Tríceps",
-           forearm:"Antebrazo", quadriceps:"Cuádriceps", abs:"Abdominales",
-           calves:"Gemelos", trapezius:"Espalda" },
+           forearm:"Antebrazo", quadriceps:"Cuádriceps", abs:"Core",
+           calves:"Pantorrillas", trapezius:"Espalda" },
   back:  { deltoids:"Deltoides", triceps:"Tríceps", forearm:"Antebrazo", gluteal:"Glúteos",
-           hamstring:"Isquios", calves:"Gemelos", trapezius:"Espalda",
+           hamstring:"Isquios", calves:"Pantorrillas", trapezius:"Espalda",
            "upper-back":"Espalda", "lower-back":"Espalda" }
 };
 
 /* ===== MAPA DE CALOR MUSCULAR ===== */
-function MuscleHeatmap({ exlog, days, onChangeDays, decay = false }) {
+function MuscleHeatmap({ exlog, exercises, days, onChangeDays }) {
+  // Exactamente el mismo cálculo que las tarjetas de BALANCE MUSCULAR: el mapa
+  // es su versión visual, no otra cuenta. Antes leía solo la tabla fija
+  // MUSCLES[nombreDelEjercicio] y no normalizaba los nombres, así que cualquier
+  // ejercicio propio ("Sentadilla en multipower") o cualquier músculo escrito en
+  // detalle ("Tríceps braquial") no pintaba nada, y las dos mitades del mismo
+  // panel daban cifras distintas del mismo entrenamiento.
   const muscleWeekly = useMemo(() => {
-    const now = Date.now();
-    // decay solo aplica en la ventana de 7 días
-    const effectiveDecay = decay && days <= 7;
-    const cutoff = days >= 999 ? 0 : now - days * 86400000;
-    const counts = {};
-    let minDate = Infinity;
-    Object.entries(exlog || {}).forEach(([exName, sets]) => {
-      const muscles = (MUSCLES[exName] || []).map(m => m === "Deltoide ant." ? "Deltoides" : m);
-      (sets || [])
-        .filter(s => s?.date && s.type !== "warmup" && (days >= 999 || new Date(s.date).getTime() >= cutoff))
-        .forEach(s => {
-          const t = new Date(s.date).getTime();
-          if (t < minDate) minDate = t;
-          // En 7d: peso lineal 1.0→0 según días transcurridos
-          const weight = effectiveDecay ? Math.max(0, 1 - (now - t) / (7 * 86400000)) : 1;
-          if (weight > 0) muscles.forEach(m => { counts[m] = (counts[m] || 0) + weight; });
-        });
-    });
-    // Normalize to sets/week (decay: divide by 1 — weights ya encodifican recencia)
-    let weeks;
-    if (effectiveDecay) {
-      weeks = 1;
-    } else if (days >= 999) {
-      weeks = minDate < Infinity ? Math.max(1, (now - minDate) / (7 * 86400000)) : 1;
-    } else {
-      weeks = days / 7;
-    }
+    const balance = calcMuscleVolumeBalance(exlog, exercises, days);
     const result = {};
-    Object.entries(counts).forEach(([m, n]) => { result[m] = Math.round((n / weeks) * 10) / 10; });
-    return result; // setsPerWeek per muscle (o score ponderado si decay=true)
-  }, [exlog, days, decay]);
+    Object.entries(balance).forEach(([m, d]) => { if (d.setsPerWeek > 0) result[m] = d.setsPerWeek; });
+    return result;
+  }, [exlog, exercises, days]);
 
   const BASE = { fill: "rgba(38,50,30,0.92)", stroke: "rgba(70,92,54,0.55)" };
   const heat = (name) => {
@@ -10556,10 +10625,20 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
 
   const [heatmapDays, setHeatmapDays] = useState(7);
 
-  const muscleVol = React.useMemo(() => {
-    if (local?.muscleVol) return local.muscleVol;
-    return calcMuscleVolumeBalance(exlog, exercises, heatmapDays);
-  }, [local, exlog, exercises, heatmapDays]);
+  // No se reutiliza local.muscleVol: está calculado sobre una ventana fija de 28
+  // días, así que las tarjetas mostraban ese dato con la etiqueta "(7d)" y el
+  // selector 7/30/Todo no cambiaba nada.
+  const muscleVol = React.useMemo(
+    () => calcMuscleVolumeBalance(exlog, exercises, heatmapDays),
+    [exlog, exercises, heatmapDays]
+  );
+
+  // Ejercicios entrenados que no aportan a ninguna cifra: mejor decirlo que
+  // dejar al usuario preguntándose por qué le faltan series
+  const sinContar = React.useMemo(
+    () => listUncountedExercises(exlog, exercises, heatmapDays),
+    [exlog, exercises, heatmapDays]
+  );
 
   const weeklyLoad = React.useMemo(() => local?.weeklyLoad || calcWeeklyTrainingLoad(exlog), [local, exlog]);
   const deloadCheck = React.useMemo(() => local?.deloadCheck || detectDeloadNeed(exlog, notes, metricslog), [local, exlog, notes, metricslog]);
@@ -10591,11 +10670,11 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
             </div>
             <span className="disp" style={{fontSize:20, color:"#cdff4a", letterSpacing:".04em"}}>AGENTE ENTRENADOR</span>
           </div>
-          <button onClick={onClose} style={{background:"none", border:"none", color:"#9aa088", cursor:"pointer", padding:4}}><X size={20}/></button>
+          <button onClick={onClose} title="Cerrar" aria-label="Cerrar" style={{background:"none", border:"none", color:"#9aa088", cursor:"pointer", padding:4}}><X size={20}/></button>
         </div>
 
-        {/* Muscle Heatmap con decay temporal — intensidad se diluye hasta desaparecer a los 7 días */}
-        <MuscleHeatmap exlog={exlog} days={heatmapDays} onChangeDays={setHeatmapDays} decay={true}/>
+        {/* Mapa muscular: versión visual de las tarjetas de balance, mismo cálculo */}
+        <MuscleHeatmap exlog={exlog} exercises={exercises} days={heatmapDays} onChangeDays={setHeatmapDays}/>
 
         {/* Phase Indicator */}
         <div className="pop" style={{padding:"12px 14px", display:"flex", alignItems:"center", justifyContent:"space-between"}}>
@@ -10640,6 +10719,17 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
               );
             })}
           </div>
+          {sinContar.length > 0 && (
+            <div style={{marginTop:8, background:"rgba(255,177,61,0.08)", border:"1px solid rgba(255,177,61,0.28)", borderRadius:9, padding:"8px 10px"}}>
+              <div style={{fontSize:10.5, fontWeight:800, color:C.amber, marginBottom:3}}>
+                ⚠ {sinContar.length} ejercicio{sinContar.length !== 1 ? "s" : ""} no suma{sinContar.length !== 1 ? "n" : ""} a estas cifras
+              </div>
+              <div style={{fontSize:10, color:"#9aa088", lineHeight:1.45}}>
+                {sinContar.slice(0, 5).join(", ")}{sinContar.length > 5 ? ` y ${sinContar.length - 5} más` : ""}.
+                {" "}No tienen músculos asignados. Ábrelos en Entreno y pulsa el icono de editar para asignárselos.
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Weekly Load Chart */}
@@ -10953,7 +11043,7 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
             <Clock size={16} color={C.cyan}/>
             <span style={{fontFamily:"var(--font-display)", fontSize:20, letterSpacing:".05em", color:C.ink}}>MODO FOCO</span>
           </div>
-          <button onClick={onClose} style={{background:"none", color:C.muted, cursor:"pointer", padding:4, display:"flex", border:"none"}}><X size={20}/></button>
+          <button onClick={onClose} title="Cerrar" aria-label="Cerrar" style={{background:"none", color:C.muted, cursor:"pointer", padding:4, display:"flex", border:"none"}}><X size={20}/></button>
         </div>
 
         {/* Hydration alert after 45 min */}
@@ -11831,7 +11921,11 @@ function Entreno({
 
   const dayObj = (splits || DEFAULT_SPLITS).find(d => d.key === sel) || (splits || DEFAULT_SPLITS)[0] || DEFAULT_SPLITS[0];
   const dayExs = (exercises || {})[sel] || [];
-  const dayMuscles = [...new Set(dayExs.flatMap(e => e.musculos || []))];
+  // Antes era la unión en crudo de cada cadena escrita: salían "Deltoides",
+  // "Deltoides anterior", "Deltoides lateral" y "Deltoides posterior" como si
+  // fueran cuatro músculos, y "braquial" y "Braquial" como dos. Ahora se agrupan
+  // y se ordenan por cuántos ejercicios del día los trabajan.
+  const dayMuscles = dedupeMuscles(dayExs.map(e => musclesOfExercise(e.name, exercises)));
 
   // Finds the canonical exlog key for an exercise name, tolerating:
   // - case differences, trailing spaces
@@ -18803,6 +18897,8 @@ if (typeof module !== 'undefined' && module.exports) {
     detectWeightOutlier, calcBodyProjection, fatFractionOfLoss, leanFractionOfGain,
     evaluateRecovery, calcRestingHRBaseline, buildRecompositionSeries, getWeeklyStats,
     RECOVERY_FIELDS, getLocalDateStr,
+    normalizeMuscle, canonMuscleName, dedupeMuscles, calcMuscleVolumeBalance, SLUG_MUSCLE,
+    inferMusclesFromName, musclesOfExercise, listUncountedExercises,
     default: App
   };
 }

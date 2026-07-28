@@ -77,6 +77,18 @@ const ESCENAS = [
     },
     scrollDespues: 600,
   },
+  {
+    // El mapa muscular y las tarjetas de balance viven en un modal: sin abrirlo
+    // ninguna captura cubría el panel donde el mapa se pintaba en blanco
+    id: "entreno-07-mapa-muscular",
+    tab: "Entreno",
+    scroll: 0,
+    accion: async (page) => { await page.getByRole("button", { name: "Agente" }).first().click({ timeout: 5000 }); },
+    scrollDespues: 0,
+  },
+  { id: "entreno-08-balance-muscular", tab: "Entreno", scroll: 0,
+    accion: async (page) => { await page.getByRole("button", { name: "Agente" }).first().click({ timeout: 5000 }); },
+    scrollDespues: 700 },
   { id: "registro-01-peso-y-tendencia", tab: "Registro", scroll: 0 },
   { id: "registro-02-objetivos", tab: "Registro", scroll: 1150 },
   { id: "registro-03-composicion", tab: "Registro", scroll: 1900 },
@@ -132,6 +144,13 @@ async function capturar() {
 
   let tabActual = null;
   for (const esc of ESCENAS) {
+    // Una escena anterior pudo dejar un modal abierto: taparía la escena
+    // siguiente e impediría hasta cambiar de pestaña
+    const abierta = page.locator(".trainer-agent-sheet");
+    if (await abierta.count()) {
+      await page.getByRole("button", { name: "Cerrar" }).first().click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(500);
+    }
     if (esc.tab !== tabActual) {
       await page.getByText(esc.tab, { exact: true }).first().click({ timeout: 10000 });
       await page.waitForTimeout(1200);
