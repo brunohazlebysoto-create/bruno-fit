@@ -286,3 +286,28 @@ tiempo que ya existen**. No se inventa ninguna hora, se reparten las mismas en
 otro orden. Así todo lo que ya ordenaba por fecha —gráficos, análisis, PDF,
 sincronización con la nube, copias de seguridad— sigue funcionando sin tocarlo,
 y el orden viaja con los datos.
+
+---
+
+## Números invisibles en Volumen Semanal (W50)
+
+Los músculos con más trabajo (≥8 series/sem) mostraban el número **negro sobre
+negro**: justo los que más interesa leer.
+
+El CSS de `.muscle-heatmap-cell` pinta un degradado, es decir un
+`background-image`. El código aplicaba `backgroundColor` en línea, y un
+`background-image` se pinta **encima** del color: el fondo lima no llegaba a
+verse nunca, pero el número sí usaba el `#0c0e0b` pensado para ese fondo.
+
+- se aplica el atajo `background`, que reemplaza también la imagen
+- el nombre del músculo lleva color explícito: heredado, salía claro sobre el
+  lima sólido — el mismo fallo, un tramo más allá
+- los tramos intermedios tampoco mostraban su color (mismo motivo); ahora sí
+
+Se comprobó en el navegador el tramo alto, que es el que estaba roto: fondo
+`rgb(205,255,74)`, `background-image: none` y número `rgb(12,14,11)`.
+
+**Regla para no repetirlo:** si una clase del CSS define `background` con
+degradado, en línea hay que usar `background`, nunca `backgroundColor`. Las
+clases con degradado son `.muscle-heatmap-cell`, `.comp-metric-box`,
+`.chat-bubble.user` y `.chat-bubble.assistant`.

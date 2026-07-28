@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W49";
+const APP_VERSION = "v2026.06.23-W50";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -12384,11 +12384,17 @@ tr:last-child td{border-bottom:none}
     return calculatedVol;
   }, [exercises, exlog]);
 
+  // OJO: .muscle-heatmap-cell pinta un degradado en el CSS, o sea un
+  // background-IMAGE. Un background-color en línea queda debajo y no se ve
+  // nunca — por eso hay que devolver `bg` como atajo `background`, que
+  // reemplaza también la imagen. Con el fondo invisible, el número de los
+  // músculos más trabajados salía en negro sobre negro.
+  // `name` va explícito: heredado, el nombre saldría claro sobre el lima sólido.
   const getHeatColor = (sets) => {
-    if (sets === 0) return { bg: C.panel2, text: C.muted };
-    if (sets < 4) return { bg: "rgba(107, 78, 255, 0.15)", text: C.ink, border: "rgba(107, 78, 255, 0.3)" };
-    if (sets < 8) return { bg: "rgba(205, 255, 74, 0.25)", text: "#f3f4ea", border: C.lime, fontWeight: 700 };
-    return { bg: C.lime, text: "#0c0e0b", border: C.lime, fontWeight: 800, boxShadow: "0 0 10px rgba(205, 255, 74, 0.3)" };
+    if (sets === 0) return { text: C.muted, name: C.muted };                    // sin fondo: se queda el degradado
+    if (sets < 4) return { bg: "rgba(107, 78, 255, 0.18)", text: C.ink, name: C.muted, border: "rgba(107, 78, 255, 0.45)" };
+    if (sets < 8) return { bg: "rgba(205, 255, 74, 0.16)", text: "#f3f4ea", name: C.muted, border: C.lime, fontWeight: 700 };
+    return { bg: C.lime, text: "#0c0e0b", name: "rgba(12,14,11,.7)", border: C.lime, fontWeight: 800, boxShadow: "0 0 10px rgba(205, 255, 74, 0.3)" };
   };
 
   const allExistingExercises = Object.values(exercises || {}).flat().map(e => e.name);
@@ -13306,12 +13312,12 @@ tr:last-child td{border-bottom:none}
                 key={m} 
                 className="muscle-heatmap-cell"
                 style={{
-                  backgroundColor: styleProps.bg,
+                  ...(styleProps.bg ? { background: styleProps.bg } : {}),
                   borderColor: styleProps.border || C.line,
                   boxShadow: styleProps.boxShadow || "none"
                 }}
               >
-                <span className="muscle-name" style={{ color: styleProps.text === C.muted ? C.muted : "inherit" }}>{m}</span>
+                <span className="muscle-name" style={{ color: styleProps.name }}>{m}</span>
                 <span className="muscle-count" style={{ color: styleProps.text, fontWeight: styleProps.fontWeight || 500 }}>{n}</span>
               </div>
             );

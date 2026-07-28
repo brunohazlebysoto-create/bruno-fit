@@ -100,6 +100,9 @@ const ESCENAS = [
       await page.getByRole("button", { name: /Mover a otro día/ }).click({ timeout: 5000 });
     },
   },
+  // Posicionar por texto en vez de por píxeles: este panel se mueve cada vez
+  // que crece algo por encima, y con scroll fijo la captura acabaría en otro sitio
+  { id: "entreno-10-volumen-semanal", tab: "Entreno", scrollHasta: "Volumen Semanal" },
   { id: "registro-01-peso-y-tendencia", tab: "Registro", scroll: 0 },
   { id: "registro-02-objetivos", tab: "Registro", scroll: 1150 },
   { id: "registro-03-composicion", tab: "Registro", scroll: 1900 },
@@ -181,6 +184,10 @@ async function capturar() {
     await page.waitForTimeout(300);
     await page.mouse.move(210, 450);
     if (esc.scroll) await page.mouse.wheel(0, esc.scroll);
+    if (esc.scrollHasta) {
+      await page.getByText(esc.scrollHasta, { exact: false }).first()
+        .evaluate((el) => el.scrollIntoView({ block: "center" }));
+    }
     await page.waitForTimeout(600);
     // Algunas pantallas solo aparecen tras interactuar (abrir un día, un modal)
     if (esc.accion) {
