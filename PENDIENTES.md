@@ -229,6 +229,22 @@ cuántos ejercicios del día lo trabajan. Lo que no se reconoce se conserva, sol
 que ordenado. La misma regla se aplica al reparto de fatiga de la sesión, donde
 "Tríceps braquial" y "Tríceps" no acumulaban fatiga entre sí.
 
+### 4. Las pestañas escondían la mitad del día (W48)
+
+El resumen bajo la letra se cortaba en el `+`: la pestaña A de **"Pecho +
+Bíceps"** decía solo *Pecho*, y la C de **"Espalda + Tríceps"** solo *Espalda*.
+Al querer que cupiera en una línea, se ocultaba justo la mitad del entreno.
+
+Ahora se muestra el nombre completo (`Pecho · Bíceps`), envolviendo en varias
+líneas si hace falta. La pestaña crece unos píxeles; a cambio no miente.
+
+### 5. El número de orden se quedaba solo
+
+Con `flexWrap`, un nombre largo saltaba entero a la línea siguiente y dejaba el
+`2º` huérfano arriba, con las flechas ▲▼ a media altura de la tarjeta. Número y
+nombre van ahora en su propio bloque. El sembrado del preview usa un nombre
+largo de verdad para que el caso quede cubierto por las capturas.
+
 ### El orden de la sesión
 
 Saber con cuánta fatiga llegó cada grupo muscular a cada ejercicio depende de en

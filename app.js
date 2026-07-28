@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W47";
+const APP_VERSION = "v2026.06.23-W48";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -14171,7 +14171,11 @@ tr:last-child td{border-bottom:none}
         {(splits || DEFAULT_SPLITS).map(d => {
           // La letra sola no decía nada: había que pulsar cada pestaña para
           // descubrir qué se entrena. Ahora lleva el grupo muscular debajo.
-          const resumen = (d.name || "").split(/\s*\+\s*/)[0].trim();
+          // El nombre entero, no la primera mitad: cortar en el "+" dejaba
+          // "Pecho" donde el día es "Pecho + Bíceps" y "Espalda" donde es
+          // "Espalda + Tríceps". La pestaña escondía la mitad del entreno.
+          // El "·" ocupa menos que " + " y separa igual de claro.
+          const resumen = (d.name || "").split(/\s*\+\s*/).map(t => t.trim()).filter(Boolean).join(" · ");
           const activo = sel === d.key;
           return (
           <button
@@ -14182,17 +14186,19 @@ tr:last-child td{border-bottom:none}
               flex:"1 1 0",
               minWidth:56,
               maxWidth:88,
-              padding:"6px 4px",
+              padding:"6px 4px 7px",
               borderRadius:11,
               cursor:"pointer",
               border:`1px solid ${activo ? (COLOR_SPLIT[d.key] || C.lime) : C.line}`,
               background: activo ? `${COLOR_SPLIT[d.key] || C.lime}1a` : C.panel,
               color: activo ? (COLOR_SPLIT[d.key] || C.lime) : C.muted,
-              display:"flex", flexDirection:"column", alignItems:"center", gap:1, lineHeight:1
+              display:"flex", flexDirection:"column", alignItems:"center", gap:2, lineHeight:1
             }}
           >
             <span style={{fontFamily:"'Bebas Neue'", fontSize:20}}>{d.key}</span>
-            <span style={{fontSize:8.5, fontWeight:700, opacity:.9, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:"100%"}}>
+            {/* Envuelve en varias líneas antes que recortar: la pestaña puede
+                crecer un poco, pero no puede mentir sobre lo que se entrena */}
+            <span style={{fontSize:8.5, fontWeight:700, opacity:.9, lineHeight:1.2, textAlign:"center", maxWidth:"100%", overflowWrap:"anywhere"}}>
               {resumen}
             </span>
           </button>
