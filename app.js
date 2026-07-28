@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W26";
+const APP_VERSION = "v2026.06.23-W27";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -218,9 +218,9 @@ const C = {
 };
 
 const START_W = 93.9, GOAL_W = 85;
-const todayKey = () => "log-" + new Date().toISOString().slice(0,10);
-const waterKey = () => "water-" + new Date().toISOString().slice(0,10);
-const suppsKey = () => "supps-" + new Date().toISOString().slice(0,10);
+const todayKey = () => "log-" + getLocalDateStr(new Date());
+const waterKey = () => "water-" + getLocalDateStr(new Date());
+const suppsKey = () => "supps-" + getLocalDateStr(new Date());
 const uid = () => Math.random().toString(36).slice(2,9);
 const fdate = (iso)=> new Date(iso).toLocaleDateString("es",{day:"2-digit",month:"short"});
 
@@ -1565,7 +1565,7 @@ function calcWeightTrend(metricslog) {
 function getWeeklyStats(foodlog, exlog, metricslog, notes) {
   const last7 = [...Array(7)].map((_,i)=>{
     const d = new Date(); d.setDate(d.getDate()-i);
-    return d.toISOString().slice(0,10);
+    return getLocalDateStr(d);
   }).reverse();
   const trainDays = last7.filter(d => Object.values(exlog||{}).some(sets=>(sets||[]).some(s=>s?.date?.slice(0,10)===d)));
   const avgProtein = last7.reduce((s,d)=>{ const fl=foodlog[d]||[]; return s+(fl.reduce((a,e)=>a+(+e.proteina||0),0)); },0)/Math.max(1,last7.filter(d=>(foodlog[d]||[]).length>0).length);
@@ -3818,7 +3818,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `brunofit-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `brunofit-backup-${getLocalDateStr(new Date())}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -3831,7 +3831,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     if (!loaded) return; // esperar a que los datos estén cargados
 
     const doBackup = async () => {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getLocalDateStr(new Date());
       if (localStorage.getItem("last_backup_date") === today) return;
       const st = nightlyBackupRef.current;
       const snap = { exportedAt: new Date().toISOString(), updatedAt: Date.now(), notes: st.notes, exlog: st.exlog, exercises: st.exercises, foodlog: st.foodlog, waterlog: st.waterlog, suppslog: st.suppslog, metricslog: st.metricslog, suppsInventory: st.suppsInventory, workoutDurations: st.workoutDurations, meals: st.meals, splits: st.splits, bodyComp: st.bodyComp, shoppingList: st.shoppingList, presetKey: st.presetKey, activeSplitKey: st.activeSplitKey, customPresets: st.customPresets, customSuggestions: st.customSuggestions, smartGoals: st.smartGoals, challenges: st.challenges, chat: st.chat, experiments: st.experiments, weeklyInsight: st.weeklyInsight, upcomingEvent: st.upcomingEvent };
@@ -3941,7 +3941,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
     if (enabled && syncCode && !syncCode.startsWith("bf-")) {
       setSyncStatus("Sincronizando...");
-      const today = new Date().toISOString().slice(0,10);
+      const today = getLocalDateStr(new Date());
       const updateTime = Date.now();
       const current = { presetKey, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, updatedAt: updateTime };
       try {
@@ -3982,7 +3982,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         
         setSyncStatus("Esperando verificación...");
         
-        const today = new Date().toISOString().slice(0,10);
+        const today = getLocalDateStr(new Date());
         const updateTime = Date.now();
         const current = { presetKey, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, updatedAt: updateTime };
         try {
@@ -4009,7 +4009,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     setSyncStatus("Vinculando...");
     const cloudData = await fetchStateFromCloud(code.trim());
     if (cloudData) {
-      const today = new Date().toISOString().slice(0,10);
+      const today = getLocalDateStr(new Date());
       const updateTime = cloudData.updatedAt || Date.now();
 
       // Guardar local
@@ -4094,7 +4094,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     setSyncStatus("Actualizando...");
     const cloudData = await fetchStateFromCloud(syncCode);
     if (cloudData) {
-      const today = new Date().toISOString().slice(0,10);
+      const today = getLocalDateStr(new Date());
       const updateTime = cloudData.updatedAt || Date.now();
 
       // Decidir datos diarios
@@ -4261,7 +4261,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
   // #19 Weekly Insight — AI correlation analysis (runs once per day)
   const runWeeklyInsight = async (fLog, eLog, mLog, nts, tgt) => {
     const lastRun = await loadKey("weekly_insight_date","");
-    const today = new Date().toISOString().slice(0,10);
+    const today = getLocalDateStr(new Date());
     if (lastRun===today) { const saved=await loadKey("weekly_insight",null); if(saved) setWeeklyInsight(saved); return; }
     const stats = getWeeklyStats(fLog, eLog, mLog, nts);
     if (stats.avgKcal===0&&stats.trainDays===0) return;
@@ -4276,7 +4276,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
   // #20 Weekly Challenges
   const generateWeeklyChallenges = async (fLog, tgt, eLog) => {
-    const thisMonday=(()=>{const d=new Date();const dow=d.getDay();const diff=(dow===0?-6:1-dow);d.setDate(d.getDate()+diff);return d.toISOString().slice(0,10);})();
+    const thisMonday=(()=>{const d=new Date();const dow=d.getDay();const diff=(dow===0?-6:1-dow);d.setDate(d.getDate()+diff);return getLocalDateStr(d);})();
     const lastRun=await loadKey("challenges_date","");
     if (lastRun===thisMonday){const saved=await loadKey("challenges",[]);if(saved.length>0){setChallenges(saved);return;}}
     const pattern=analyzeMacroPattern(fLog);
@@ -4295,7 +4295,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
   const addSmartGoalFromPR = (exName, prWeight) => {
     const isCompound=["Sentadilla","Peso muerto","Press banca","Remo","Prensa"].some(c=>exName.includes(c));
     const nextTarget=prWeight+(isCompound?5:2.5);
-    const newGoal={id:uid(),icon:"🏆",exercise:exName,title:`${exName}: ${nextTarget}kg`,desc:`Levanta ${nextTarget}kg en ${exName}`,currentPR:prWeight,targetPR:nextTarget,deadline:new Date(Date.now()+28*86400000).toISOString().slice(0,10),created:new Date().toISOString()};
+    const newGoal={id:uid(),icon:"🏆",exercise:exName,title:`${exName}: ${nextTarget}kg`,desc:`Levanta ${nextTarget}kg en ${exName}`,currentPR:prWeight,targetPR:nextTarget,deadline:getLocalDateStr(new Date(Date.now()+28*86400000)),created:new Date().toISOString()};
     setSmartGoals(prev=>{const updated=[newGoal,...prev.filter(g=>g.exercise!==exName)].slice(0,5);saveKey("smart_goals",updated);return updated;});
     setAiNotifications(prev=>[{id:"goal_"+uid(),type:"success",icon:"🏆",title:"Nuevo Smart Goal",message:`PR de ${prWeight}kg en ${exName}. Próximo: ${nextTarget}kg en 4 semanas.`,urgency:"low"},...prev].slice(0,8));
   };
@@ -4357,7 +4357,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
   const handleForcePush = async () => {
     if (!syncCode) return;
     setSyncStatus("Sincronizando...");
-    const today = new Date().toISOString().slice(0,10);
+    const today = getLocalDateStr(new Date());
     const updateTime = Date.now();
     const current = {
       presetKey, customPresets, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today,
@@ -4686,7 +4686,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         if (!weeklyVolume[weekLabel]) weeklyVolume[weekLabel] = { sets: 0, tons: 0, days: new Set() };
         weeklyVolume[weekLabel].sets++;
         weeklyVolume[weekLabel].tons += (s.w * (parseFloat(s.reps) || 1)) / 1000;
-        weeklyVolume[weekLabel].days.add(d.toISOString().slice(0, 10));
+        weeklyVolume[weekLabel].days.add(getLocalDateStr(d));
       });
 
       // ── Historial por sesión (últimas 5 sesiones de trabajo) ──
@@ -4805,7 +4805,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
   // Saludo proactivo diario (solo una vez al día al abrir Coach)
   const sendDailyGreetingIfNeeded = async () => {
-    const todayKey = `dailyGreeting_${new Date().toISOString().slice(0, 10)}`;
+    const todayKey = `dailyGreeting_${getLocalDateStr(new Date())}`;
     if (localStorage.getItem(todayKey)) return; // ya se envió hoy
     if (chatBusy) return; // reintentar más tarde, no marcar como enviado
     const activeSplit = splits.find(s => s.key === activeSplitKey) || splits[0] || DEFAULT_SPLITS[0];
@@ -4854,13 +4854,13 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
       // Get 7-day average nutrition
       const getNutritionAverages = (days = 7) => {
-        const today = new Date(selectedDateStr);
+        const today = new Date(selectedDateStr + "T12:00:00");
         let totalKcal = 0, totalP = 0, totalC = 0, totalF = 0;
         let loggedDays = 0;
         for (let i = 0; i < days; i++) {
           const d = new Date(today);
           d.setDate(d.getDate() - i);
-          const dateStr = d.toISOString().slice(0, 10);
+          const dateStr = getLocalDateStr(d);
           const entries = (foodlog || {})[dateStr];
           if (entries && entries.length > 0) {
             loggedDays++;
@@ -7191,7 +7191,7 @@ function EditEntry({
 }
 
 function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, metricslog = null, activeMetrics = null) {
-  const today = selectedDateStr || new Date().toISOString().slice(0, 10);
+  const today = selectedDateStr || getLocalDateStr(new Date());
   // El objetivo de agua depende del peso, no de una constante de 14 vasos
   const waterGoalGlasses = calcWaterGoalGlasses(activeMetrics?.weight, true);
 
@@ -7258,7 +7258,7 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, me
   else { score -= 1; factors.push("Hidratación baja"); }
 
   // 3. Proteína y calorías de ayer
-  const yesterday = new Date(new Date(today).getTime() - 86400000).toISOString().slice(0, 10);
+  const yesterday = (() => { const d = new Date(today + "T12:00:00"); d.setDate(d.getDate() - 1); return getLocalDateStr(d); })();
   const yEntries = (foodlog || {})[yesterday] || [];
   const yProt = Math.round(yEntries.reduce((a, e) => a + (+e.proteina || 0), 0));
   const yKcal = Math.round(yEntries.reduce((a, e) => a + (+e.kcal || 0), 0));
@@ -7269,7 +7269,7 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, me
 
   // 4. Recuperación: datos objetivos si los hay (sueño, pasos, FC en reposo);
   //    si no, se cae a las palabras clave de las notas como antes.
-  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const weekAgo = getLocalDateStr(new Date(Date.now() - 7 * 86400000));
   const recentNotes = (notes || []).filter(n => n?.date && n.date.slice(0, 10) >= weekAgo);
   const recovery = evaluateRecovery((metricslog || {})[today], calcRestingHRBaseline(metricslog));
   if (recovery.hasData) {
@@ -7291,7 +7291,7 @@ function predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, me
   else if (fatigueCount === 1) { score -= 1; factors.push("Algo de fatiga"); }
 
   // 6. Volumen semanal (riesgo de sobreentrenamiento)
-  const weekStart = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
+  const weekStart = getLocalDateStr(new Date(Date.now() - 6 * 86400000));
   let weekSets = 0;
   Object.values(exlog || {}).forEach(sets => {
     (sets || []).forEach(s => {
@@ -7815,7 +7815,7 @@ function Hoy({
   const weekKcal = React.useMemo(() => {
     return [...Array(7)].map((_,i) => {
       const d = new Date(); d.setDate(d.getDate() - (6-i));
-      const dateStr = d.toISOString().slice(0,10);
+      const dateStr = getLocalDateStr(d);
       const entries = (foodlog || {})[dateStr] || [];
       return { date: dateStr, kcal: Math.round(entries.reduce((s,e) => s+(+e.kcal||0), 0)) };
     });
@@ -10664,7 +10664,7 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
   const exDuration = 60;
   const [formCues, setFormCues] = useState({});
   const [formCueBusy, setFormCueBusy] = useState({});
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getLocalDateStr(new Date());
   const sessionStartRef = useRef(Date.now());
   const [showHydrationAlert, setShowHydrationAlert] = useState(false);
   useEffect(() => {
@@ -11591,7 +11591,7 @@ function Entreno({
   // --- AI Tips for InsightsCarousel ---
   const [aiTips, setAiTips] = useState([]);
   useEffect(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getLocalDateStr(new Date());
     const cacheKey = "insights_tips_" + today;
     const cached = getAICache("tips", cacheKey);
     if (cached) { setAiTips(cached); return; }
@@ -11974,6 +11974,15 @@ tr:last-child td{border-bottom:none}
 
   // Recomendación + progreso por ejercicio del día seleccionado (misma lógica
   // que el PDF), indexada por nombre para mostrarla al abrir cada ejercicio.
+  // Índice nombre → ejercicio. Antes cada fila de la sesión hacía
+  // Object.values(exercises).flat().find(...), aplanando el catálogo entero
+  // por ejercicio y por render.
+  const exerciseByName = React.useMemo(() => {
+    const map = {};
+    Object.values(exercises || {}).flat().forEach(e => { if (e?.name) map[e.name] = e; });
+    return map;
+  }, [exercises]);
+
   const dayRecMap = React.useMemo(() => {
     const summary = buildDaySummary(exlog, exercises, selectedDateStr, { phase: caloricPhase });
     const map = {};
@@ -13358,10 +13367,13 @@ tr:last-child td{border-bottom:none}
               {selectedDayWorkouts ? (
                 <div style={{display:"flex", flexDirection:"column", gap:8}}>
                   {Object.entries(selectedDayWorkouts).map(([exName, sets]) => {
-                    const globalEx = Object.values(exercises).flat().find(item => item.name === exName) || { name: exName };
+                    const globalEx = exerciseByName[exName] || { name: exName };
                     const isOpen = open === "session-" + exName;
                     const l = last(exName);
-                    const cd = chartData(exName);
+                    // El gráfico solo se muestra al expandir: ordenar todo el
+                    // historial de cada ejercicio en cada render era gratuito
+                    // solo en apariencia.
+                    const cd = isOpen ? chartData(exName) : null;
                     return (
                       <div key={exName} style={{background:C.panel2, border:`1px solid ${isOpen ? C.lime : C.line}`, borderRadius:13, marginBottom:4, overflow:"hidden", position:"relative"}}>
                         <div style={{display:"flex", alignItems:"center"}}>
@@ -13870,9 +13882,10 @@ tr:last-child td{border-bottom:none}
           </div>
         );
         return filtered.map(ex => {
-          const isOpen = open === ex.name; 
-        const l = last(ex.name); 
-        const cd = chartData(ex.name);
+          const isOpen = open === ex.name;
+        const l = last(ex.name);
+        // Solo se necesita al expandir (ver nota en la lista de sesión)
+        const cd = isOpen ? chartData(ex.name) : null;
         return (
           <div key={ex.name} style={{background:C.panel, border:`1px solid ${isOpen ? C.lime : C.line}`, borderRadius:13, marginBottom:9, overflow:"hidden", position:"relative"}}>
             <div style={{display:"flex", alignItems:"center"}}>
@@ -14501,7 +14514,10 @@ tr:last-child td{border-bottom:none}
                   if (!filtered.length) return null;
                   const groups = {};
                   filtered.forEach(e => { const eq = e.equipo || "peso libre"; (groups[eq] = groups[eq]||[]).push(e); });
-                  EQUIPO_ORDER.forEach(eq => { if (groups[eq]) groups[eq].sort((a,b) => a.name.localeCompare(b,"es")); });
+                  // Comparar nombre contra NOMBRE: antes se comparaba con el
+                  // objeto entero, que se coercía a "[object Object]" y dejaba
+                  // el desplegable sin ordenar.
+                  EQUIPO_ORDER.forEach(eq => { if (groups[eq]) groups[eq].sort((a,b) => a.name.localeCompare(b.name,"es")); });
                   return (
                     <div style={{position:"absolute", top:"calc(100% + 4px)", left:0, right:0, background:C.bg, border:`1px solid ${C.line}`, borderRadius:12, zIndex:60, overflow:"hidden", boxShadow:"0 8px 28px rgba(0,0,0,0.45)", maxHeight:320, overflowY:"auto"}}>
                       {EQUIPO_ORDER.filter(eq => groups[eq]).map(eq => (
@@ -15692,7 +15708,7 @@ function Registro({
   const [statsPeriod, setStatsPeriod] = useState(7); // 7 or 30 days
 
   const [dailyNutritionData, hasNutritionData, macroStats] = useMemo(() => {
-    const today = new Date(selectedDateStr);
+    const today = new Date(selectedDateStr + "T12:00:00");
     const data = [];
     let totalKcal = 0, totalP = 0, totalC = 0, totalF = 0;
     let activeDays = 0;
@@ -15700,7 +15716,7 @@ function Registro({
     for (let i = statsPeriod - 1; i >= 0; i--) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().slice(0, 10);
+      const dateStr = getLocalDateStr(d);
       const entries = (foodlog || {})[dateStr] || [];
       let kcal = 0, p = 0, c = 0, f = 0;
 
@@ -15839,13 +15855,13 @@ function Registro({
 
   // Water Statistics
   const waterStats = useMemo(() => {
-    const today = new Date(selectedDateStr);
+    const today = new Date(selectedDateStr + "T12:00:00");
     let totalWater = 0;
     let loggedDays = 0;
     for (let i = 0; i < statsPeriod; i++) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().slice(0, 10);
+      const dateStr = getLocalDateStr(d);
       const w = (waterlog || {})[dateStr];
       if (w !== undefined) {
         totalWater += w;
@@ -15857,7 +15873,7 @@ function Registro({
 
   // Training Sessions Statistics
   const trainingStats = useMemo(() => {
-    const today = new Date(selectedDateStr);
+    const today = new Date(selectedDateStr + "T12:00:00");
     let count = 0;
     const workoutDays = new Set();
     Object.values(exlog || {}).forEach(sets => {
@@ -15870,7 +15886,7 @@ function Registro({
     for (let i = 0; i < statsPeriod; i++) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().slice(0, 10);
+      const dateStr = getLocalDateStr(d);
       if (workoutDays.has(dateStr)) {
         count++;
       }
@@ -15880,7 +15896,7 @@ function Registro({
 
   // Weight Change Statistics
   const weightChangeStats = useMemo(() => {
-    const today = new Date(selectedDateStr);
+    const today = new Date(selectedDateStr + "T12:00:00");
     let newestW = null;
     let oldestW = null;
     
@@ -15895,7 +15911,7 @@ function Registro({
     
     const limitDate = new Date(today);
     limitDate.setDate(limitDate.getDate() - statsPeriod);
-    const limitDateStr = limitDate.toISOString().slice(0, 10);
+    const limitDateStr = getLocalDateStr(limitDate);
     
     const oldestEntries = sortedWeights.filter(x => x.date >= limitDateStr);
     if (oldestEntries.length > 0) {
@@ -16398,11 +16414,11 @@ function Registro({
     
     // Calculate 7-day nutritional average
     let totalKcal = 0, totalP = 0, totalC = 0, totalF = 0, loggedDays = 0;
-    const today = new Date(selectedDateStr);
+    const today = new Date(selectedDateStr + "T12:00:00");
     for (let i = 0; i < 7; i++) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().slice(0, 10);
+      const dateStr = getLocalDateStr(d);
       const entries = (foodlog || {})[dateStr];
       if (entries && entries.length > 0) {
         loggedDays++;
@@ -19013,7 +19029,7 @@ if (typeof module !== 'undefined' && module.exports) {
     calcMetabolicAdaptation, calcWaistMetrics, detectRecomposition,
     detectWeightOutlier, calcBodyProjection, fatFractionOfLoss, leanFractionOfGain,
     evaluateRecovery, calcRestingHRBaseline, buildRecompositionSeries, getWeeklyStats,
-    RECOVERY_FIELDS,
+    RECOVERY_FIELDS, getLocalDateStr,
     default: App
   };
 }

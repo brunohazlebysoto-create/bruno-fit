@@ -1156,3 +1156,29 @@ describe('UI de las nuevas métricas', () => {
     console.error = originalError;
   });
 });
+
+describe('fechas locales (regresión de zona horaria)', () => {
+  const { getLocalDateStr, localDateKey } = require('./app.js');
+
+  test('usa los componentes LOCALES de la fecha, no los UTC', () => {
+    // 23:30 hora local: en zonas negativas el equivalente UTC ya es el día
+    // siguiente. La app debe registrar el día local, no el UTC.
+    const nocheLocal = new Date(2026, 6, 28, 23, 30, 0); // 28-jul-2026 23:30 local
+    expect(getLocalDateStr(nocheLocal)).toBe('2026-07-28');
+
+    // 00:30 hora local: en zonas positivas el UTC es aún el día anterior
+    const madrugadaLocal = new Date(2026, 6, 28, 0, 30, 0);
+    expect(getLocalDateStr(madrugadaLocal)).toBe('2026-07-28');
+  });
+
+  test('localDateKey coincide con getLocalDateStr para el mismo instante', () => {
+    const d = new Date(2026, 0, 1, 22, 0, 0); // 1-ene 22:00 local
+    expect(localDateKey(d.toISOString())).toBe(getLocalDateStr(d));
+    expect(getLocalDateStr(d)).toBe('2026-01-01');
+  });
+
+  test('el día del mes no se desplaza al cruzar el fin de mes', () => {
+    const finDeMes = new Date(2026, 6, 31, 21, 0, 0); // 31-jul 21:00 local
+    expect(getLocalDateStr(finDeMes)).toBe('2026-07-31');
+  });
+});
