@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W30";
+const APP_VERSION = "v2026.06.23-W31";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -17295,36 +17295,12 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               </div>
             </div>
 
-            {/* === BLOQUE 3: Tabla análisis general === */}
-            <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
-              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10}}>Análisis General</div>
-              <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, overflow:"hidden"}}>
-                <div style={{display:"grid", gridTemplateColumns:"1fr 55px 88px 55px 64px", padding:"6px 10px", borderBottom:`1px solid ${C.line}`, fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase"}}>
-                  <span>Métrica</span><span style={{textAlign:"center"}}>Bajo</span><span style={{textAlign:"center"}}>Óptimo</span><span style={{textAlign:"center"}}>Alto</span><span style={{textAlign:"center"}}>Tu valor</span>
-                </div>
-                {[
-                  {lbl:"Masa muscular",  v:`${M.toFixed(1)} kg`, lo:"<50 kg", op:"55–70 kg",  hi:">75 kg",  col:M>=55&&M<=70?C.lime:M>=50?C.amber:C.rose},
-                  {lbl:"Grasa corporal", v:`${G.toFixed(1)} %`,  lo:"<6 %",   op:"10–20 %",   hi:">25 %",  col:G>=10&&G<=20?C.lime:G<25?C.amber:C.rose},
-                  {lbl:"IMC",            v:bmi.toFixed(1),        lo:"<18.5",  op:"18.5–24.9", hi:">25",    col:bmiLabel[1]},
-                  {lbl:"Grasa visceral", v:`G${V}`,               lo:"—",      op:"< 5",        hi:">10",   col:viscLabel[1]},
-                ].map((row, i, arr) => (
-                  <div key={row.lbl} style={{display:"grid", gridTemplateColumns:"1fr 55px 88px 55px 64px", padding:"7px 10px", borderBottom:i<arr.length-1?`1px solid ${C.line}`:"none", fontSize:11}}>
-                    <span style={{fontWeight:700, color:C.ink}}>{row.lbl}</span>
-                    <span style={{textAlign:"center", color:C.muted}}>{row.lo}</span>
-                    <span style={{textAlign:"center", color:C.lime, fontWeight:700}}>{row.op}</span>
-                    <span style={{textAlign:"center", color:C.muted}}>{row.hi}</span>
-                    <span style={{textAlign:"center", color:row.col, fontWeight:800}}>{row.v}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
             {/* === BLOQUE 4: Indicadores derivados === */}
             <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
               <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10}}>Otros Indicadores</div>
               <div style={{display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6}}>
                 {miniCard("TMB", `${bmr}`, "kcal/día · basal", C.cyan)}
-                {miniCard("Masa magra", `${leanKg.toFixed(1)} kg`, "Peso sin grasa")}
+                {/* "Masa magra" ya aparece como tarjeta MAGRA arriba */}
                 {miniCard("G. subcutánea", `${subcutFat.toFixed(1)} kg`, "~82% grasa total", G>25?C.rose:C.amber)}
                 {miniCard("Agua estimada", `${waterEst.toFixed(1)} kg`, "73% masa magra", C.cyan)}
                 {miniCard("SMI", smi.toFixed(1), "Musc. esq. / talla²", smi>=10?C.lime:smi>=8?C.amber:C.rose)}
@@ -17334,14 +17310,14 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
 
             {/* === BLOQUE 5: Control de peso + Tipo de cuerpo === */}
             <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
-              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10}}>Control de Peso</div>
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10}}>Para llegar a tu meta ({goalW} kg)</div>
               <div style={{background:`rgba(205,255,74,0.05)`, border:`1px solid rgba(205,255,74,0.18)`, borderRadius:10, padding:"12px 14px", marginBottom:12}}>
                 <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:10}}>
                   {[
-                    ["Peso recomendado", `${goalW} kg`],
                     ["Grasa a perder", `−${fatToLose.toFixed(1)} kg`],
                     ["Músculo a ganar", `+${muscToGain.toFixed(1)} kg`],
-                    ["Rango IMC óptimo", `${optWMin}–${optWMax} kg`],
+                    ["Peso con IMC sano", `${optWMin}–${optWMax} kg`],
+                    ["Te faltan", `${Math.abs(lastW - goalW).toFixed(1)} kg`],
                   ].map(([k,v]) => (
                     <div key={k}>
                       <div style={{fontSize:10, color:C.muted, fontWeight:600, marginBottom:2}}>{k}</div>
@@ -17351,24 +17327,31 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                 </div>
               </div>
 
-              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:8}}>Tipo de Cuerpo</div>
+              {/* "Tipo de Cuerpo" repetía las mismas clasificaciones que ya
+                  muestran, con su valor al lado, las barras de "¿Estás en
+                  rango?". Solo se conserva el tipo de cuerpo, que no está
+                  representado en ninguna barra. */}
               <div style={{display:"flex", gap:6, flexWrap:"wrap", alignItems:"center"}}>
+                <span style={{fontSize:10.5, color:C.muted, fontWeight:600}}>Tipo de cuerpo:</span>
                 {chip(bodyTypeInfo[0], bodyTypeInfo[1])}
-                {chip(bmiLabel[0], bmiLabel[1])}
-                {chip(`Grasa: ${fatLabel[0]}`, fatLabel[1])}
-                {chip(`Visceral: ${viscLabel[0]}`, viscLabel[1])}
               </div>
             </div>
 
-            {/* === BLOQUE 6: Barras objetivo + visceral === */}
+            {/* === BLOQUE 6: ¿Estás en rango? ===
+                Fusiona la antigua tabla "Análisis General" con las "Barras de
+                Objetivo": las dos respondían lo mismo (tu valor frente al rango
+                óptimo), una como tabla y otra como barras. Se queda la barra,
+                que además muestra DÓNDE cae el valor dentro del rango. */}
             <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
-              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:12}}>Barras de Objetivo</div>
-              {renderGoalBar("Peso Corporal", lastW, "kg", 60, 110, 75, 88, C.cyan)}
-              {renderGoalBar("Masa Muscular", M, "kg", 45, 85, 55, 70, C.lime)}
-              {renderGoalBar("Masa Grasa Corporal", fatKg, "kg", 5, 35, 8, 15, C.amber)}
+              <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:12}}>¿Estás en rango?</div>
+              {/* El rango ideal de peso se ancla a tu meta, no a valores fijos */}
+              {renderGoalBar("Peso corporal", lastW, "kg", Math.min(55, goalW - 25), Math.max(115, goalW + 25), goalW - 3, goalW + 5, C.cyan)}
+              {renderGoalBar("Masa muscular", M, "kg", 45, 85, 55, 70, C.lime)}
+              {renderGoalBar("Grasa corporal", G, "%", 4, 40, 10, 20, G > 25 ? C.rose : C.amber)}
+              {renderGoalBar("IMC", bmi, "", 15, 40, 18.5, 24.9, bmiLabel[1])}
 
-              <div style={{fontSize:11, color:C.muted, display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:14}}>
-                <span>Grasa Visceral: <b style={{color:V>=10?C.rose:V>=6?C.amber:C.lime}}>Grado {V}</b></span>
+              <div style={{fontSize:11, color:C.muted, display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:4}}>
+                <span>Grasa visceral: <b style={{color:V>=10?C.rose:V>=6?C.amber:C.lime}}>Grado {V}</b> <span style={{opacity:.7}}>(óptimo &lt; 5)</span></span>
                 <span style={{color:viscLabel[1], fontWeight:700}}>{viscLabel[0]}</span>
               </div>
               <div className="visceral-indicator">
@@ -17377,7 +17360,6 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                 ))}
               </div>
             </div>
-
           </div>
         );
       })()}
