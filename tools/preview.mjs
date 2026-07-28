@@ -114,32 +114,37 @@ function buildSeed() {
     waterlog[k] = 8 + (i % 5);
   }
 
-  // Entrenos: progresión real con un ejercicio estancado a propósito
+  // Entrenos: cada sesión usa SOLO los ejercicios de su split y los splits
+  // rotan A→B→C→D, como en un uso real. Antes cada día metía los 8 ejercicios
+  // a la vez, lo que hacía imposible probar nada que dependa del split del día.
   const exlog = {};
-  const plan = [
-    ["Press banca", 82, 1.0, 6], ["Press inclinado mancuerna", 30, 0.5, 9],
-    ["Sentadilla", 110, 1.2, 5], ["Prensa 45°", 180, 2.0, 8],
-    ["Dominadas", 8, 0.4, 7], ["Remo barra", 70, 0.8, 8],
-    ["Curl bíceps", 16, 0, 10], ["Extensión tríceps polea", 35, 0, 12],
+  const rutinas = [
+    ["A", [["Press banca", 82, 1.0, 6], ["Press inclinado mancuerna", 30, 0.5, 9], ["Curl martillo", 16, 0, 10]]],
+    ["B", [["Sentadilla", 110, 1.2, 5], ["Prensa 45°", 180, 2.0, 8], ["Vuelos laterales", 10, 0.25, 14]]],
+    ["C", [["Remo barra", 70, 0.8, 8], ["Dominadas / Jalón", 8, 0.4, 7], ["Press francés", 28, 0.5, 10]]],
+    ["D", [["Peso muerto", 130, 1.5, 5], ["Leg curl sentado", 45, 0.8, 11]]],
   ];
-  plan.forEach(([nombre, base, inc, reps]) => {
-    exlog[nombre] = [];
-    for (let s = 0; s < 10; s++) {
-      const d = diasAtras(s * 4 + 1); d.setHours(19, 0, 0, 0);
+  let sesion = 0;
+  for (let s = 9; s >= 0; s--) {              // de la más antigua a la más reciente
+    const [, ejercicios] = rutinas[sesion % rutinas.length];
+    sesion++;
+    const d = diasAtras(s * 3 + 1); d.setHours(19, 0, 0, 0);
+    ejercicios.forEach(([nombre, base, inc, reps]) => {
+      exlog[nombre] = exlog[nombre] || [];
       const w = Math.round((base + inc * (9 - s)) * 2) / 2;
       exlog[nombre].push({ date: d.toISOString(), w: Math.round(w * 0.55 * 2) / 2, reps: 12, rir: "-", type: "warmup" });
       for (let k2 = 0; k2 < 3; k2++) {
         exlog[nombre].push({ date: d.toISOString(), w, reps: reps - k2 > 3 ? reps - k2 : 4, rir: String(k2), type: "work" });
       }
-    }
-  });
+    });
+  }
 
   const notes = [
     { id: "n1", type: "sensacion", date: diasAtras(1).toISOString(), text: "Óptimo" },
     { id: "n2", type: "sensacion", date: diasAtras(5).toISOString(), text: "Fatigado" },
   ];
   const workoutDurations = {};
-  for (let s = 0; s < 10; s++) workoutDurations[key(diasAtras(s * 4 + 1))] = 58 + (s % 3) * 7;
+  for (let s = 0; s < 10; s++) workoutDurations[key(diasAtras(s * 3 + 1))] = 58 + (s % 3) * 7;
 
   const store = {
     onboarding_shown: "1",

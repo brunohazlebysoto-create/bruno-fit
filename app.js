@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W38";
+const APP_VERSION = "v2026.06.23-W39";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -18,6 +18,10 @@ const DEFAULT_PRESETS = {
   volumen:      { label:"Volumen",       kcal:3400, p:200, c:450, f:90 },
   personalizado:{ label:"Personalizado", kcal:2600, p:220, c:265, f:70 }
 };
+
+// Color por split para el calendario: permite distinguir de un vistazo qué se
+// entrenó cada día en vez de ver siempre el mismo punto verde.
+const COLOR_SPLIT = { A: "#cdff4a", B: "#4ad6ff", C: "#ffb13d", D: "#ff6b8a", E: "#a78bfa" };
 
 const DEFAULT_SPLITS = [
   { key:"A", name:"Pecho + Bíceps", fuel:"Carbo medio", ex:["Press banca","Press inclinado mancuerna","Aperturas","Curl inclinado","Curl martillo","Curl prono barra"] },
@@ -11956,6 +11960,38 @@ tr:last-child td{border-bottom:none}
     return map;
   }, [exercises]);
 
+  // Deduce el split de un día por los músculos que se trabajaron y calcula su
+  // volumen, para colorear el calendario en vez de poner siempre el mismo punto.
+  const infoDiaEntreno = (dateStr) => {
+    const sesion = workoutSessions[dateStr];
+    if (!sesion || Object.keys(sesion).length === 0) return {};
+    let volumen = 0, series = 0;
+    const musculos = {};
+    Object.entries(sesion).forEach(([exName, sets]) => {
+      (sets || []).forEach(s => {
+        if (s.type === "warmup") return;
+        series++;
+        volumen += setVolume(s);
+      });
+      (exerciseByName[exName]?.musculos || []).slice(0, 1).forEach(m => {
+        musculos[m] = (musculos[m] || 0) + 1;
+      });
+    });
+    const principal = Object.entries(musculos).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+    // El split se identifica por CUÁNTOS de sus ejercicios se hicieron ese día.
+    // Cruzar por nombre no servía: el músculo es "Pectoral" y el split se
+    // llama "Pecho + Bíceps", así que nunca coincidían y todo caía al color
+    // por defecto.
+    const hechos = Object.keys(sesion);
+    let mejor = null, mejorN = 0;
+    (splits || DEFAULT_SPLITS).forEach(sp => {
+      const suyos = new Set([...(sp.ex || []), ...((exercises || {})[sp.key] || []).map(e => e.name)]);
+      const n = hechos.filter(h => suyos.has(h)).length;
+      if (n > mejorN) { mejorN = n; mejor = sp; }
+    });
+    return { splitKey: mejor?.key || null, musculoPrincipal: principal, volumen: Math.round(volumen), series };
+  };
+
   const dayRecMap = React.useMemo(() => {
     const summary = buildDaySummary(exlog, exercises, selectedDateStr, { phase: caloricPhase });
     const map = {};
@@ -12934,7 +12970,10 @@ tr:last-child td{border-bottom:none}
             dateStr: dateStr,
             isToday: dateStr === getLocalDateStr(new Date()),
             isSelected: dateStr === selectedDateStr,
-            hasWorkout: !!workoutSessions[dateStr]
+            hasWorkout: !!workoutSessions[dateStr],
+            // Qué split y cuánto volumen: el punto verde no distinguía un día
+            // de pierna pesado de una sesión corta de brazos.
+            ...infoDiaEntreno(dateStr)
           });
         }
 
@@ -13116,19 +13155,27 @@ tr:last-child td{border-bottom:none}
                     }}
                   >
                     <span>{cell.dayNum}</span>
-                    {cell.hasWorkout && (
-                      <span 
+                    {cell.hasWorkout && (() => {
+                      // Color por split y tamaño por volumen: antes todos los
+                      // días entrenados eran un punto verde idéntico.
+                      const col = COLOR_SPLIT[cell.splitKey] || C.lime;
+                      const grande = cell.volumen >= 8000;
+                      const d = grande ? 6 : 4;
+                      return (
+                      <span
+                        title={`${cell.musculoPrincipal || "Entreno"} · ${cell.series} series · ${(cell.volumen || 0).toLocaleString("es")} kg`}
                         style={{
-                          width:4, 
-                          height:4, 
-                          borderRadius:"50%", 
-                          backgroundColor:C.lime, 
-                          boxShadow:`0 0 6px ${C.lime}`,
+                          width:d,
+                          height:d,
+                          borderRadius:"50%",
+                          backgroundColor:col,
+                          boxShadow:`0 0 6px ${col}`,
                           position:"absolute",
                           bottom:5
                         }}
                       />
-                    )}
+                      );
+                    })()}
                   </button>
                 );
               })}
@@ -13162,7 +13209,9 @@ tr:last-child td{border-bottom:none}
                 </div>
               )}
 
-              {/* Quick sensation */}
+              {/* Sensación de la sesión: solo si hubo entreno ese día, que es
+                  cuando la pregunta tiene sentido. */}
+              {selectedDayWorkouts && Object.keys(selectedDayWorkouts).length > 0 && (
               <div style={{display:"flex", gap:5, marginBottom:8}}>
                 {[["😴","Fatigado","rgba(255,61,113,0.1)","rgba(255,61,113,0.3)",C.rose],["💪","Normal","rgba(205,255,74,0.08)","rgba(205,255,74,0.25)",C.lime],["🚀","Óptimo","rgba(74,214,255,0.08)","rgba(74,214,255,0.25)",C.cyan]].map(([emoji,label,bg,border,col]) => {
                   // Comparar por fecha LOCAL del note (no la porción UTC) para que el
@@ -13181,6 +13230,7 @@ tr:last-child td{border-bottom:none}
                   );
                 })}
               </div>
+              )}
 
               {selectedDayWorkouts && (() => {
                 const { totalVol, density, dur } = getSessionStats();
@@ -13742,25 +13792,36 @@ tr:last-child td{border-bottom:none}
 
       {/* Selector del Split */}
       <div style={{display:"flex", gap:6, marginBottom:14, alignItems:"center", flexWrap:"wrap", width:"100%"}}>
-        {(splits || DEFAULT_SPLITS).map(d => (
-          <button 
-            key={d.key} 
-            onClick={() => { setSel(d.key); setDaySug(""); setOpen(null); setAdding(false); }} 
+        {(splits || DEFAULT_SPLITS).map(d => {
+          // La letra sola no decía nada: había que pulsar cada pestaña para
+          // descubrir qué se entrena. Ahora lleva el grupo muscular debajo.
+          const resumen = (d.name || "").split(/\s*\+\s*/)[0].trim();
+          const activo = sel === d.key;
+          return (
+          <button
+            key={d.key}
+            onClick={() => { setSel(d.key); setDaySug(""); setOpen(null); setAdding(false); }}
+            title={d.name}
             style={{
-              width:44, 
-              height:44, 
-              borderRadius:11, 
-              fontFamily:"'Bebas Neue'", 
-              fontSize:22, 
-              cursor:"pointer", 
-              border:`1px solid ${sel === d.key ? C.lime : C.line}`, 
-              background: sel === d.key ? "rgba(107,78,255,.14)" : C.panel, 
-              color: sel === d.key ? C.lime : C.muted
+              flex:"1 1 0",
+              minWidth:56,
+              maxWidth:88,
+              padding:"6px 4px",
+              borderRadius:11,
+              cursor:"pointer",
+              border:`1px solid ${activo ? (COLOR_SPLIT[d.key] || C.lime) : C.line}`,
+              background: activo ? `${COLOR_SPLIT[d.key] || C.lime}1a` : C.panel,
+              color: activo ? (COLOR_SPLIT[d.key] || C.lime) : C.muted,
+              display:"flex", flexDirection:"column", alignItems:"center", gap:1, lineHeight:1
             }}
           >
-            {d.key}
+            <span style={{fontFamily:"'Bebas Neue'", fontSize:20}}>{d.key}</span>
+            <span style={{fontSize:8.5, fontWeight:700, opacity:.9, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:"100%"}}>
+              {resumen}
+            </span>
           </button>
-        ))}
+          );
+        })}
         <div style={{marginLeft:"auto", display:"flex", gap:6}}>
           <button
             onClick={() => buildRoutinePDF(sel)}
@@ -15874,6 +15935,9 @@ function Registro({
   // Detalle diario de nutrición: plegado, con paginación
   const [detalleAbierto, setDetalleAbierto] = useState(false);
   const [detalleLimite, setDetalleLimite] = useState(10);
+  // Confirmación al borrar: el icono de papelera borraba al instante y sin
+  // deshacer, y las entradas de peso/composición son datos que no se recuperan.
+  const [borrarConfirm, setBorrarConfirm] = useState(null);
 
   // Cargar análisis guardado cuando cambia la fecha seleccionada
   const [muscInput, setMuscInput] = useState("");
@@ -17629,10 +17693,23 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                         </div>
                         <div style={{fontSize:12.5, lineHeight:1.4}}>{n.text}</div>
                       </div>
-                      <button onClick={() => del(n.id)} title="Borrar entrada"
-                        style={{background:"none", border:"none", cursor:"pointer", color:C.muted, flexShrink:0, padding:2}}>
-                        <Trash2 size={15}/>
-                      </button>
+                      {borrarConfirm === n.id ? (
+                        <div style={{display:"flex", gap:4, flexShrink:0, alignItems:"center"}}>
+                          <button onClick={() => { del(n.id); setBorrarConfirm(null); }}
+                            style={{background:C.rose, border:"none", borderRadius:7, cursor:"pointer", color:"#fff", fontSize:10, fontWeight:800, padding:"4px 8px"}}>
+                            Borrar
+                          </button>
+                          <button onClick={() => setBorrarConfirm(null)}
+                            style={{background:"none", border:`1px solid ${C.line}`, borderRadius:7, cursor:"pointer", color:C.muted, fontSize:10, fontWeight:700, padding:"4px 8px"}}>
+                            No
+                          </button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setBorrarConfirm(n.id)} title="Borrar entrada"
+                          style={{background:"none", border:"none", cursor:"pointer", color:C.muted, flexShrink:0, padding:2}}>
+                          <Trash2 size={15}/>
+                        </button>
+                      )}
                     </div>
                   );
                 })}
