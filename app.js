@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W42";
+const APP_VERSION = "v2026.06.23-W43";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -11490,19 +11490,22 @@ th.spark{text-align:center}
           <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 10, lineHeight: 1.4 }}>
             Todos tus ejercicios con su PR de peso, 1RM estimado y la carga recomendada para la próxima sesión.
           </div>
+          {/* El buscador iba en la misma fila que los dos botones y quedaba
+              tan estrecho que no cabía ni el texto de ayuda. Ahora ocupa su
+              propia línea y los botones van debajo. */}
+          <input
+            value={q} onChange={e => setQ(e.target.value)}
+            placeholder="Buscar ejercicio o músculo…"
+            style={{ width: "100%", boxSizing: "border-box", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: "9px 12px", color: C.ink, fontSize: 13, outline: "none", marginBottom: 8 }}
+          />
           <div style={{ display: "flex", gap: 8 }}>
-            <input
-              value={q} onChange={e => setQ(e.target.value)}
-              placeholder="Buscar ejercicio o músculo…"
-              style={{ flex: 1, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 12px", color: C.ink, fontSize: 13, outline: "none" }}
-            />
             <button className="btn-active-scale" onClick={handleCopy} disabled={records.length === 0}
-              style={{ background: copied ? C.lime : C.panel, border: `1px solid ${copied ? C.lime : C.line}`, borderRadius: 10, padding: "0 12px", color: copied ? "#0c0e0b" : C.ink, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
-              {copied ? <><Check size={14} /> Copiado</> : <><Copy size={14} /> Copiar</>}
+              style={{ flex: 1, background: copied ? C.lime : C.panel, border: `1px solid ${copied ? C.lime : C.line}`, borderRadius: 10, padding: "8px 12px", color: copied ? "#0c0e0b" : C.ink, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              {copied ? <><Check size={14} /> Copiado</> : <><Copy size={14} /> Copiar texto</>}
             </button>
             <button className="btn-active-scale" onClick={handlePDF} disabled={records.length === 0}
-              style={{ background: C.lime, border: `1px solid ${C.lime}`, borderRadius: 10, padding: "0 12px", color: "#0c0e0b", fontSize: 12, fontWeight: 800, display: "flex", alignItems: "center", gap: 6 }}>
-              <FileText size={14} /> PDF
+              style={{ flex: 1, background: C.lime, border: `1px solid ${C.lime}`, borderRadius: 10, padding: "8px 12px", color: "#0c0e0b", fontSize: 12, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <FileText size={14} /> Exportar PDF
             </button>
           </div>
         </div>
