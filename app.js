@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.06.23-W50";
+const APP_VERSION = "v2026.07.29-W51";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -21,7 +21,9 @@ const DEFAULT_PRESETS = {
 
 // Color por split para el calendario: permite distinguir de un vistazo qué se
 // entrenó cada día en vez de ver siempre el mismo punto verde.
-const COLOR_SPLIT = { A: "#cdff4a", B: "#4ad6ff", C: "#ffb13d", D: "#ff6b8a", E: "#a78bfa" };
+// Hex literal a propósito: se le concatena el alfa ("...1a") para los fondos,
+// y eso no funciona con una variable CSS.
+const COLOR_SPLIT = { A: "#4d7c0f", B: "#0e7490", C: "#b45309", D: "#be123c", E: "#6d28d9" };
 
 const DEFAULT_SPLITS = [
   { key:"A", name:"Pecho + Bíceps", fuel:"Carbo medio", ex:["Press banca","Press inclinado mancuerna","Aperturas","Curl inclinado","Curl martillo","Curl prono barra"] },
@@ -218,8 +220,21 @@ const C = {
   cyan: "var(--accent-cyan)",
   amber: "var(--accent-amber)",
   blue: "var(--accent-blue)",
-  rose: "var(--accent-red)"
+  rose: "var(--accent-red)",
+  // Texto que va ENCIMA de un relleno de acento. En el tema oscuro era el
+  // negro del fondo; en claro los acentos son oscuros y encima va blanco.
+  onAccent: "var(--on-accent)",
+  // Fondo de las pistas de barras y anillos
+  track: "var(--track)",
+  overlay: "var(--overlay)"
 };
+
+// Mezcla un color con transparencia. Los tokens de C son variables CSS, así que
+// el truco de pegarle el alfa en hex ("`${alfa(C.lime, 27)}`") producía literalmente
+// "var(--accent-primary)44": CSS inválido, y el borde o el fondo no se pintaban.
+// Sobre fondo negro no se notaba; sobre blanco sí. color-mix sí sabe mezclar
+// una variable, y funciona igual si lo que se le pasa es un hex de verdad.
+const alfa = (color, pct) => `color-mix(in srgb, ${color} ${pct}%, transparent)`;
 
 const START_W = 93.9, GOAL_W = 85;
 const todayKey = () => "log-" + getLocalDateStr(new Date());
@@ -586,13 +601,15 @@ function compressImageToDataUrl(file, maxW = 800, quality = 0.82) {
  * Un cartel estático durante 40 s parece que la app se colgó y el usuario
  * cierra la ventana; ver el tiempo correr evita esa falsa alarma.
  */
-function htmlEsperaIA(titulo, subtitulo, color = "#cdff4a") {
+// La ventana de espera se abre aparte; C.lime aquí sería una variable CSS que
+// esa ventana no tiene definida, así que va el verde literal.
+function htmlEsperaIA(titulo, subtitulo, color = "#4d7c0f") {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="background:#0c0e0b;color:${color};font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center">
+<body style="background:#f5f7f0;color:${color};font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center">
   <div>
-    <div style="width:38px;height:38px;border:3px solid rgba(255,255,255,.12);border-top-color:${color};border-radius:50%;animation:g 1s linear infinite;margin:0 auto 16px"></div>
+    <div style="width:38px;height:38px;border:3px solid rgba(27,31,22,.12);border-top-color:${color};border-radius:50%;animation:g 1s linear infinite;margin:0 auto 16px"></div>
     <p style="font-size:19px;margin:0 0 6px">${titulo}</p>
-    <p style="font-size:13px;color:#9aa088;margin:0">${subtitulo}</p>
+    <p style="font-size:13px;color:#5f6b57;margin:0">${subtitulo}</p>
     <p id="t" style="font-size:12px;color:#6b7280;margin-top:12px">0 s</p>
     <p id="avi" style="font-size:11.5px;color:#6b7280;margin-top:6px;max-width:260px"></p>
   </div>
@@ -904,7 +921,7 @@ function Chart({entries, color=C.lime, height=128}){
           <button 
             onClick={() => setMode("peso")} 
             style={{
-              background: mode === "peso" ? "rgba(205,255,74,0.12)" : "transparent",
+              background: mode === "peso" ? "rgba(77,124,15,0.16)" : "transparent",
               border: `1px solid ${mode === "peso" ? C.lime : C.line}`,
               color: mode === "peso" ? C.lime : C.muted,
               fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 4, cursor: "pointer"
@@ -915,7 +932,7 @@ function Chart({entries, color=C.lime, height=128}){
           <button 
             onClick={() => setMode("esfuerzo")} 
             style={{
-              background: mode === "esfuerzo" ? "rgba(205,255,74,0.12)" : "transparent",
+              background: mode === "esfuerzo" ? "rgba(77,124,15,0.16)" : "transparent",
               border: `1px solid ${mode === "esfuerzo" ? C.lime : C.line}`,
               color: mode === "esfuerzo" ? C.lime : C.muted,
               fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 4, cursor: "pointer"
@@ -5802,14 +5819,14 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
                   <button
                     onClick={() => setShowFocusMode(true)}
                     className="btn-active-scale"
-                    style={{background:"rgba(74,214,255,0.08)", border:`1px solid rgba(74,214,255,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.cyan, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
+                    style={{background:"rgba(14,116,144,0.12)", border:`1px solid rgba(14,116,144,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.cyan, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
                   >
                     <Clock size={13}/><span>Foco</span>
                   </button>
                   <button
                     onClick={() => setShowTrainerAgent(true)}
                     className="btn-active-scale"
-                    style={{background:"rgba(205,255,74,0.08)", border:`1px solid rgba(205,255,74,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.lime, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
+                    style={{background:"rgba(77,124,15,0.12)", border:`1px solid rgba(77,124,15,0.25)`, borderRadius:10, padding:"6px 10px", display:"flex", alignItems:"center", gap:5, color:C.lime, fontWeight:800, fontSize:11.5, cursor:"pointer"}}
                   >
                     <Sparkles size={13}/><span>Agente</span>
                   </button>
@@ -5837,7 +5854,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
                 return (
                   <div style={{display:"flex", gap:6, marginTop:8}}>
                     {[["Empuje",push,C.cyan],["Jalón",pull,C.lime],["Piernas",legs,C.amber]].map(([lbl,val,col]) => (
-                      <div key={lbl} style={{flex:1, background:C.panel, border:`1px solid ${col}33`, borderRadius:8, padding:"5px 8px", textAlign:"center"}}>
+                      <div key={lbl} style={{flex:1, background:C.panel, border:`1px solid ${alfa(col, 20)}`, borderRadius:8, padding:"5px 8px", textAlign:"center"}}>
                         <div style={{fontSize:9, fontWeight:700, color:C.muted, textTransform:"uppercase"}}>{lbl}</div>
                         <div style={{fontSize:16, fontWeight:900, color:col, lineHeight:1.2}}>{val}</div>
                         <div style={{fontSize:8, color:C.muted}}>series</div>
@@ -6134,7 +6151,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
       )}
 
       {backupToast && (
-        <div style={{position:"fixed", bottom:90, left:"50%", transform:"translateX(-50%)", background:"rgba(21,23,15,0.96)", border:`1px solid ${C.lime}44`, borderRadius:12, padding:"10px 16px", zIndex:9999, display:"flex", alignItems:"center", gap:8, boxShadow:"0 4px 20px rgba(0,0,0,0.4)"}}>
+        <div style={{position:"fixed", bottom:90, left:"50%", transform:"translateX(-50%)", background:"rgba(255,255,255,0.96)", border:`1px solid ${alfa(C.lime, 27)}`, borderRadius:12, padding:"10px 16px", zIndex:9999, display:"flex", alignItems:"center", gap:8, boxShadow:"0 4px 20px rgba(24,28,19,0.4)"}}>
           <span style={{fontSize:14}}>🔒</span>
           <span style={{fontSize:12.5, color:C.lime, fontWeight:700}}>Copia automática guardada</span>
         </div>
@@ -6149,11 +6166,11 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
           transform: "translateX(-50%)",
           width: "calc(100vw - 24px)",
           maxWidth: 360,
-          background: "rgba(21, 23, 15, 0.98)",
+          background: "rgba(255,255,255,0.98)",
           border: `2px solid ${C.lime}`,
           borderRadius: 16,
           padding: 16,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.5), 0 0 20px rgba(205,255,74,0.15)",
+          boxShadow: "0 10px 30px rgba(24,28,19,0.5), 0 0 20px rgba(77,124,15,0.19)",
           zIndex: 9999,
           display: "flex",
           flexDirection: "column",
@@ -6184,13 +6201,13 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
       {showNutritionModal && (
         <div style={{
           position: "fixed", top: 0, left: 0, width: "100%", height: "100%",
-          background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center",
+          background: "rgba(24,28,19,0.75)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center",
           justifyContent: "center", zIndex: 9999, padding: 16
         }}>
           <div style={{
             background: C.panel, border: `1px solid ${C.line}`, borderRadius: 16,
             padding: 20, width: "100%", maxWidth: 420, display: "flex",
-            flexDirection: "column", gap: 14, boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
+            flexDirection: "column", gap: 14, boxShadow: "0 10px 30px rgba(24,28,19,0.5)",
             maxHeight: "calc(100vh - 32px)", overflowY: "auto"
           }}>
             {/* Header */}
@@ -6213,7 +6230,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
                 style={{
                   flex:1, padding:"6px 12px", borderRadius:8, border:"none",
                   background: modalMode === "manual" ? C.lime : "transparent",
-                  color: modalMode === "manual" ? "#0c0e0b" : C.muted,
+                  color: modalMode === "manual" ? C.onAccent : C.muted,
                   fontSize:12, fontWeight:800, cursor:"pointer"
                 }}
               >
@@ -6224,7 +6241,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
                 style={{
                   flex:1, padding:"6px 12px", borderRadius:8, border:"none",
                   background: modalMode === "ai" ? C.lime : "transparent",
-                  color: modalMode === "ai" ? "#0c0e0b" : C.muted,
+                  color: modalMode === "ai" ? C.onAccent : C.muted,
                   fontSize:12, fontWeight:800, cursor:"pointer",
                   display:"flex", alignItems:"center", justifyContent:"center", gap:4
                 }}
@@ -6319,7 +6336,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
                   <button
                     onClick={handleQueryAiNutrition}
                     disabled={modalAiBusy || !modalAiPrompt.trim()}
-                    style={{padding:"0 12px", background: modalAiBusy ? C.panel2 : C.lime, color: modalAiBusy ? C.muted : "#0c0e0b", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center"}}
+                    style={{padding:"0 12px", background: modalAiBusy ? C.panel2 : C.lime, color: modalAiBusy ? C.muted : C.onAccent, fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center"}}
                   >
                     {modalAiBusy ? <Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/> : <Send size={16}/>}
                   </button>
@@ -6332,7 +6349,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
                 )}
 
                 {modalAiReasoning && (
-                  <div style={{background:"rgba(74,214,255,.05)", border:`1px solid ${C.cyan}`, borderRadius:10, padding:10, fontSize:12, color:C.ink, marginTop:4}}>
+                  <div style={{background:"rgba(14,116,144,0.09)", border:`1px solid ${C.cyan}`, borderRadius:10, padding:10, fontSize:12, color:C.ink, marginTop:4}}>
                     <div style={{fontWeight:800, color:C.cyan, marginBottom:4}}>Propuesta de la IA:</div>
                     {modalAiReasoning}
                   </div>
@@ -6373,7 +6390,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
                   updateAllMacrosAndAdjustMeals(modalVals.kcal, modalVals.p, modalVals.c, modalVals.f);
                   setShowNutritionModal(false);
                 }}
-                style={{flex:1, padding:"10px", background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+                style={{flex:1, padding:"10px", background:C.lime, color:C.onAccent, border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
               >
                 Guardar y Aplicar
               </button>
@@ -6424,7 +6441,7 @@ function MarkdownText({ text, style = {} }) {
       if (p.startsWith('*') && p.endsWith('*') && p.length > 2 && !p.startsWith('**'))
         return <span key={i} style={{ color: C.cyan }}>{p.slice(1, -1)}</span>;
       if (p.startsWith('`') && p.endsWith('`'))
-        return <code key={i} style={{ background: 'rgba(255,255,255,0.09)', borderRadius: 4, padding: '1px 5px', fontSize: '0.88em' }}>{p.slice(1, -1)}</code>;
+        return <code key={i} style={{ background: 'rgba(27,31,22,0.13)', borderRadius: 4, padding: '1px 5px', fontSize: '0.88em' }}>{p.slice(1, -1)}</code>;
       return p;
     });
   };
@@ -6526,7 +6543,7 @@ function AIPanel({title, busy, text, color=C.lime, onClose}){
   if(!busy && !text) return null;
   return (
     <div className="pop" style={{
-      background:"rgba(107,78,255,.05)", 
+      background:"rgba(91,33,182,0.09)", 
       border:`1px solid ${C.line}`, 
       borderLeft:`3px solid ${color}`, 
       borderRadius:12, 
@@ -6571,7 +6588,7 @@ function AIPanel({title, busy, text, color=C.lime, onClose}){
           <Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/>pensando…
         </div>
       ) : (
-        <MarkdownText text={text} style={{ color: "#dde0cf" }}/>
+        <MarkdownText text={text} style={{ color:"#70774d" }}/>
       )}
     </div>
   );
@@ -6704,18 +6721,19 @@ function Onboarding({ setView }) {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          color: "#0c0e0b",
+          color: C.onAccent,
           marginBottom: 16,
           position: "relative",
-          boxShadow: "0 8px 16px rgba(92, 79, 223, 0.2)"
+          boxShadow: "0 8px 20px rgba(77, 124, 15, 0.28)"
         }}>
           <Flame size={48} strokeWidth={2}/>
           <div style={{
             position: "absolute",
             bottom: -6,
-            background: "var(--panel-bg-sec)",
+            background: "var(--panel-bg)",
             border: "1px solid var(--line-color)",
             color: "var(--accent-primary)",
+            boxShadow: "0 1px 3px rgba(27,31,22,0.12)",
             fontSize: 9,
             fontWeight: 700,
             padding: "2px 8px",
@@ -6797,7 +6815,7 @@ function Onboarding({ setView }) {
               height: 44,
               borderRadius: "var(--radius-md)",
               background: "var(--accent-primary)",
-              color: "#0c0e0b",
+              color: C.onAccent,
               fontSize: 14,
               fontWeight: 600,
               display: "flex",
@@ -7129,7 +7147,7 @@ function AddFood({
               height: 56,
               borderRadius: "var(--radius-md)",
               background: "var(--accent-primary)",
-              color: "#0c0e0b",
+              color: C.onAccent,
               fontSize: 15,
               fontWeight: 600,
               display: "flex",
@@ -7154,10 +7172,10 @@ function AddFood({
           <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onPhotoUpload} style={{ display: "none" }}/>
         </div>
         {err && (
-          <div style={{ fontSize: 12, color: "var(--accent-red)", background:"rgba(244,63,94,0.08)", border:"1px solid rgba(244,63,94,0.2)", borderRadius:8, padding:"10px 12px" }}>
+          <div style={{ fontSize: 12, color: "var(--accent-red)", background:"rgba(190,18,60,0.12)", border:"1px solid rgba(190,18,60,0.2)", borderRadius:8, padding:"10px 12px" }}>
             {err}
             <div style={{ marginTop:8 }}>
-              <button onClick={handleAddCustomItem} style={{ background:"rgba(205,255,74,0.1)", border:"1px solid rgba(205,255,74,0.3)", borderRadius:8, padding:"7px 14px", color:"var(--accent-primary)", fontWeight:700, fontSize:12, cursor:"pointer" }}>
+              <button onClick={handleAddCustomItem} style={{ background:"rgba(77,124,15,0.14)", border:"1px solid rgba(77,124,15,0.3)", borderRadius:8, padding:"7px 14px", color:"var(--accent-primary)", fontWeight:700, fontSize:12, cursor:"pointer" }}>
                 + Añadir manualmente sin IA
               </button>
             </div>
@@ -7174,7 +7192,7 @@ function AddFood({
             <div style={{ textAlign:"center", padding:"20px 0", color:"var(--text-muted)", fontSize:13 }}>
               <div style={{ marginBottom:10 }}>Describe tu comida arriba y toca "Analizar con IA",</div>
               <div style={{ marginBottom:16 }}>o agrega un alimento manualmente:</div>
-              <button onClick={handleAddCustomItem} style={{ background:"rgba(205,255,74,0.1)", border:"1px solid rgba(205,255,74,0.3)", borderRadius:10, padding:"10px 20px", color:"var(--accent-primary)", fontWeight:700, fontSize:13, cursor:"pointer" }}>
+              <button onClick={handleAddCustomItem} style={{ background:"rgba(77,124,15,0.14)", border:"1px solid rgba(77,124,15,0.3)", borderRadius:10, padding:"10px 20px", color:"var(--accent-primary)", fontWeight:700, fontSize:13, cursor:"pointer" }}>
                 + Añadir alimento manualmente
               </button>
             </div>
@@ -7233,7 +7251,7 @@ function AddFood({
             </div>
             <div style={{ display: "flex", justifyContent: "space-around" }}>
               <div style={{ textAlign: "center" }}>
-                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "var(--accent-primary)", color: "#0c0e0b", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
+                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "var(--accent-primary)", color: C.onAccent, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 6px" }}>
                   <Flame size={16}/>
                 </div>
                 <div style={{ fontSize: 10, color: "var(--text-muted)" }}>KCAL</div>
@@ -7272,7 +7290,7 @@ function AddFood({
             style={{
               height: 56,
               background: "var(--text-ink)",
-              color: "#0c0e0b",
+              color: C.onAccent,
               fontSize: 16,
               fontWeight: 700,
               borderRadius: "var(--radius-md)",
@@ -7411,7 +7429,7 @@ function EditEntry({
           <button onClick={() => setView("addfood")} className="btn-active-scale" style={{ flex: 1, height: 56, border: "1px solid var(--line-color)", background: "var(--bg-color)", color: "var(--text-ink)", fontSize: 15, fontWeight: 600, borderRadius: "var(--radius-md)", cursor: "pointer" }}>
             Cancelar
           </button>
-          <button onClick={handleSave} className="btn-active-scale" style={{ flex: 1, height: 56, background: "var(--accent-primary)", color: "#0c0e0b", fontSize: 15, fontWeight: 600, borderRadius: "var(--radius-md)", border: "none", cursor: "pointer" }}>
+          <button onClick={handleSave} className="btn-active-scale" style={{ flex: 1, height: 56, background: "var(--accent-primary)", color: C.onAccent, fontSize: 15, fontWeight: 600, borderRadius: "var(--radius-md)", border: "none", cursor: "pointer" }}>
             Guardar cambios
           </button>
         </div>
@@ -7617,11 +7635,11 @@ const PlantaHidratacion = React.memo(function PlantaHidratacion({ water, waterGo
           </linearGradient>
           <linearGradient id={`${uid}-leaf`} x1="0" x2="1" y1="0" y2="1">
             <stop offset="0%" stopColor={lerpColor(leafColor,'#ffffff',0.12)}/>
-            <stop offset="100%" stopColor={lerpColor(leafColor,'#000000',0.08)}/>
+            <stop offset="100%" stopColor={lerpColor(leafColor,'#1b1f16',0.08)}/>
           </linearGradient>
           <linearGradient id={`${uid}-water`} x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="#4ad6ff" stopOpacity="0.85"/>
-            <stop offset="100%" stopColor="#4ad6ff" stopOpacity="0.30"/>
+            <stop offset="0%" stopColor={C.cyan} stopOpacity="0.85"/>
+            <stop offset="100%" stopColor={C.cyan} stopOpacity="0.30"/>
           </linearGradient>
           <filter id={`${uid}-glow`}>
             <feGaussianBlur stdDeviation="1.2" result="blur"/>
@@ -7637,7 +7655,7 @@ const PlantaHidratacion = React.memo(function PlantaHidratacion({ water, waterGo
         <rect x="26" y="154" width="68" height="11" rx="5.5" ry="5.5"
           fill={`url(#${uid}-rim)`}/>
         {/* Highlight stripe on rim */}
-        <rect x="30" y="155" width="30" height="3" rx="1.5" fill="rgba(255,255,255,0.12)"/>
+        <rect x="30" y="155" width="30" height="3" rx="1.5" fill="rgba(27,31,22,0.16)"/>
         {/* Soil */}
         <ellipse cx="60" cy="158" rx="29" ry="7" fill={`url(#${uid}-soil)`}/>
         {/* Soil pebbles */}
@@ -7648,7 +7666,7 @@ const PlantaHidratacion = React.memo(function PlantaHidratacion({ water, waterGo
         <rect x="84" y={188 - 26*pct} width="5" height={26*pct} rx="2.5"
           fill={`url(#${uid}-water)`} style={{transition:ts}}/>
         <rect x="84" y="162" width="5" height="26" rx="2.5" fill="none"
-          stroke="rgba(74,214,255,0.3)" strokeWidth="0.8"/>
+          stroke="rgba(14,116,144,0.3)" strokeWidth="0.8"/>
 
         {/* ── Main stem ── */}
         <path
@@ -7721,11 +7739,11 @@ const PlantaHidratacion = React.memo(function PlantaHidratacion({ water, waterGo
         {showDew && (
           <g style={{transition:'opacity 0.7s'}} opacity="1">
             <ellipse cx={27-droop*0.4} cy={118} rx="2.8" ry="3.8"
-              fill="#4ad6ff" opacity="0.6" filter={`url(#${uid}-glow)`}/>
+              fill={C.cyan} opacity="0.6" filter={`url(#${uid}-glow)`}/>
             <ellipse cx={83+droop*0.45} cy={91} rx="2.2" ry="3.2"
-              fill="#4ad6ff" opacity="0.5" filter={`url(#${uid}-glow)`}/>
+              fill={C.cyan} opacity="0.5" filter={`url(#${uid}-glow)`}/>
             <ellipse cx={35-droop*0.3} cy={67} rx="2" ry="2.8"
-              fill="#4ad6ff" opacity="0.45" filter={`url(#${uid}-glow)`}/>
+              fill={C.cyan} opacity="0.45" filter={`url(#${uid}-glow)`}/>
           </g>
         )}
 
@@ -7747,7 +7765,7 @@ const PlantaHidratacion = React.memo(function PlantaHidratacion({ water, waterGo
               fill={pct > 0.35 ? lerpColor('#5a6a10','#38c008',Math.min(1,(pct-0.35)/0.65)) : '#4a3a18'}
               style={{transition:'fill 0.85s'}}/>
             <ellipse cx={0} cy={-7} rx="2" ry="3"
-              fill="rgba(255,255,255,0.10)"/>
+              fill="rgba(27,31,22,0.14)"/>
           </g>
         )}
       </svg>
@@ -8227,7 +8245,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
     fontWeight:700,
     cursor:"pointer",
     border:`1px solid ${a ? C.lime : C.line}`,
-    background: a ? "rgba(107,78,255,.12)" : C.panel,
+    background: a ? "rgba(91,33,182,0.16)" : C.panel,
     color: a ? C.lime : C.ink,
     display:"flex",
     alignItems:"center",
@@ -8345,7 +8363,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
             <div style={{display:"flex", gap:5}}>
               {opciones.map(v => (
                 <button key={v} className="btn-active-scale" onClick={() => onQuickWeight(v)}
-                  style={{flex:1, background: parseFloat(yaHoy) === v ? "rgba(74,214,255,0.14)" : C.panel2,
+                  style={{flex:1, background: parseFloat(yaHoy) === v ? "rgba(14,116,144,0.18)" : C.panel2,
                     border:`1px solid ${parseFloat(yaHoy) === v ? C.cyan : C.line}`, borderRadius:9, padding:"8px 2px",
                     color: parseFloat(yaHoy) === v ? C.cyan : C.ink, fontSize:12.5, fontWeight:800}}>
                   {v}
@@ -8359,8 +8377,8 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
         );
       })()}
 
-      <div style={{display:"flex", alignItems:"center", gap:10, background:C.panel, border:`1.5px solid ${readiness.color}33`, borderRadius:14, padding:"10px 14px", marginBottom:12, animation:"pop 0.3s ease"}}>
-        <div style={{width:44, height:44, borderRadius:"50%", background:`${readiness.color}22`, border:`2px solid ${readiness.color}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0}}>
+      <div style={{display:"flex", alignItems:"center", gap:10, background:C.panel, border:`1.5px solid ${alfa(readiness.color, 20)}`, borderRadius:14, padding:"10px 14px", marginBottom:12, animation:"pop 0.3s ease"}}>
+        <div style={{width:44, height:44, borderRadius:"50%", background:`${alfa(readiness.color, 13)}`, border:`2px solid ${readiness.color}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0}}>
           {readiness.mode === "recovery"
             ? <span style={{fontSize:22, lineHeight:1}}>✓</span>
             : <span style={{fontSize:16, fontWeight:900, color:readiness.color}}>{readiness.score}</span>
@@ -8464,7 +8482,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
         if (days < 0) return null;
         return (
           <div style={{
-            background: `linear-gradient(135deg, ${C.rose}11, ${C.rose}22)`,
+            background: `linear-gradient(135deg, ${alfa(C.rose, 7)}, ${alfa(C.rose, 13)})`,
             border: `1.5px solid ${C.rose}`,
             borderRadius: 14,
             padding: "12px 16px",
@@ -8511,7 +8529,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
             width: 40,
             height: 40,
             borderRadius: "50%",
-            background: "rgba(92, 79, 223, 0.1)",
+            background: "rgba(77, 124, 15, 0.10)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -8534,7 +8552,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
 
       {macroAdjustSuggestion && (
         <div style={{
-          background: `linear-gradient(135deg, ${C.cyan}11, ${C.cyan}22)`,
+          background: `linear-gradient(135deg, ${alfa(C.cyan, 7)}, ${alfa(C.cyan, 13)})`,
           border: `1.5px solid ${C.cyan}`,
           borderRadius: 14,
           padding: "12px 16px",
@@ -8755,7 +8773,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                 setExperiments(updated);
               }}
               style={{
-                background:"rgba(255,177,61,.12)",
+                background:"rgba(180,83,9,0.16)",
                 border:`1px solid ${C.amber}`,
                 color:C.amber,
                 fontSize:10.5,
@@ -8825,7 +8843,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
             <div style={{flex:1, display:"flex", flexDirection:"column", gap:7}}>
               {dayFuelTargets && dayFuelTargets.deltaCarbo !== 0 && (
                 <div title="Ciclado de carbohidratos según tu split: la media semanal se mantiene en tu objetivo"
-                  style={{display:"inline-flex", alignItems:"center", gap:5, alignSelf:"flex-start", background:`${fuelCol}14`, border:`1px solid ${fuelCol}44`, borderRadius:20, padding:"2px 9px", fontSize:10, fontWeight:800, color:fuelCol, marginBottom:1}}>
+                  style={{display:"inline-flex", alignItems:"center", gap:5, alignSelf:"flex-start", background:`${alfa(fuelCol, 8)}`, border:`1px solid ${alfa(fuelCol, 27)}`, borderRadius:20, padding:"2px 9px", fontSize:10, fontWeight:800, color:fuelCol, marginBottom:1}}>
                   {dayFuelTargets.label}
                   <span style={{fontWeight:600, color:C.muted}}>
                     {dayFuelTargets.deltaCarbo > 0 ? "+" : ""}{dayFuelTargets.deltaCarbo} g carbo
@@ -8880,7 +8898,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
           className="ph"
           rows={3}
           placeholder="Describe lo que comiste (ej: Ensalada César con pollo a la parrilla y agua)..."
-          style={{width:"100%", resize:"none", background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"14px", color:C.ink, fontSize:13.5, outline:"none", boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}
+          style={{width:"100%", resize:"none", background:C.panel, border:`1px solid ${C.line}`, borderRadius:14, padding:"14px", color:C.ink, fontSize:13.5, outline:"none", boxShadow:"0 1px 4px rgba(24,28,19,0.08)"}}
         />
         <div style={{display:"flex", gap:10, marginTop:10}}>
           <button
@@ -8896,14 +8914,14 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
               border:"none",
               cursor:"pointer",
               background: "var(--accent-primary)",
-              color: "#0c0e0b",
+              color: C.onAccent,
               fontWeight:800,
               fontSize:14,
               display:"flex",
               alignItems:"center",
               justifyContent:"center",
               gap:8,
-              boxShadow: "0 4px 14px rgba(92, 79, 223, 0.2)"
+              boxShadow: "0 4px 14px rgba(77, 124, 15, 0.22)"
             }}
           >
             <Sparkles size={15}/>Añadir con IA
@@ -8914,7 +8932,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
               setView("addfood");
             }}
             className="btn-active-scale"
-            style={{width:54, height:56, borderRadius:14, border:`1px solid ${C.line}`, background:C.panel, color:C.muted, cursor:"pointer", display:"grid", placeItems:"center", boxShadow:"0 1px 3px rgba(0,0,0,0.05)"}}
+            style={{width:54, height:56, borderRadius:14, border:`1px solid ${C.line}`, background:C.panel, color:C.muted, cursor:"pointer", display:"grid", placeItems:"center", boxShadow:"0 1px 3px rgba(24,28,19,0.09)"}}
           >
             <Camera size={20}/>
           </button>
@@ -8963,7 +8981,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                 <div style={{ width: "100%", height: 100, position: "relative", overflow: "hidden" }}>
                   <img src={suggestionImg} alt={s.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="lazy" onError={e => { e.currentTarget.style.display = "none"; }} />
                   {s._custom && (
-                    <div style={{position:"absolute", top:8, left:8, background:C.lime, color:"#0c0e0b", fontSize:9, fontWeight:900, padding:"2px 6px", borderRadius:99, letterSpacing:".06em"}}>
+                    <div style={{position:"absolute", top:8, left:8, background:C.lime, color:C.onAccent, fontSize:9, fontWeight:900, padding:"2px 6px", borderRadius:99, letterSpacing:".06em"}}>
                       TUYA
                     </div>
                   )}
@@ -8971,7 +8989,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                     position: "absolute",
                     top: 8,
                     right: 8,
-                    background: "rgba(255,255,255,0.9)",
+                    background: "rgba(27,31,22,0.9)",
                     padding: "2px 8px",
                     borderRadius: "var(--radius-pill)",
                     fontSize: 10,
@@ -9025,7 +9043,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
       {showAllSuggestions && (
         <div style={{
           position:"fixed", top:0, left:0, right:0, bottom:0,
-          background:"rgba(0,0,0,0.65)", backdropFilter:"blur(4px)",
+          background:"rgba(24,28,19,0.65)", backdropFilter:"blur(4px)",
           display:"flex", alignItems:"flex-end", justifyContent:"center", zIndex:9999
         }} onClick={() => { setShowAllSuggestions(false); setSuggForm(null); }}>
           <div className="pop" style={{
@@ -9073,7 +9091,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                     </div>
                   )}
                   {suggForm.data.img && !suggForm.aiPhotoLoading && (
-                    <div style={{position:"absolute", bottom:8, right:8, background:"rgba(0,0,0,0.65)", color:C.ink, fontSize:10.5, fontWeight:700, padding:"4px 10px", borderRadius:99, display:"flex", alignItems:"center", gap:4}}>
+                    <div style={{position:"absolute", bottom:8, right:8, background:"rgba(24,28,19,0.65)", color:C.ink, fontSize:10.5, fontWeight:700, padding:"4px 10px", borderRadius:99, display:"flex", alignItems:"center", gap:4}}>
                       <Camera size={11}/> Cambiar foto
                     </div>
                   )}
@@ -9147,7 +9165,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                   {suggForm.idx !== "new" && (
                     <button
                       onClick={() => deleteSuggestion(suggForm.idx)}
-                      style={{padding:"12px 14px", background:"rgba(255,107,138,0.12)", color:C.rose, border:`1px solid ${C.rose}44`, borderRadius:12, fontSize:13, fontWeight:800, cursor:"pointer"}}
+                      style={{padding:"12px 14px", background:"rgba(190,18,60,0.16)", color:C.rose, border:`1px solid ${alfa(C.rose, 27)}`, borderRadius:12, fontSize:13, fontWeight:800, cursor:"pointer"}}
                     >
                       <Trash2 size={15}/>
                     </button>
@@ -9161,7 +9179,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                   <button
                     onClick={saveSuggForm}
                     disabled={!suggForm.data.name.trim()}
-                    style={{flex:1, padding:"12px", background: suggForm.data.name.trim() ? C.lime : C.panel2, color: suggForm.data.name.trim() ? "#0c0e0b" : C.muted, border:"none", borderRadius:12, fontSize:13, fontWeight:800, cursor:"pointer"}}
+                    style={{flex:1, padding:"12px", background: suggForm.data.name.trim() ? C.lime : C.panel2, color: suggForm.data.name.trim() ? C.onAccent : C.muted, border:"none", borderRadius:12, fontSize:13, fontWeight:800, cursor:"pointer"}}
                   >
                     Guardar
                   </button>
@@ -9174,7 +9192,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                   className="btn-active-scale"
                   style={{
                     width:"100%", padding:"13px", borderRadius:14, border:`1px dashed ${C.lime}`,
-                    background:"rgba(205,255,74,0.06)", color:C.lime, fontWeight:800, fontSize:13.5,
+                    background:"rgba(77,124,15,0.10)", color:C.lime, fontWeight:800, fontSize:13.5,
                     cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8
                   }}
                 >
@@ -9222,7 +9240,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                       }}
                       className="btn-active-scale"
                       title="Registrar en el día"
-                      style={{width:34, height:34, borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
+                      style={{width:34, height:34, borderRadius:9, border:"none", background:C.lime, color:C.onAccent, cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
                     >
                       <Plus size={16}/>
                     </button>
@@ -9256,7 +9274,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                       }}
                       className="btn-active-scale"
                       title="Registrar en el día"
-                      style={{width:34, height:34, borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
+                      style={{width:34, height:34, borderRadius:9, border:"none", background:C.lime, color:C.onAccent, cursor:"pointer", display:"grid", placeItems:"center", flexShrink:0}}
                     >
                       <Plus size={16}/>
                     </button>
@@ -9315,7 +9333,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                   </span>
                   <span style={{color:C.ink, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1}}>{m.resumen}</span>
                   {m.proteina >= 20 ? (
-                    <span style={{background:`${C.lime}22`, color:C.lime, fontSize:9.5, fontWeight:800, borderRadius:6, padding:"1px 5px", flexShrink:0}}>💪 {m.proteina}g P</span>
+                    <span style={{background:`${alfa(C.lime, 13)}`, color:C.lime, fontSize:9.5, fontWeight:800, borderRadius:6, padding:"1px 5px", flexShrink:0}}>💪 {m.proteina}g P</span>
                   ) : m.proteina > 0 ? (
                     <span style={{color:C.muted, fontSize:9.5, flexShrink:0}}>{m.proteina}g P</span>
                   ) : null}
@@ -9425,7 +9443,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
           />
           <button 
             onClick={addCustomSupplement}
-            style={{padding:"6px 12px", background:C.lime, color:"#0c0e0b", fontWeight:800, borderRadius:8, fontSize:11, cursor:"pointer"}}
+            style={{padding:"6px 12px", background:C.lime, color:C.onAccent, fontWeight:800, borderRadius:8, fontSize:11, cursor:"pointer"}}
           >
             Añadir
           </button>
@@ -9535,7 +9553,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
       {editFoodObj && (
         <div style={{
           position:"fixed", top:0, left:0, right:0, bottom:0,
-          background:"rgba(0,0,0,0.6)", backdropFilter:"blur(4px)",
+          background:"rgba(24,28,19,0.6)", backdropFilter:"blur(4px)",
           display:"grid", placeItems:"center", zIndex:9999, padding:20
         }} onClick={() => setEditFoodObj(null)}>
           <div style={{
@@ -9546,10 +9564,10 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
               <>
                 <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Opciones de Comida</div>
                 <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>{editFoodObj.e.resumen}</div>
-                <button onClick={() => setEditFoodObj({...editFoodObj, isEditing: true})} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
+                <button onClick={() => setEditFoodObj({...editFoodObj, isEditing: true})} style={{background:C.lime, color:C.onAccent, fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
                   ✏️ Editar Comida
                 </button>
-                <button onClick={() => { del(editFoodObj.e.id); setEditFoodObj(null); }} style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}>
+                <button onClick={() => { del(editFoodObj.e.id); setEditFoodObj(null); }} style={{background:"rgba(190,18,60,0.19)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}>
                   🗑️ Borrar Comida
                 </button>
               </>
@@ -9588,7 +9606,7 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
                     setLog(nextLog);
                   }
                   setEditFoodObj(null);
-                }} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
+                }} style={{background:C.lime, color:C.onAccent, fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
                   Guardar
                 </button>
               </>
@@ -9625,7 +9643,7 @@ function ShareButton({ text }) {
         display:"flex", alignItems:"center", gap:4,
         marginTop:4, marginLeft:2,
         background:"none", border:"none", cursor:"pointer",
-        color: copied ? "#cdff4a" : "rgba(154,160,136,0.6)",
+        color: copied ? C.lime : "rgba(95,107,87,0.6)",
         fontSize:11, fontWeight:700, padding:"2px 4px",
         transition:"color .2s"
       }}
@@ -9696,7 +9714,7 @@ function Coach({
           <button key={p.key} onClick={() => setCoachPersonality(p.key)} style={{
             flexShrink:0, padding:"5px 10px", borderRadius:20, fontSize:11, fontWeight:700, cursor:"pointer",
             border:`1px solid ${coachPersonality===p.key ? C.lime : C.line}`,
-            background: coachPersonality===p.key ? `${C.lime}22` : "transparent",
+            background: coachPersonality===p.key ? `${alfa(C.lime, 13)}` : "transparent",
             color: coachPersonality===p.key ? C.lime : C.muted
           }}>
             {p.label}
@@ -9759,7 +9777,7 @@ function Coach({
         <button
           onClick={() => sendCoachMessage('Analiza TODOS mis datos actuales en conjunto: composición corporal Fitdays (peso, grasa, SMM, Score), análisis de fotos de progreso, historial de entrenamiento y nutrición de las últimas semanas. Con base en todo esto: 1) ¿Son óptimos mis objetivos actuales de calorías y macros? Si no, actualízalos con UPDATE_TARGET. 2) ¿Mi split es el adecuado para mi objetivo actual? Si no, ajústalo con UPDATE_SPLITS. 3) Dame 3 acciones concretas prioritarias para las próximas 4 semanas.')}
           disabled={chatBusy}
-          style={{fontSize:11, padding:"6px 11px", borderRadius:8, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", opacity: chatBusy ? 0.5 : 1, fontWeight:800, width:"100%"}}
+          style={{fontSize:11, padding:"6px 11px", borderRadius:8, border:"none", background:C.lime, color:C.onAccent, cursor:"pointer", opacity: chatBusy ? 0.5 : 1, fontWeight:800, width:"100%"}}
         >
           ✦ Analizarlo todo y ajustar mis objetivos
         </button>
@@ -9794,7 +9812,7 @@ function Coach({
           placeholder="Pregúntale a tu coach…" 
           style={{flex:1, background:C.panel, border:`1px solid ${C.line}`, borderRadius:12, padding:"12px 14px", color:C.ink, fontSize:14, outline:"none"}}
         />
-        <button onClick={send} disabled={chatBusy} style={{width:48, borderRadius:12, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", display:"grid", placeItems:"center"}}>
+        <button onClick={send} disabled={chatBusy} style={{width:48, borderRadius:12, border:"none", background:C.lime, color:C.onAccent, cursor:"pointer", display:"grid", placeItems:"center"}}>
           <Send size={18}/>
         </button>
       </div>
@@ -9930,7 +9948,7 @@ function Perfil({
             height: 48,
             borderRadius: "50%",
             background: "var(--accent-primary-hover)",
-            color: "#000000",
+            color: C.onAccent,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -9959,7 +9977,7 @@ function Perfil({
           marginTop: 4
         }}>
           <div style={{
-            background: "rgba(255, 255, 255, 0.03)",
+            background: "rgba(27,31,22,0.07)",
             border: "1px solid var(--line-color)",
             borderRadius: "var(--radius-md)",
             padding: "8px 4px",
@@ -9971,7 +9989,7 @@ function Perfil({
             </span>
           </div>
           <div style={{
-            background: "rgba(255, 255, 255, 0.03)",
+            background: "rgba(27,31,22,0.07)",
             border: "1px solid var(--line-color)",
             borderRadius: "var(--radius-md)",
             padding: "8px 4px",
@@ -9983,7 +10001,7 @@ function Perfil({
             </span>
           </div>
           <div style={{
-            background: "rgba(255, 255, 255, 0.03)",
+            background: "rgba(27,31,22,0.07)",
             border: "1px solid var(--line-color)",
             borderRadius: "var(--radius-md)",
             padding: "8px 4px",
@@ -10025,7 +10043,7 @@ function Perfil({
                 fontWeight: 700,
                 cursor: "pointer",
                 border: `1px solid ${presetKey === k ? "var(--accent-rose)" : "var(--line-color)"}`,
-                background: presetKey === k ? "rgba(255,107,152,.12)" : "var(--panel-bg-sec)",
+                background: presetKey === k ? "rgba(190,18,60,0.16)" : "var(--panel-bg-sec)",
                 color: presetKey === k ? "var(--accent-rose)" : "var(--text-muted)"
               }}
             >
@@ -10070,7 +10088,7 @@ function Perfil({
               <button 
                 onClick={handleAddKey} 
                 className="btn-active-scale"
-                style={{ padding: "10px 16px", background: "var(--accent-lime)", color: "#000000", fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 12, cursor: "pointer" }}
+                style={{ padding: "10px 16px", background: "var(--accent-lime)", color: C.onAccent, fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 12, cursor: "pointer" }}
               >
                 Añadir
               </button>
@@ -10090,7 +10108,7 @@ function Perfil({
                   const dotColor = st === "ok" ? "#7fff6a" : st === "error" ? "var(--accent-rose)" : st === "testing" ? "var(--accent-amber)" : "var(--line-color)";
                   const dotLabel = st === "ok" ? "OK" : st === "error" ? "Error" : st === "testing" ? "..." : "—";
                   return (
-                    <div key={id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, background: "var(--panel-bg)", padding: "8px 10px", borderRadius: "var(--radius-sm)", border: `1px solid ${st === "ok" ? "#7fff6a44" : st === "error" ? "rgba(255,107,138,0.3)" : "var(--line-color)"}` }}>
+                    <div key={id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, background: "var(--panel-bg)", padding: "8px 10px", borderRadius: "var(--radius-sm)", border: `1px solid ${st === "ok" ? "#7fff6a44" : st === "error" ? "rgba(190,18,60,0.3)" : "var(--line-color)"}` }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                         <div style={{ width: 8, height: 8, borderRadius: "50%", background: dotColor, flexShrink: 0, boxShadow: st === "ok" ? "0 0 6px #7fff6a" : st === "error" ? "0 0 6px var(--accent-rose)" : "none", animation: st === "testing" ? "pulse 1s infinite" : "none" }} />
                         <span style={{ fontFamily: "monospace", color: "var(--text-ink)" }}>
@@ -10201,7 +10219,7 @@ function Perfil({
               borderRadius: "var(--radius-md)",
               fontSize: 11,
               fontWeight: 800,
-              background: cloudSync ? "rgba(74, 214, 255, 0.12)" : "var(--panel-bg-sec)",
+              background: cloudSync ? "rgba(14,116,144,0.16)" : "var(--panel-bg-sec)",
               border: `1px solid ${cloudSync ? "var(--accent-cyan)" : "var(--line-color)"}`,
               color: cloudSync ? "var(--accent-cyan)" : "var(--text-muted)",
               cursor: "pointer"
@@ -10238,7 +10256,7 @@ function Perfil({
                   }
                 }}
                 className="btn-active-scale"
-                style={{ padding: "8px 12px", background: "var(--accent-cyan)", color: "#000000", fontWeight: 800, borderRadius: "var(--radius-sm)", fontSize: 11, cursor: "pointer" }}
+                style={{ padding: "8px 12px", background: "var(--accent-cyan)", color: C.onAccent, fontWeight: 800, borderRadius: "var(--radius-sm)", fontSize: 11, cursor: "pointer" }}
               >
                 Crear
               </button>
@@ -10302,7 +10320,7 @@ function Perfil({
               <button 
                 onClick={processLinking} 
                 className="btn-active-scale"
-                style={{ padding: "8px 12px", background: "var(--accent-cyan)", color: "#000000", fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
+                style={{ padding: "8px 12px", background: "var(--accent-cyan)", color: C.onAccent, fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
               >
                 <Link2 size={12} /> Vincular
               </button>
@@ -10381,7 +10399,7 @@ function Perfil({
                         onClick={syncLocalToSupabase}
                         disabled={sbSyncing}
                         className="btn-active-scale"
-                        style={{ flex: 1, padding: "10px", background: "var(--accent-lime)", color: "#000000", fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                        style={{ flex: 1, padding: "10px", background: "var(--accent-lime)", color: C.onAccent, fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
                       >
                         {sbSyncing ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : "Sincronizar ahora"}
                       </button>
@@ -10416,7 +10434,7 @@ function Perfil({
                         onClick={() => handleSbLogin(sbEmail, sbPass)}
                         disabled={sbSyncing}
                         className="btn-active-scale"
-                        style={{ flex: 1, padding: "10px", background: "var(--accent-cyan)", color: "#000000", fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer" }}
+                        style={{ flex: 1, padding: "10px", background: "var(--accent-cyan)", color: C.onAccent, fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer" }}
                       >
                         {sbSyncing ? "Conectando..." : "Iniciar Sesión"}
                       </button>
@@ -10424,7 +10442,7 @@ function Perfil({
                         onClick={() => handleSbRegister(sbEmail, sbPass)}
                         disabled={sbSyncing}
                         className="btn-active-scale"
-                        style={{ flex: 1, padding: "10px", background: "var(--accent-lime)", color: "#000000", fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer" }}
+                        style={{ flex: 1, padding: "10px", background: "var(--accent-lime)", color: C.onAccent, fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer" }}
                       >
                         Registrarse
                       </button>
@@ -10556,13 +10574,15 @@ function MuscleHeatmap({ exlog, exercises, days, onChangeDays }) {
     return result;
   }, [exlog, exercises, days]);
 
-  const BASE = { fill: "rgba(38,50,30,0.92)", stroke: "rgba(70,92,54,0.55)" };
+  // Músculo sin trabajar: gris muy claro. Sobre blanco, el verde oscuro de
+  // antes convertía toda la silueta en una mancha negra.
+  const BASE = { fill: "#eceee6", stroke: "#c3c9b8" };
   const heat = (name) => {
     const spw = muscleWeekly[name] || 0;
     if (!spw) return BASE;
     const pct = Math.min(1, spw / 20);
-    const a = 0.28 + pct * 0.72;
-    return { fill: `rgba(255,86,108,${a.toFixed(2)})`, stroke: `rgba(255,150,160,${Math.min(1, a + 0.15).toFixed(2)})` };
+    const a = 0.34 + pct * 0.66;
+    return { fill: `rgba(214,55,55,${a.toFixed(2)})`, stroke: `rgba(150,28,28,${Math.min(1, a + 0.2).toFixed(2)})` };
   };
 
   // Dibuja un lado del cuerpo con paths anatómicos reales (función, no componente)
@@ -10578,7 +10598,7 @@ function MuscleHeatmap({ exlog, exercises, days, onChangeDays }) {
               strokeWidth="0.8" vectorEffect="non-scaling-stroke" strokeLinejoin="round"/>
           ));
         })}
-        <path d={BODY_OUTLINE[side]} fill="none" stroke="rgba(110,135,82,0.7)"
+        <path d={BODY_OUTLINE[side]} fill="none" stroke="#8d9a7e"
           strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinecap="round"/>
       </>
     );
@@ -10597,8 +10617,8 @@ function MuscleHeatmap({ exlog, exercises, days, onChangeDays }) {
           {[[7,"7 días"],[30,"30 días"],[999,"Todo"]].map(([d,lbl]) => (
             <button key={d} onClick={() => onChangeDays(d)} className="btn-active-scale"
               style={{padding:"3px 9px", borderRadius:20, fontSize:10, fontWeight:800, cursor:"pointer",
-                background: days===d ? "rgba(205,255,74,0.15)" : "var(--panel-bg)",
-                border: `1px solid ${days===d ? "rgba(205,255,74,0.5)" : "var(--line-color)"}`,
+                background: days===d ? "rgba(77,124,15,0.19)" : "var(--panel-bg)",
+                border: `1px solid ${days===d ? "rgba(77,124,15,0.5)" : "var(--line-color)"}`,
                 color: days===d ? "var(--accent-primary)" : "var(--text-muted)"}}>
               {lbl}
             </button>
@@ -10629,7 +10649,7 @@ function MuscleHeatmap({ exlog, exercises, days, onChangeDays }) {
 
           {/* Barra leyenda */}
           <div style={{padding:"8px 4px 0"}}>
-            <div style={{height:7, borderRadius:99, background:"linear-gradient(to right,rgba(38,50,30,0.92),rgba(255,86,108,0.5),rgba(255,86,108,1))"}}/>
+            <div style={{height:7, borderRadius:99, background:"linear-gradient(to right,#eceee6,rgba(214,55,55,0.55),rgba(214,55,55,1))"}}/>
             <div style={{display:"flex", justifyContent:"space-between", fontSize:9, color:"var(--text-muted)", marginTop:3}}>
               <span>0</span><span>Series / sem</span><span>≥20/sem</span>
             </div>
@@ -10641,9 +10661,9 @@ function MuscleHeatmap({ exlog, exercises, days, onChangeDays }) {
               const a = Math.min(1, 0.2 + (s/20)*0.8);
               return (
                 <span key={m} style={{fontSize:10, fontWeight:700, padding:"2px 9px", borderRadius:20,
-                  background:`rgba(255,86,108,${(a*0.22).toFixed(2)})`,
-                  border:`1px solid rgba(255,86,108,${(a*0.55).toFixed(2)})`,
-                  color:`rgba(255,120,135,${a.toFixed(2)})`}}>
+                  background:`rgba(214,55,55,${(a*0.14).toFixed(2)})`,
+                  border:`1px solid rgba(214,55,55,${(a*0.45).toFixed(2)})`,
+                  color:"#a11b1b", fontWeight:700}}>
                   {m} · {s.toFixed(1)}/sem
                 </span>
               );
@@ -10680,17 +10700,17 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
   const deloadCheck = React.useMemo(() => local?.deloadCheck || detectDeloadNeed(exlog, notes, metricslog), [local, exlog, notes, metricslog]);
 
   const STATUS_COLORS = {
-    neglected: { bg:"rgba(244,63,94,0.12)", border:"rgba(244,63,94,0.3)", text:"#f43f5e" },
-    low:       { bg:"rgba(251,191,36,0.12)", border:"rgba(251,191,36,0.3)", text:"#fbbf24" },
-    optimal:   { bg:"rgba(205,255,74,0.1)",  border:"rgba(205,255,74,0.25)", text:"#cdff4a" },
-    high:      { bg:"rgba(74,214,255,0.1)",  border:"rgba(74,214,255,0.25)", text:"#4ad6ff" },
+    neglected: { bg:"rgba(190,18,60,0.16)", border:"rgba(190,18,60,0.3)", text:"#e80d33" },
+    low:       { bg:"rgba(180,83,9,0.16)", border:"rgba(180,83,9,0.3)", text:"#936a03" },
+    optimal:   { bg:"rgba(77,124,15,0.14)",  border:"rgba(77,124,15,0.25)", text:C.lime },
+    high:      { bg:"rgba(14,116,144,0.14)",  border:"rgba(14,116,144,0.25)", text:C.cyan },
   };
   const URGENCY_COLORS = {
-    low:    { border:"rgba(251,191,36,0.4)", text:"#fbbf24", bg:"rgba(251,191,36,0.08)" },
-    medium: { border:"rgba(244,63,94,0.3)",  text:"#fb923c", bg:"rgba(251,146,60,0.08)" },
-    high:   { border:"rgba(244,63,94,0.5)",  text:"#f43f5e", bg:"rgba(244,63,94,0.1)" },
+    low:    { border:"rgba(180,83,9,0.4)", text:"#936a03", bg:"rgba(180,83,9,0.12)" },
+    medium: { border:"rgba(190,18,60,0.3)",  text:"#b95504", bg:"rgba(251,146,60,0.08)" },
+    high:   { border:"rgba(190,18,60,0.5)",  text:"#e80d33", bg:"rgba(190,18,60,0.14)" },
   };
-  const PHASE_COLORS = { "Acumulación":"#cdff4a", "Intensificación":"#4ad6ff", "Deload":"#fbbf24", "Pico":"#f43f5e" };
+  const PHASE_COLORS = { "Acumulación":C.lime, "Intensificación":C.cyan, "Deload":"#fbbf24", "Pico":"#f43f5e" };
 
   const maxSets = Math.max(...weeklyLoad.map(w=>w.totalSets), 1);
 
@@ -10699,14 +10719,14 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
       <div className="trainer-agent-panel">
 
         {/* Header */}
-        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", paddingBottom:10, borderBottom:`1px solid rgba(205,255,74,0.1)`}}>
+        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", paddingBottom:10, borderBottom:`1px solid rgba(77,124,15,0.14)`}}>
           <div style={{display:"flex", alignItems:"center", gap:8}}>
-            <div style={{width:30, height:30, borderRadius:8, background:"rgba(205,255,74,0.1)", display:"flex", alignItems:"center", justifyContent:"center"}}>
-              <Sparkles size={15} color="#cdff4a"/>
+            <div style={{width:30, height:30, borderRadius:8, background:"rgba(77,124,15,0.14)", display:"flex", alignItems:"center", justifyContent:"center"}}>
+              <Sparkles size={15} color={C.lime}/>
             </div>
-            <span className="disp" style={{fontSize:20, color:"#cdff4a", letterSpacing:".04em"}}>AGENTE ENTRENADOR</span>
+            <span className="disp" style={{fontSize:20, color:C.lime, letterSpacing:".04em"}}>AGENTE ENTRENADOR</span>
           </div>
-          <button onClick={onClose} title="Cerrar" aria-label="Cerrar" style={{background:"none", border:"none", color:"#9aa088", cursor:"pointer", padding:4}}><X size={20}/></button>
+          <button onClick={onClose} title="Cerrar" aria-label="Cerrar" style={{background:"none", border:"none", color:C.muted, cursor:"pointer", padding:4}}><X size={20}/></button>
         </div>
 
         {/* Mapa muscular: versión visual de las tarjetas de balance, mismo cálculo */}
@@ -10717,19 +10737,19 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
           {data?.trainingPhase ? (
             <>
               <div>
-                <div style={{fontSize:10, color:"#9aa088", fontWeight:700, letterSpacing:".08em", marginBottom:3}}>FASE ACTUAL</div>
-                <div className="disp" style={{fontSize:26, color: PHASE_COLORS[data.trainingPhase.name] || "#cdff4a", lineHeight:1}}>{data.trainingPhase.name?.toUpperCase()}</div>
-                <div style={{fontSize:11, color:"#9aa088", marginTop:3}}>{data.trainingPhase.description}</div>
+                <div style={{fontSize:10, color:C.muted, fontWeight:700, letterSpacing:".08em", marginBottom:3}}>FASE ACTUAL</div>
+                <div className="disp" style={{fontSize:26, color: PHASE_COLORS[data.trainingPhase.name] || C.lime, lineHeight:1}}>{data.trainingPhase.name?.toUpperCase()}</div>
+                <div style={{fontSize:11, color:C.muted, marginTop:3}}>{data.trainingPhase.description}</div>
               </div>
               {data.trainingPhase.weekNumber && (
-                <div style={{textAlign:"center", background:"rgba(205,255,74,0.08)", border:"1px solid rgba(205,255,74,0.15)", borderRadius:10, padding:"8px 12px"}}>
-                  <div className="disp" style={{fontSize:28, color:"#cdff4a"}}>{data.trainingPhase.weekNumber}</div>
-                  <div style={{fontSize:9, color:"#9aa088", fontWeight:700}}>SEM CICLO</div>
+                <div style={{textAlign:"center", background:"rgba(77,124,15,0.12)", border:"1px solid rgba(77,124,15,0.19)", borderRadius:10, padding:"8px 12px"}}>
+                  <div className="disp" style={{fontSize:28, color:C.lime}}>{data.trainingPhase.weekNumber}</div>
+                  <div style={{fontSize:9, color:C.muted, fontWeight:700}}>SEM CICLO</div>
                 </div>
               )}
             </>
           ) : (
-            <div style={{color:"#9aa088", fontSize:12}}>
+            <div style={{color:C.muted, fontSize:12}}>
               <Sparkles size={13} style={{verticalAlign:"middle", marginRight:5}}/>
               Ejecuta el análisis IA para ver tu fase de entrenamiento
             </div>
@@ -10738,7 +10758,7 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
 
         {/* Muscle Volume Balance Grid */}
         <div>
-          <div style={{fontSize:10, fontWeight:700, color:"#9aa088", letterSpacing:".08em", marginBottom:2}}>
+          <div style={{fontSize:10, fontWeight:700, color:C.muted, letterSpacing:".08em", marginBottom:2}}>
             BALANCE MUSCULAR · series/sem {heatmapDays >= 999 ? "(todo)" : `(${heatmapDays}d)`}
           </div>
           <div className="volume-balance-grid">
@@ -10746,21 +10766,21 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
               const sc = STATUS_COLORS[d.status];
               return (
                 <div key={muscle} title={d.recommendation} style={{background:sc.bg, border:`1px solid ${sc.border}`, borderRadius:8, padding:"7px 8px"}}>
-                  <div style={{fontSize:9, fontWeight:700, color:"#9aa088", marginBottom:2, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{muscle.toUpperCase()}</div>
+                  <div style={{fontSize:9, fontWeight:700, color:C.muted, marginBottom:2, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{muscle.toUpperCase()}</div>
                   <div style={{fontSize:18, fontWeight:900, color:sc.text, lineHeight:1}}>{d.setsPerWeek}</div>
                   <div style={{fontSize:8, color:sc.text, marginTop:1, opacity:.8}}>{d.status === "neglected" ? "sin trabajo" : d.status === "low" ? "bajo" : d.status === "high" ? "alto" : "óptimo"}</div>
-                  {d.setsPerWeek < 10 && <div style={{fontSize:7, color:"#9aa088", marginTop:2, opacity:.7}}>↑ MEV: 10</div>}
+                  {d.setsPerWeek < 10 && <div style={{fontSize:7, color:C.muted, marginTop:2, opacity:.7}}>↑ MEV: 10</div>}
                   {d.setsPerWeek > 18 && <div style={{fontSize:7, color:C.amber, marginTop:2, opacity:.85}}>⚠ cerca MRV (20)</div>}
                 </div>
               );
             })}
           </div>
           {sinContar.length > 0 && (
-            <div style={{marginTop:8, background:"rgba(255,177,61,0.08)", border:"1px solid rgba(255,177,61,0.28)", borderRadius:9, padding:"8px 10px"}}>
+            <div style={{marginTop:8, background:"rgba(180,83,9,0.12)", border:"1px solid rgba(180,83,9,0.28)", borderRadius:9, padding:"8px 10px"}}>
               <div style={{fontSize:10.5, fontWeight:800, color:C.amber, marginBottom:3}}>
                 ⚠ {sinContar.length} ejercicio{sinContar.length !== 1 ? "s" : ""} no suma{sinContar.length !== 1 ? "n" : ""} a estas cifras
               </div>
-              <div style={{fontSize:10, color:"#9aa088", lineHeight:1.45}}>
+              <div style={{fontSize:10, color:C.muted, lineHeight:1.45}}>
                 {sinContar.slice(0, 5).join(", ")}{sinContar.length > 5 ? ` y ${sinContar.length - 5} más` : ""}.
                 {" "}No tienen músculos asignados. Ábrelos en Entreno y pulsa el icono de editar para asignárselos.
               </div>
@@ -10770,22 +10790,22 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
 
         {/* Weekly Load Chart */}
         <div>
-          <div style={{fontSize:10, fontWeight:700, color:"#9aa088", letterSpacing:".08em", marginBottom:8}}>CARGA SEMANAL (series)</div>
+          <div style={{fontSize:10, fontWeight:700, color:C.muted, letterSpacing:".08em", marginBottom:8}}>CARGA SEMANAL (series)</div>
           <div style={{display:"flex", alignItems:"flex-end", gap:4, height:64}}>
             {weeklyLoad.map((w, i) => {
               const isLast = i === weeklyLoad.length - 1;
               const heightPct = maxSets > 0 ? (w.totalSets / maxSets) * 100 : 0;
               return (
                 <div key={i} style={{flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:3, height:"100%", justifyContent:"flex-end"}}>
-                  <div style={{width:"100%", height:`${heightPct}%`, minHeight: w.totalSets > 0 ? 4 : 0, background: isLast ? "#cdff4a" : "rgba(205,255,74,0.25)", borderRadius:"3px 3px 0 0", transition:"height .3s"}}/>
-                  <div style={{fontSize:8, color: isLast ? "#cdff4a" : "#9aa088", fontWeight: isLast ? 700 : 400, whiteSpace:"nowrap"}}>{w.weekLabel.replace("Sem ","W")}</div>
+                  <div style={{width:"100%", height:`${heightPct}%`, minHeight: w.totalSets > 0 ? 4 : 0, background: isLast ? C.lime : "rgba(77,124,15,0.25)", borderRadius:"3px 3px 0 0", transition:"height .3s"}}/>
+                  <div style={{fontSize:8, color: isLast ? C.lime : C.muted, fontWeight: isLast ? 700 : 400, whiteSpace:"nowrap"}}>{w.weekLabel.replace("Sem ","W")}</div>
                 </div>
               );
             })}
           </div>
           <div style={{display:"flex", justifyContent:"space-between", marginTop:4}}>
-            <span style={{fontSize:9, color:"#9aa088"}}>8 semanas atrás</span>
-            <span style={{fontSize:9, color:"#cdff4a", fontWeight:700}}>Esta semana: {weeklyLoad[weeklyLoad.length-1]?.totalSets || 0} series</span>
+            <span style={{fontSize:9, color:C.muted}}>8 semanas atrás</span>
+            <span style={{fontSize:9, color:C.lime, fontWeight:700}}>Esta semana: {weeklyLoad[weeklyLoad.length-1]?.totalSets || 0} series</span>
           </div>
         </div>
 
@@ -10806,11 +10826,11 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
                   <span className="disp" style={{fontSize:18, color:uc.text}}>{deloadCheck.weeksSinceDeload}w</span>
                 </div>
               </div>
-              <div style={{fontSize:12, color:"#f3f4ea", marginBottom: aiDeload ? 8 : 0}}>{deloadCheck.reason}</div>
+              <div style={{fontSize:12, color:C.ink, marginBottom: aiDeload ? 8 : 0}}>{deloadCheck.reason}</div>
               {aiDeload && (
                 <div style={{display:"flex", gap:8, marginTop:6}}>
-                  {aiDeload.targetVolumePct && <div style={{fontSize:11, color:"#9aa088"}}>↓ Volumen al <strong style={{color:uc.text}}>{aiDeload.targetVolumePct}%</strong></div>}
-                  {aiDeload.durationDays && <div style={{fontSize:11, color:"#9aa088"}}>· <strong style={{color:uc.text}}>{aiDeload.durationDays} días</strong></div>}
+                  {aiDeload.targetVolumePct && <div style={{fontSize:11, color:C.muted}}>↓ Volumen al <strong style={{color:uc.text}}>{aiDeload.targetVolumePct}%</strong></div>}
+                  {aiDeload.durationDays && <div style={{fontSize:11, color:C.muted}}>· <strong style={{color:uc.text}}>{aiDeload.durationDays} días</strong></div>}
                 </div>
               )}
             </div>
@@ -10820,7 +10840,7 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
         {/* Muscle Alerts from AI */}
         {data?.muscleAlerts?.length > 0 && (
           <div>
-            <div style={{fontSize:10, fontWeight:700, color:"#9aa088", letterSpacing:".08em", marginBottom:8}}>ALERTAS MUSCULARES</div>
+            <div style={{fontSize:10, fontWeight:700, color:C.muted, letterSpacing:".08em", marginBottom:8}}>ALERTAS MUSCULARES</div>
             <div style={{display:"flex", flexDirection:"column", gap:6}}>
               {data.muscleAlerts.slice(0,4).map((alert, i) => {
                 const sc = STATUS_COLORS[alert.status] || STATUS_COLORS.low;
@@ -10829,7 +10849,7 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
                     <div style={{width:6, height:6, borderRadius:"50%", background:sc.text, flexShrink:0}}/>
                     <div style={{flex:1}}>
                       <div style={{fontSize:12, fontWeight:700, color:sc.text}}>{alert.muscle}</div>
-                      <div style={{fontSize:11, color:"#9aa088"}}>{alert.recommendation}</div>
+                      <div style={{fontSize:11, color:C.muted}}>{alert.recommendation}</div>
                     </div>
                     {alert.currentSets != null && <div style={{fontSize:10, color:sc.text, fontWeight:700, whiteSpace:"nowrap"}}>{alert.currentSets} ser/sem</div>}
                   </div>
@@ -10842,20 +10862,20 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
         {/* Exercise Variations */}
         {data?.exerciseVariations?.length > 0 && (
           <div>
-            <div style={{fontSize:10, fontWeight:700, color:"#9aa088", letterSpacing:".08em", marginBottom:8}}>VARIACIONES SUGERIDAS</div>
+            <div style={{fontSize:10, fontWeight:700, color:C.muted, letterSpacing:".08em", marginBottom:8}}>VARIACIONES SUGERIDAS</div>
             <div style={{display:"flex", flexDirection:"column", gap:8}}>
               {data.exerciseVariations.slice(0,4).map((v, i) => {
-                const prioColor = v.priority==="alta" ? "#f43f5e" : v.priority==="media" ? "#fbbf24" : "#9aa088";
+                const prioColor = v.priority==="alta" ? "#f43f5e" : v.priority==="media" ? "#fbbf24" : C.muted;
                 return (
                   <div key={i} className="pop" style={{padding:"10px 12px"}}>
                     <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:4}}>
-                      <div style={{fontSize:12, fontWeight:700, color:"#f3f4ea"}}>
-                        {v.exercise} <span style={{color:"#9aa088", fontSize:11}}>→</span> <span style={{color:"#cdff4a"}}>{v.variation}</span>
+                      <div style={{fontSize:12, fontWeight:700, color:C.ink}}>
+                        {v.exercise} <span style={{color:C.muted, fontSize:11}}>→</span> <span style={{color:C.lime}}>{v.variation}</span>
                       </div>
                       <div style={{fontSize:9, background:`rgba(${prioColor.startsWith("#f43f")?'244,63,94':prioColor.startsWith("#fbb")?'251,191,36':'154,160,136'},0.15)`, color:prioColor, borderRadius:5, padding:"2px 6px", fontWeight:700, whiteSpace:"nowrap"}}>{v.priority?.toUpperCase()}</div>
                     </div>
-                    <div style={{fontSize:11, color:"#9aa088"}}>{v.reason}</div>
-                    {v.currentIssue && <div style={{fontSize:10, color:"#4ad6ff", marginTop:3, fontStyle:"italic"}}>{v.currentIssue}</div>}
+                    <div style={{fontSize:11, color:C.muted}}>{v.reason}</div>
+                    {v.currentIssue && <div style={{fontSize:10, color:C.cyan, marginTop:3, fontStyle:"italic"}}>{v.currentIssue}</div>}
                   </div>
                 );
               })}
@@ -10865,21 +10885,21 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
 
         {/* Performance Summary */}
         {data?.performanceSummary && (
-          <div style={{borderLeft:"3px solid #4ad6ff", background:"rgba(74,214,255,0.05)", borderRadius:"0 10px 10px 0", padding:"12px 14px"}}>
-            <div style={{fontSize:10, fontWeight:700, color:"#4ad6ff", letterSpacing:".08em", marginBottom:8}}>RESUMEN DE RENDIMIENTO</div>
-            <div style={{fontSize:12, color:"#f3f4ea", lineHeight:1.6, marginBottom:8}}>{data.performanceSummary.narrative}</div>
+          <div style={{borderLeft:"3px solid #4ad6ff", background:"rgba(14,116,144,0.09)", borderRadius:"0 10px 10px 0", padding:"12px 14px"}}>
+            <div style={{fontSize:10, fontWeight:700, color:C.cyan, letterSpacing:".08em", marginBottom:8}}>RESUMEN DE RENDIMIENTO</div>
+            <div style={{fontSize:12, color:C.ink, lineHeight:1.6, marginBottom:8}}>{data.performanceSummary.narrative}</div>
             {data.performanceSummary.topStrengths?.length > 0 && (
               <div style={{marginBottom:6}}>
-                {data.performanceSummary.topStrengths.map((s,i)=><div key={i} style={{fontSize:11, color:"#cdff4a", marginBottom:2}}>✓ {s}</div>)}
+                {data.performanceSummary.topStrengths.map((s,i)=><div key={i} style={{fontSize:11, color:C.lime, marginBottom:2}}>✓ {s}</div>)}
               </div>
             )}
             {data.performanceSummary.topConcerns?.length > 0 && (
               <div style={{marginBottom:8}}>
-                {data.performanceSummary.topConcerns.map((c,i)=><div key={i} style={{fontSize:11, color:"#fbbf24", marginBottom:2}}>▲ {c}</div>)}
+                {data.performanceSummary.topConcerns.map((c,i)=><div key={i} style={{fontSize:11, color:"#936a03", marginBottom:2}}>▲ {c}</div>)}
               </div>
             )}
             {data.performanceSummary.nextWeekFocus && (
-              <div style={{background:"rgba(205,255,74,0.08)", border:"1px solid rgba(205,255,74,0.2)", borderRadius:8, padding:"8px 10px", fontSize:12, color:"#cdff4a", fontWeight:600}}>
+              <div style={{background:"rgba(77,124,15,0.12)", border:"1px solid rgba(77,124,15,0.2)", borderRadius:8, padding:"8px 10px", fontSize:12, color:C.lime, fontWeight:600}}>
                 🎯 {data.performanceSummary.nextWeekFocus}
               </div>
             )}
@@ -10888,7 +10908,7 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
 
         {/* Error */}
         {data?._error && (
-          <div style={{fontSize:12, color:"#f43f5e", background:"rgba(244,63,94,0.08)", border:"1px solid rgba(244,63,94,0.2)", borderRadius:9, padding:"10px 12px"}}>{data._error}</div>
+          <div style={{fontSize:12, color:"#e80d33", background:"rgba(190,18,60,0.12)", border:"1px solid rgba(190,18,60,0.2)", borderRadius:9, padding:"10px 12px"}}>{data._error}</div>
         )}
 
         {/* PDF para coach */}
@@ -10909,7 +10929,7 @@ function TrainerAgent({ onClose, data, busy, onRunAnalysis, generateWeeklyPDF, p
         <button
           onClick={onRunAnalysis}
           disabled={busy}
-          style={{width:"100%", padding:"14px 0", borderRadius:12, border:"none", cursor: busy ? "not-allowed" : "pointer", background: busy ? "rgba(205,255,74,0.1)" : "linear-gradient(90deg,#4ad6ff,#cdff4a)", color: busy ? "#9aa088" : "#0c0e0b", fontWeight:900, fontSize:14, display:"flex", alignItems:"center", justifyContent:"center", gap:8, letterSpacing:".03em", opacity: busy ? 0.7 : 1, transition:"opacity .2s"}}
+          style={{width:"100%", padding:"14px 0", borderRadius:12, border:"none", cursor: busy ? "not-allowed" : "pointer", background: busy ? "rgba(77,124,15,0.14)" : "linear-gradient(90deg,#4ad6ff,#cdff4a)", color: busy ? C.muted : C.onAccent, fontWeight:900, fontSize:14, display:"flex", alignItems:"center", justifyContent:"center", gap:8, letterSpacing:".03em", opacity: busy ? 0.7 : 1, transition:"opacity .2s"}}
         >
           {busy ? <><Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/>Analizando...</> : <><Sparkles size={16}/>{data && !data._error ? "Actualizar Análisis" : "Analizar con IA"}</>}
         </button>
@@ -11084,7 +11104,7 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
 
         {/* Hydration alert after 45 min */}
         {showHydrationAlert && (
-          <div style={{background:`${C.cyan}18`, border:`1px solid ${C.cyan}44`, borderRadius:10, padding:"10px 12px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:8}}>
+          <div style={{background:`${alfa(C.cyan, 9)}`, border:`1px solid ${alfa(C.cyan, 27)}`, borderRadius:10, padding:"10px 12px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:8}}>
             <span style={{fontSize:12.5, color:C.cyan}}>💧 Llevas +45 min entrenando — bebe agua ahora</span>
             <button onClick={() => setShowHydrationAlert(false)} style={{background:"none", border:"none", color:C.muted, cursor:"pointer", fontSize:16, lineHeight:1}}>×</button>
           </div>
@@ -11107,7 +11127,7 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
           <div style={{display:"flex", gap:5, marginBottom:8}}>
             {[60,90,120,180].map(s => (
               <button key={s} onClick={() => setPreset(s)}
-                style={{flex:1, padding:"5px 0", borderRadius:6, background: restTotal===s ? "rgba(205,255,74,0.12)" : C.panel, border:`1px solid ${restTotal===s ? "rgba(205,255,74,0.5)" : C.line}`, color: restTotal===s ? C.lime : C.muted, fontSize:11, fontWeight:800, cursor:"pointer"}}>
+                style={{flex:1, padding:"5px 0", borderRadius:6, background: restTotal===s ? "rgba(77,124,15,0.16)" : C.panel, border:`1px solid ${restTotal===s ? "rgba(77,124,15,0.5)" : C.line}`, color: restTotal===s ? C.lime : C.muted, fontSize:11, fontWeight:800, cursor:"pointer"}}>
                 {s}s
               </button>
             ))}
@@ -11117,7 +11137,7 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
             <button onClick={() => setPreset(Math.max(10, restTotal-10))}
               style={{flex:1, padding:"9px 0", borderRadius:8, background:C.panel, border:`1px solid ${C.line}`, color:C.muted, fontSize:13, fontWeight:700, cursor:"pointer"}}>−10s</button>
             <button onClick={restRunning ? stopRest : startRest}
-              style={{flex:2, padding:"9px 0", borderRadius:8, background: restRunning ? "rgba(255,107,138,0.12)" : "rgba(205,255,74,0.12)", border:`1px solid ${restRunning ? "rgba(255,107,138,0.4)" : "rgba(205,255,74,0.35)"}`, color: restRunning ? C.rose : C.lime, fontSize:14, fontWeight:800, cursor:"pointer"}}>
+              style={{flex:2, padding:"9px 0", borderRadius:8, background: restRunning ? "rgba(190,18,60,0.16)" : "rgba(77,124,15,0.16)", border:`1px solid ${restRunning ? "rgba(190,18,60,0.4)" : "rgba(77,124,15,0.35)"}`, color: restRunning ? C.rose : C.lime, fontSize:14, fontWeight:800, cursor:"pointer"}}>
               {restRunning ? "⏹ Parar" : "▶ Iniciar"}
             </button>
             <button onClick={() => setPreset(Math.min(300, restTotal+10))}
@@ -11130,7 +11150,7 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
           <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10}}>
             <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".08em"}}>🏃 Circuito Sin Equipo</div>
             {circuitRunning && (
-              <div style={{fontSize:11, fontWeight:800, color:C.cyan, background:"rgba(74,214,255,0.1)", border:"1px solid rgba(74,214,255,0.25)", borderRadius:6, padding:"2px 8px"}}>
+              <div style={{fontSize:11, fontWeight:800, color:C.cyan, background:"rgba(14,116,144,0.14)", border:"1px solid rgba(14,116,144,0.25)", borderRadius:6, padding:"2px 8px"}}>
                 Ronda {currentRound}
               </div>
             )}
@@ -11175,7 +11195,7 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
           )}
 
           <button onClick={circuitRunning ? stopCircuit : startCircuit}
-            style={{width:"100%", padding:"13px 0", borderRadius:10, cursor:"pointer", background: circuitRunning ? "rgba(255,107,138,0.12)" : "linear-gradient(90deg,rgba(205,255,74,0.15),rgba(74,214,255,0.15))", border:`1px solid ${circuitRunning ? "rgba(255,107,138,0.4)" : "rgba(205,255,74,0.3)"}`, color: circuitRunning ? C.rose : C.lime, fontSize:14, fontWeight:800, letterSpacing:".03em"}}>
+            style={{width:"100%", padding:"13px 0", borderRadius:10, cursor:"pointer", background: circuitRunning ? "rgba(190,18,60,0.16)" : "linear-gradient(90deg,rgba(77,124,15,0.19),rgba(14,116,144,0.19))", border:`1px solid ${circuitRunning ? "rgba(190,18,60,0.4)" : "rgba(77,124,15,0.3)"}`, color: circuitRunning ? C.rose : C.lime, fontSize:14, fontWeight:800, letterSpacing:".03em"}}>
             {circuitRunning ? "⏹ Detener Circuito" : "▶ Iniciar Circuito"}
           </button>
         </div>
@@ -11194,8 +11214,8 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
                 <button key={sp.key} onClick={() => setFocusSplit(sp.key)}
                   className="btn-active-scale"
                   style={{flexShrink:0, padding:"5px 11px", borderRadius:20, fontSize:11, fontWeight:800, cursor:"pointer",
-                    background: active ? "rgba(205,255,74,0.15)" : C.panel,
-                    border: `1px solid ${active ? "rgba(205,255,74,0.5)" : C.line}`,
+                    background: active ? "rgba(77,124,15,0.19)" : C.panel,
+                    border: `1px solid ${active ? "rgba(77,124,15,0.5)" : C.line}`,
                     color: active ? C.lime : C.muted}}>
                   {sp.key} · {sp.name.split("+")[0].split(" ").slice(0,2).join(" ")}
                 </button>
@@ -11220,8 +11240,8 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
                     const btnStyle = (active) => ({
                       width:32, height:32, borderRadius:7, cursor:"pointer", fontSize:18, fontWeight:700,
                       display:"flex", alignItems:"center", justifyContent:"center",
-                      background: active ? "rgba(205,255,74,0.12)" : C.panel2,
-                      border: `1px solid ${active ? "rgba(205,255,74,0.4)" : C.line}`,
+                      background: active ? "rgba(77,124,15,0.16)" : C.panel2,
+                      border: `1px solid ${active ? "rgba(77,124,15,0.4)" : C.line}`,
                       color: active ? C.lime : C.muted
                     });
                     return (
@@ -11236,7 +11256,7 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
                         {/* Muscle chips + history */}
                         <div style={{display:"flex", gap:4, flexWrap:"wrap", alignItems:"center"}}>
                           {muscles.map(m => (
-                            <span key={m} style={{fontSize:9, fontWeight:700, color:col, background:`${col}18`, border:`1px solid ${col}30`, borderRadius:4, padding:"1px 5px"}}>{m}</span>
+                            <span key={m} style={{fontSize:9, fontWeight:700, color:col, background:`${alfa(col, 9)}`, border:`1px solid ${alfa(col, 19)}`, borderRadius:4, padding:"1px 5px"}}>{m}</span>
                           ))}
                           {seriesTotal > 0 && <span style={{fontSize:9, color:C.muted, marginLeft:"auto"}}>{seriesTotal} series</span>}
                         </div>
@@ -11269,7 +11289,7 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
                         {/* Rest button */}
                         <button onClick={triggerRest} className="btn-active-scale"
                           style={{width:"100%", padding:"8px 0", borderRadius:8, cursor:"pointer",
-                            background:"rgba(205,255,74,0.1)", border:"1px solid rgba(205,255,74,0.28)",
+                            background:"rgba(77,124,15,0.14)", border:"1px solid rgba(77,124,15,0.28)",
                             color:C.lime, fontSize:11, fontWeight:800}}>
                           ▶ Descanso {restTotal}s
                         </button>
@@ -11278,7 +11298,7 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
                         <div style={{display:"flex", alignItems:"center", gap:8, marginTop:8}}>
                           <button
                             onClick={() => markSetDone(exName)}
-                            style={{flex:1, padding:"9px", borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", fontWeight:800, fontSize:12.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
+                            style={{flex:1, padding:"9px", borderRadius:9, border:"none", background:C.lime, color:C.onAccent, fontWeight:800, fontSize:12.5, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
                           >
                             ✓ Serie hecha
                           </button>
@@ -11294,14 +11314,14 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
 
                         {/* Form cue */}
                         {formCues[exName] ? (
-                          <div style={{fontSize:10.5, color:C.amber, lineHeight:1.4, background:`${C.amber}11`, border:`1px solid ${C.amber}33`, borderRadius:7, padding:"6px 8px"}}>
+                          <div style={{fontSize:10.5, color:C.amber, lineHeight:1.4, background:`${alfa(C.amber, 7)}`, border:`1px solid ${alfa(C.amber, 20)}`, borderRadius:7, padding:"6px 8px"}}>
                             💡 {formCues[exName]}
                           </div>
                         ) : (
                           <button onClick={() => generateFormCue(exName)}
                             disabled={formCueBusy[exName]}
                             style={{width:"100%", padding:"5px 0", borderRadius:7, cursor:"pointer", background:"transparent",
-                              border:`1px solid ${C.amber}44`, color:C.amber, fontSize:10, fontWeight:700}}>
+                              border:`1px solid ${alfa(C.amber, 27)}`, color:C.amber, fontSize:10, fontWeight:700}}>
                             {formCueBusy[exName] ? "…" : "💡 Tip técnico"}
                           </button>
                         )}
@@ -11324,13 +11344,13 @@ function FocusMode({ onClose, splits, exlog, exercises }) {
 
 /* ===== CARRUSEL DE ALERTAS Y SUGERENCIAS ===== */
 const TIP_STYLE = {
-  tip:        { color: C.lime,  bg: "rgba(205,255,74,0.08)",  border: "rgba(205,255,74,0.45)" },
-  reminder:   { color: C.cyan,  bg: "rgba(74,214,255,0.08)",  border: "rgba(74,214,255,0.45)" },
-  motivation: { color: C.amber, bg: "rgba(251,191,36,0.08)",  border: "rgba(251,191,36,0.45)" },
-  warning:    { color: C.rose,  bg: "rgba(255,107,138,0.08)", border: "rgba(255,107,138,0.45)" },
-  imbalance:  { color: C.rose,  bg: "rgba(255,107,138,0.08)", border: C.rose },
-  plateau:    { color: C.amber, bg: "rgba(251,191,36,0.08)",  border: C.amber },
-  overload:   { color: C.cyan,  bg: "rgba(74,214,255,0.08)",  border: C.cyan },
+  tip:        { color: C.lime,  bg: "rgba(77,124,15,0.12)",  border: "rgba(77,124,15,0.45)" },
+  reminder:   { color: C.cyan,  bg: "rgba(14,116,144,0.12)",  border: "rgba(14,116,144,0.45)" },
+  motivation: { color: C.amber, bg: "rgba(180,83,9,0.12)",  border: "rgba(180,83,9,0.45)" },
+  warning:    { color: C.rose,  bg: "rgba(190,18,60,0.12)", border: "rgba(190,18,60,0.45)" },
+  imbalance:  { color: C.rose,  bg: "rgba(190,18,60,0.12)", border: C.rose },
+  plateau:    { color: C.amber, bg: "rgba(180,83,9,0.12)",  border: C.amber },
+  overload:   { color: C.cyan,  bg: "rgba(14,116,144,0.12)",  border: C.cyan },
 };
 
 function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions, aiTips }) {
@@ -11484,7 +11504,7 @@ function InsightsCarousel({ muscleImbalances, plateauAlerts, overloadSuggestions
       <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:5}}>
         <div style={{display:"flex", gap:4, alignItems:"center"}}>
           {allCards.slice(0, Math.min(8, allCards.length)).map((c, i) => (
-            <div key={c.id + i} style={{width:i===0?14:5, height:5, borderRadius:99, background:i===0?st.border:`${st.border}50`, transition:"width .2s"}}/>
+            <div key={c.id + i} style={{width:i===0?14:5, height:5, borderRadius:99, background:i===0?st.border:`${alfa(st.border, 31)}`, transition:"width .2s"}}/>
           ))}
         </div>
         <span style={{fontSize:9.5, color:C.muted}}>← desliza para pasar</span>
@@ -11670,7 +11690,7 @@ th.spark{text-align:center}
 .leg span{display:inline-block;font-size:8pt;color:#374151;margin-right:14px}
 .leg .pill{margin-right:5px}
 .ft{margin-top:16px;padding-top:9px;border-top:1.5px solid #e5e7eb;display:flex;justify-content:space-between;font-size:7.5pt;color:#9ca3af}
-.pbtn{position:fixed;top:14px;right:14px;background:#15803d;color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:11pt;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+.pbtn{position:fixed;top:14px;right:14px;background:#15803d;color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:11pt;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(24,28,19,.2)}
 @media print{.pbtn{display:none}@page{size:A4;margin:11mm 11mm 15mm 11mm}}
 </style></head><body>
 <button class="pbtn" onclick="window.print()">🖨 Guardar PDF</button>
@@ -11707,7 +11727,7 @@ th.spark{text-align:center}
 
   return (
     <div
-      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(3px)",
+      style={{ position: "fixed", inset: 0, background: "rgba(24,28,19,0.6)", backdropFilter: "blur(3px)",
         display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 9999 }}
       onClick={onClose}
     >
@@ -11715,7 +11735,7 @@ th.spark{text-align:center}
         onClick={e => e.stopPropagation()}
         style={{ background: C.bg, borderTop: `1px solid ${C.line}`, borderRadius: "20px 20px 0 0",
           width: "100%", maxWidth: 560, maxHeight: "90vh", display: "flex", flexDirection: "column",
-          boxShadow: "0 -8px 40px rgba(0,0,0,0.5)", animation: "slideUp 0.3s cubic-bezier(0.16,1,0.3,1)" }}
+          boxShadow: "0 -8px 40px rgba(24,28,19,0.5)", animation: "slideUp 0.3s cubic-bezier(0.16,1,0.3,1)" }}
       >
         {/* Header */}
         <div style={{ padding: "16px 18px 12px", borderBottom: `1px solid ${C.line}`, flexShrink: 0 }}>
@@ -11742,11 +11762,11 @@ th.spark{text-align:center}
           />
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn-active-scale" onClick={handleCopy} disabled={records.length === 0}
-              style={{ flex: 1, background: copied ? C.lime : C.panel, border: `1px solid ${copied ? C.lime : C.line}`, borderRadius: 10, padding: "8px 12px", color: copied ? "#0c0e0b" : C.ink, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              style={{ flex: 1, background: copied ? C.lime : C.panel, border: `1px solid ${copied ? C.lime : C.line}`, borderRadius: 10, padding: "8px 12px", color: copied ? C.onAccent : C.ink, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
               {copied ? <><Check size={14} /> Copiado</> : <><Copy size={14} /> Copiar texto</>}
             </button>
             <button className="btn-active-scale" onClick={handlePDF} disabled={records.length === 0}
-              style={{ flex: 1, background: C.lime, border: `1px solid ${C.lime}`, borderRadius: 10, padding: "8px 12px", color: "#0c0e0b", fontSize: 12, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              style={{ flex: 1, background: C.lime, border: `1px solid ${C.lime}`, borderRadius: 10, padding: "8px 12px", color: C.onAccent, fontSize: 12, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
               <FileText size={14} /> Exportar PDF
             </button>
           </div>
@@ -11798,7 +11818,7 @@ th.spark{text-align:center}
                     </div>
 
                     {/* Recomendación próxima sesión */}
-                    <div style={{ background: `${col}14`, border: `1px solid ${col}44`, borderRadius: 10, padding: "8px 10px" }}>
+                    <div style={{ background: `${alfa(col, 8)}`, border: `1px solid ${alfa(col, 27)}`, borderRadius: 10, padding: "8px 10px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
                         <TrendingUp size={13} color={col} />
                         <span style={{ fontSize: 9.5, fontWeight: 800, color: col, textTransform: "uppercase", letterSpacing: ".05em" }}>{recLabel(r.recommendation.kind)}</span>
@@ -12150,7 +12170,7 @@ tr:last-child td{border-bottom:none}
 .mfill{display:block;height:100%;background:#16a34a;border-radius:20px}
 .mv{font-size:8pt;color:#6b7280;width:96px;text-align:right;flex-shrink:0}
 .ft{margin-top:18px;padding-top:9px;border-top:1.5px solid #e5e7eb;display:flex;justify-content:space-between;font-size:7.5pt;color:#9ca3af}
-.pbtn{position:fixed;top:14px;right:14px;background:#16a34a;color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:11pt;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+.pbtn{position:fixed;top:14px;right:14px;background:#16a34a;color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:11pt;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(24,28,19,.2)}
 @media print{.pbtn{display:none}@page{size:A4;margin:11mm 11mm 15mm 11mm}}
 </style></head><body>
 <button class="pbtn" onclick="window.print()">🖨 Guardar PDF</button>
@@ -12333,7 +12353,7 @@ tr:last-child td{border-bottom:none}
                                   ? `Última vez: ${dr.ultima} kg × ${dr.ultimaReps} (${fdate(dr.ultimaFecha + "T12:00:00Z")})`
                                   : "1ª sesión registrada";
                               return (
-                                <div style={{background:`${col}14`, border:`1px solid ${col}44`, borderRadius:10, padding:"8px 10px", marginBottom:10}}>
+                                <div style={{background:`${alfa(col, 8)}`, border:`1px solid ${alfa(col, 27)}`, borderRadius:10, padding:"8px 10px", marginBottom:10}}>
                                   <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:3, flexWrap:"wrap"}}>
                                     <TrendingUp size={13} color={col}/>
                                     <span style={{fontSize:9.5, fontWeight:800, color:col, textTransform:"uppercase", letterSpacing:".05em"}}>{lbl}</span>
@@ -12390,11 +12410,14 @@ tr:last-child td{border-bottom:none}
   // reemplaza también la imagen. Con el fondo invisible, el número de los
   // músculos más trabajados salía en negro sobre negro.
   // `name` va explícito: heredado, el nombre saldría claro sobre el lima sólido.
+  // Una escala que se lee de un vistazo: gris = nada, ámbar = poco, verde claro
+  // = suficiente, verde sólido = en objetivo. El violeta del tema oscuro no
+  // significaba nada y encima chocaba con el verde de la marca.
   const getHeatColor = (sets) => {
     if (sets === 0) return { text: C.muted, name: C.muted };                    // sin fondo: se queda el degradado
-    if (sets < 4) return { bg: "rgba(107, 78, 255, 0.18)", text: C.ink, name: C.muted, border: "rgba(107, 78, 255, 0.45)" };
-    if (sets < 8) return { bg: "rgba(205, 255, 74, 0.16)", text: "#f3f4ea", name: C.muted, border: C.lime, fontWeight: 700 };
-    return { bg: C.lime, text: "#0c0e0b", name: "rgba(12,14,11,.7)", border: C.lime, fontWeight: 800, boxShadow: "0 0 10px rgba(205, 255, 74, 0.3)" };
+    if (sets < 4) return { bg: "rgba(180,83,9,0.10)", text: "#8a4708", name: C.muted, border: "rgba(180,83,9,0.30)" };
+    if (sets < 8) return { bg: "rgba(77,124,15,0.12)", text: C.lime, name: C.muted, border: "rgba(77,124,15,0.40)", fontWeight: 700 };
+    return { bg: C.lime, text: C.onAccent, name: "rgba(255,255,255,.78)", border: C.lime, fontWeight: 800, boxShadow: "0 2px 8px rgba(77,124,15,0.30)" };
   };
 
   const allExistingExercises = Object.values(exercises || {}).flat().map(e => e.name);
@@ -12521,9 +12544,9 @@ tr:last-child td{border-bottom:none}
   const moveSet = (exName, from, to) => setExlog(moveSetInSession(exlog, findExlogKey(exName), selectedDateStr, from, to));
   const btnOrden = (off) => ({
     width: 22, height: 17, borderRadius: 5, padding: 0,
-    border: `1px solid ${off ? "rgba(154,160,136,.12)" : C.line}`,
+    border: `1px solid ${off ? "rgba(95,107,87,0.16)" : C.line}`,
     background: "transparent",
-    color: off ? "rgba(154,160,136,.25)" : C.muted,
+    color: off ? "rgba(95,107,87,.25)" : C.muted,
     cursor: off ? "default" : "pointer",
     fontSize: 9, lineHeight: 1, display: "grid", placeItems: "center",
   });
@@ -12852,7 +12875,7 @@ tr:last-child td{border-bottom:none}
 .lb ul li{font-size:9pt;padding:2px 0;display:flex;gap:7px}
 .lb ul li strong{min-width:48px;color:#1d4ed8}
 .ft{margin-top:18px;padding-top:9px;border-top:1.5px solid #e5e7eb;display:flex;justify-content:space-between;font-size:7.5pt;color:#9ca3af}
-.pbtn{position:fixed;top:14px;right:14px;background:#7c3aed;color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:11pt;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+.pbtn{position:fixed;top:14px;right:14px;background:#7c3aed;color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:11pt;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(24,28,19,.2)}
 @media print{.pbtn{display:none}@page{size:A4;margin:12mm 12mm 16mm 12mm}}
 </style></head><body>
 <button class="pbtn" onclick="window.print()">🖨 Guardar PDF</button>
@@ -13258,18 +13281,20 @@ tr:last-child td{border-bottom:none}
     fontWeight:700,
     padding:"3px 8px",
     borderRadius:999,
-    background:"rgba(74,214,255,.12)",
+    background:"rgba(14,116,144,0.16)",
     color:C.cyan
   };
 
   return (
     <div className="pop">
       <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, marginBottom:10}}>
-        <div className="disp" style={{fontSize:24, color:C.lime}}>ENTRENAMIENTO · SPLIT</div>
+        {/* "SPLIT" no aportaba nada y forzaba el salto de línea, que además
+            empujaba el botón contra el título. Con una sola palabra cabe todo. */}
+        <div className="disp" style={{fontSize:26, color:C.ink, lineHeight:1, whiteSpace:"nowrap"}}>ENTRENAMIENTO</div>
         <button
           className="btn-active-scale"
           onClick={() => setShowPRHistory(true)}
-          style={{display:"flex", alignItems:"center", gap:6, background:C.panel, border:`1px solid ${C.lime}66`, borderRadius:10, padding:"7px 12px", color:C.lime, fontSize:12, fontWeight:800, flexShrink:0}}
+          style={{display:"flex", alignItems:"center", gap:6, background:C.panel, border:`1px solid ${alfa(C.lime, 40)}`, borderRadius:10, padding:"7px 12px", color:C.lime, fontSize:12, fontWeight:800, flexShrink:0}}
         >
           <Target size={15}/> Histórico PRs
         </button>
@@ -13397,7 +13422,7 @@ tr:last-child td{border-bottom:none}
                     }
                   }
                   return (
-                    <span style={{fontSize:11, fontWeight:800, padding:"2px 8px", borderRadius:6, background: streak >= 2 ? "rgba(205,255,74,0.1)" : "rgba(154,160,136,0.08)", color: streak >= 2 ? C.lime : C.muted, border:`1px solid ${streak >= 2 ? "rgba(205,255,74,0.25)" : "rgba(154,160,136,0.15)"}`}}>
+                    <span style={{fontSize:11, fontWeight:800, padding:"2px 8px", borderRadius:6, background: streak >= 2 ? "rgba(77,124,15,0.14)" : "rgba(95,107,87,0.12)", color: streak >= 2 ? C.lime : C.muted, border:`1px solid ${streak >= 2 ? "rgba(77,124,15,0.25)" : "rgba(95,107,87,0.19)"}`}}>
                       🔥 {streak} días
                     </span>
                   );
@@ -13472,7 +13497,7 @@ tr:last-child td{border-bottom:none}
                 // Los cuadraditos no decían qué medían: ahora se desglosa de
                 // dónde sale la nota y una barra sustituye a los emojis.
                 <div title={`Constancia ${trainDaysScore}/4 · Volumen ${volumeScore}/3 · Progreso ${progressScore}/3`}
-                  style={{background:"rgba(205,255,74,0.05)", border:"1px solid rgba(205,255,74,0.12)", borderRadius:8, padding:"7px 10px", fontSize:11, color:C.muted, marginBottom:8}}>
+                  style={{background:"rgba(77,124,15,0.09)", border:"1px solid rgba(77,124,15,0.16)", borderRadius:8, padding:"7px 10px", fontSize:11, color:C.muted, marginBottom:8}}>
                   <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:5}}>
                     <span>Rendimiento este mes</span>
                     <span style={{color:C.lime, fontWeight:800}}>{totalScore}/10</span>
@@ -13493,7 +13518,7 @@ tr:last-child td{border-bottom:none}
               const consecutive3 = last3.every(d => !!(workoutSessions[d] && Object.keys(workoutSessions[d]).length > 0));
               if (!consecutive3) return null;
               return (
-                <div style={{fontSize:11, color:C.cyan, background:"rgba(74,214,255,0.06)", border:"1px solid rgba(74,214,255,0.18)", borderRadius:7, padding:"5px 10px", marginBottom:8}}>
+                <div style={{fontSize:11, color:C.cyan, background:"rgba(14,116,144,0.10)", border:"1px solid rgba(14,116,144,0.18)", borderRadius:7, padding:"5px 10px", marginBottom:8}}>
                   💤 3 días seguidos — considera un día de recuperación
                 </div>
               );
@@ -13511,9 +13536,9 @@ tr:last-child td{border-bottom:none}
                   return <div key={`empty-${idx}`} style={{height:38}} />;
                 }
                 const cellBg = cell.isSelected 
-                  ? "rgba(107, 78, 255, 0.18)" 
+                  ? "rgba(91,33,182,0.18)" 
                   : cell.isToday 
-                    ? "rgba(74, 214, 255, 0.12)" 
+                    ? "rgba(14,116,144,0.16)" 
                     : "transparent";
                 const cellBorder = cell.isSelected 
                   ? `1px solid ${C.lime}` 
@@ -13605,7 +13630,7 @@ tr:last-child td{border-bottom:none}
                   cuando la pregunta tiene sentido. */}
               {selectedDayWorkouts && Object.keys(selectedDayWorkouts).length > 0 && (
               <div style={{display:"flex", gap:5, marginBottom:8}}>
-                {[["😴","Fatigado","rgba(255,61,113,0.1)","rgba(255,61,113,0.3)",C.rose],["💪","Normal","rgba(205,255,74,0.08)","rgba(205,255,74,0.25)",C.lime],["🚀","Óptimo","rgba(74,214,255,0.08)","rgba(74,214,255,0.25)",C.cyan]].map(([emoji,label,bg,border,col]) => {
+                {[["😴","Fatigado","rgba(190,18,60,0.14)","rgba(190,18,60,0.3)",C.rose],["💪","Normal","rgba(77,124,15,0.12)","rgba(77,124,15,0.25)",C.lime],["🚀","Óptimo","rgba(14,116,144,0.12)","rgba(14,116,144,0.25)",C.cyan]].map(([emoji,label,bg,border,col]) => {
                   // Comparar por fecha LOCAL del note (no la porción UTC) para que el
                   // botón marque activo y el dedup funcione de noche (evita duplicados)
                   const sameLocalDay = (n) => { try { return getLocalDateStr(new Date(n.date))===selectedDateStr; } catch(e){ return false; } };
@@ -13672,7 +13697,7 @@ tr:last-child td{border-bottom:none}
                               setWorkoutDurations(next);
                             }}
                             style={{
-                              background: dur === m ? "rgba(74,214,255,.14)" : C.bg,
+                              background: dur === m ? "rgba(14,116,144,0.18)" : C.bg,
                               border: `1px solid ${dur === m ? C.cyan : C.line}`,
                               color: dur === m ? C.cyan : C.muted,
                               fontSize: 10,
@@ -13739,7 +13764,7 @@ tr:last-child td{border-bottom:none}
                               <span style={{fontSize:11.5, fontWeight:700, color: i < 3 ? C.ink : C.muted, display:"flex", alignItems:"center", gap:5}}>
                                 {muscle}
                                 {fatiguePct >= 25 && (
-                                  <span title={`${fatiguePct}% de fatiga acumulada de ejercicios previos`} style={{fontSize:9, color:C.amber, background:"rgba(255,177,61,.12)", padding:"1px 5px", borderRadius:4, fontWeight:700}}>
+                                  <span title={`${fatiguePct}% de fatiga acumulada de ejercicios previos`} style={{fontSize:9, color:C.amber, background:"rgba(180,83,9,0.16)", padding:"1px 5px", borderRadius:4, fontWeight:700}}>
                                     💤 {fatiguePct}%
                                   </span>
                                 )}
@@ -13748,7 +13773,7 @@ tr:last-child td{border-bottom:none}
                                 <b style={{color: i < 3 ? C.ink : C.muted}}>{weightedSets}</b> ser. efect. · {sets} reales
                               </span>
                             </div>
-                            <div style={{height:4, borderRadius:4, background:"rgba(255,255,255,0.05)", overflow:"hidden"}}>
+                            <div style={{height:4, borderRadius:4, background:"rgba(27,31,22,0.09)", overflow:"hidden"}}>
                               <div style={{height:"100%", width:`${pct}%`, background:color, borderRadius:4, transition:"width .3s"}}/>
                             </div>
                           </div>
@@ -13848,7 +13873,7 @@ tr:last-child td{border-bottom:none}
                                     nombre es largo, envuelve DENTRO de este bloque en vez de
                                     saltar entero a la línea siguiente dejando el número solo */}
                                 <div style={{display:"flex", alignItems:"baseline", gap:6, minWidth:0, flex:"1 1 auto"}}>
-                                  <span style={{fontSize:10.5, fontWeight:800, color:C.lime, background:"rgba(205,255,74,.1)", border:"1px solid rgba(205,255,74,.22)", borderRadius:5, padding:"1px 5px", minWidth:20, textAlign:"center", flexShrink:0}}>{pos + 1}º</span>
+                                  <span style={{fontSize:10.5, fontWeight:800, color:C.lime, background:"rgba(77,124,15,0.14)", border:"1px solid rgba(77,124,15,.22)", borderRadius:5, padding:"1px 5px", minWidth:20, textAlign:"center", flexShrink:0}}>{pos + 1}º</span>
                                   <div style={{fontSize:13.5, fontWeight:600, minWidth:0}}>{exName}</div>
                                 </div>
                                 {(() => {
@@ -13860,15 +13885,15 @@ tr:last-child td{border-bottom:none}
                                   const histMax = histSets.length ? Math.max(...histSets.map(s => parseFloat(s.w)||0)) : 0;
                                   const todayMax = todaySets.length ? Math.max(...todaySets.map(s => parseFloat(s.w)||0)) : 0;
                                   const isPR = histMax > 0 && todayMax > histMax;
-                                  return isPR ? <span style={{fontSize:10, fontWeight:800, color:"#ffd700", background:"rgba(255,215,0,0.12)", border:"1px solid rgba(255,215,0,0.3)", borderRadius:4, padding:"1px 5px", marginLeft:4}}>★ PR</span> : null;
+                                  return isPR ? <span style={{fontSize:10, fontWeight:800, color:"#857000", background:"rgba(161,98,7,0.16)", border:"1px solid rgba(161,98,7,0.3)", borderRadius:4, padding:"1px 5px", marginLeft:4}}>★ PR</span> : null;
                                 })()}
                                 {overloadSuggestions && overloadSuggestions[exName] && (
                                   <span style={{
                                     fontSize:10,
                                     fontWeight:700,
-                                    background:"rgba(107,78,255,0.12)",
+                                    background:"rgba(91,33,182,0.16)",
                                     color:C.lime,
-                                    border:`1px solid rgba(107,78,255,0.3)`,
+                                    border:`1px solid rgba(91,33,182,0.3)`,
                                     borderRadius:6,
                                     padding:"2px 6px",
                                     display:"inline-flex",
@@ -13882,9 +13907,9 @@ tr:last-child td{border-bottom:none}
                                   <span style={{
                                     fontSize:10,
                                     fontWeight:700,
-                                    background:"rgba(255,177,61,0.12)",
+                                    background:"rgba(180,83,9,0.16)",
                                     color:C.amber,
-                                    border:`1px solid rgba(255,177,61,0.3)`,
+                                    border:`1px solid rgba(180,83,9,0.3)`,
                                     borderRadius:6,
                                     padding:"2px 6px",
                                     display:"inline-flex",
@@ -13916,8 +13941,8 @@ tr:last-child td{border-bottom:none}
                               position:"absolute",
                               right:12,
                               top:12,
-                              background:"rgba(107,78,255,0.06)",
-                              border:`1px solid rgba(107,78,255,0.2)`,
+                              background:"rgba(91,33,182,0.10)",
+                              border:`1px solid rgba(91,33,182,0.2)`,
                               borderRadius:8,
                               width:28,
                               height:28,
@@ -13958,9 +13983,9 @@ tr:last-child td{border-bottom:none}
                               <div style={{display:"flex", gap:6, flexWrap:"wrap", marginBottom:10}}>
                                 {globalEx.musculos.map((m, idx) => (
                                   <span key={m} style={{...tag,
-                                    background: idx === 0 ? "rgba(205,255,74,0.15)" : idx <= 2 ? "rgba(74,214,255,0.12)" : "rgba(154,160,136,0.08)",
+                                    background: idx === 0 ? "rgba(77,124,15,0.19)" : idx <= 2 ? "rgba(14,116,144,0.16)" : "rgba(95,107,87,0.12)",
                                     color: idx === 0 ? C.lime : idx <= 2 ? C.cyan : C.muted,
-                                    border: `1px solid ${idx === 0 ? "rgba(205,255,74,0.3)" : idx <= 2 ? "rgba(74,214,255,0.2)" : "rgba(154,160,136,0.15)"}`
+                                    border: `1px solid ${idx === 0 ? "rgba(77,124,15,0.3)" : idx <= 2 ? "rgba(14,116,144,0.2)" : "rgba(95,107,87,0.19)"}`
                                   }}>{m}</span>
                                 ))}
                               </div>
@@ -13975,7 +14000,7 @@ tr:last-child td{border-bottom:none}
                                 style={{
                                   flex:1, padding:"6px", borderRadius:8, fontSize:10, fontWeight:700, cursor:"pointer", 
                                   border:`1px solid ${setType === "work" ? C.lime : C.line}`, 
-                                  background: setType === "work" ? "rgba(107,78,255,.12)" : "transparent", 
+                                  background: setType === "work" ? "rgba(91,33,182,0.16)" : "transparent", 
                                   color: setType === "work" ? C.lime : C.muted
                                 }}
                               >
@@ -13986,7 +14011,7 @@ tr:last-child td{border-bottom:none}
                                 style={{
                                   flex:1, padding:"6px", borderRadius:8, fontSize:10, fontWeight:700, cursor:"pointer", 
                                   border:`1px solid ${setType === "warmup" ? C.amber : C.line}`, 
-                                  background: setType === "warmup" ? "rgba(255,177,61,.12)" : "transparent", 
+                                  background: setType === "warmup" ? "rgba(180,83,9,0.16)" : "transparent", 
                                   color: setType === "warmup" ? C.amber : C.muted
                                 }}
                               >
@@ -13997,7 +14022,7 @@ tr:last-child td{border-bottom:none}
                                 style={{
                                   flex:1, padding:"6px", borderRadius:8, fontSize:10, fontWeight:700, cursor:"pointer", 
                                   border:`1px solid ${setType === "dropset" ? C.rose : C.line}`, 
-                                  background: setType === "dropset" ? "rgba(255,107,152,.15)" : "transparent", 
+                                  background: setType === "dropset" ? "rgba(190,18,60,0.19)" : "transparent", 
                                   color: setType === "dropset" ? C.rose : C.muted
                                 }}
                               >
@@ -14018,13 +14043,13 @@ tr:last-child td{border-bottom:none}
                                       onChange={e => { const n2=[...dropRows]; n2[idx]={...n2[idx],w:e.target.value}; setDropRows(n2); }}
                                       type="number" inputMode="decimal" className="ph"
                                       placeholder="kg"
-                                      style={{flex:1.2, minWidth:0, background:C.panel2, border:`1px solid rgba(255,107,152,0.4)`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
+                                      style={{flex:1.2, minWidth:0, background:C.panel2, border:`1px solid rgba(190,18,60,0.4)`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
                                     />
                                     <input
                                       value={row.reps}
                                       onChange={e => { const n2=[...dropRows]; n2[idx]={...n2[idx],reps:e.target.value}; setDropRows(n2); }}
                                       className="ph" placeholder="reps"
-                                      style={{flex:1, minWidth:0, background:C.panel2, border:`1px solid rgba(255,107,152,0.4)`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
+                                      style={{flex:1, minWidth:0, background:C.panel2, border:`1px solid rgba(190,18,60,0.4)`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
                                     />
                                     {idx > 0 && (
                                       <button
@@ -14037,12 +14062,12 @@ tr:last-child td{border-bottom:none}
                                 <div style={{display:"flex", gap:4, alignItems:"center", marginTop:2}}>
                                   <button
                                     onClick={() => setDropRows(prev => [...prev, {w:"", reps:""}])}
-                                    style={{flex:1, height:32, borderRadius:8, border:`1px dashed rgba(255,107,152,0.5)`, background:"transparent", color:C.rose, cursor:"pointer", fontSize:11, fontWeight:700}}
+                                    style={{flex:1, height:32, borderRadius:8, border:`1px dashed rgba(190,18,60,0.5)`, background:"transparent", color:C.rose, cursor:"pointer", fontSize:11, fontWeight:700}}
                                   >+ drop</button>
                                   <select
                                     value={rir}
                                     onChange={e => setRir(e.target.value)}
-                                    style={{width:60, background:C.panel2, border:`1px solid rgba(255,107,152,0.4)`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:12, outline:"none", textAlign:"center", cursor:"pointer"}}
+                                    style={{width:60, background:C.panel2, border:`1px solid rgba(190,18,60,0.4)`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:12, outline:"none", textAlign:"center", cursor:"pointer"}}
                                   >
                                     <option value="-">RIR</option>
                                     <option value="0">RIR 0</option>
@@ -14099,7 +14124,7 @@ tr:last-child td{border-bottom:none}
                                   placeholder="ser."
                                   style={{width:44, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center"}}
                                 />
-                                <button onClick={() => addSet(exName)} style={{width:36, height:35, borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", fontSize:18, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center"}}>＋</button>
+                                <button onClick={() => addSet(exName)} style={{width:36, height:35, borderRadius:9, border:"none", background:C.lime, color:C.onAccent, cursor:"pointer", fontSize:18, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center"}}>＋</button>
                               </div>
                             )}
 
@@ -14168,7 +14193,7 @@ tr:last-child td{border-bottom:none}
                                   if (!isNaN(s.w) && !isNaN(repsNum) && repsNum > 0) {
                                     const rmVal = s.w * (1 + (repsNum + rirNum) / 30);
                                     return (
-                                      <span style={{fontSize:11, color:C.cyan, background:"rgba(74,214,255,0.08)", padding:"2px 5px", borderRadius:4, fontWeight:600}}>
+                                      <span style={{fontSize:11, color:C.cyan, background:"rgba(14,116,144,0.12)", padding:"2px 5px", borderRadius:4, fontWeight:600}}>
                                         RM: {Math.round(rmVal)} kg
                                       </span>
                                     );
@@ -14176,12 +14201,12 @@ tr:last-child td{border-bottom:none}
                                   return null;
                                 })()}
                                 {s.type === "warmup" && (
-                                  <span style={{fontSize:10, color:C.amber, background:"rgba(255,177,61,.12)", padding:"2px 6px", borderRadius:4, fontWeight:700}}>
+                                  <span style={{fontSize:10, color:C.amber, background:"rgba(180,83,9,0.16)", padding:"2px 6px", borderRadius:4, fontWeight:700}}>
                                     Calentamiento
                                   </span>
                                 )}
                                 {s.type === "dropset" && (
-                                  <span style={{fontSize:10, color:C.rose, background:"rgba(255,107,152,.12)", padding:"2px 6px", borderRadius:4, fontWeight:700}}>
+                                  <span style={{fontSize:10, color:C.rose, background:"rgba(190,18,60,0.16)", padding:"2px 6px", borderRadius:4, fontWeight:700}}>
                                     {s.drops?.length > 1 ? `Drop ×${s.drops.length}` : "Drop Set"}
                                   </span>
                                 )}
@@ -14242,7 +14267,7 @@ tr:last-child td{border-bottom:none}
               borderRadius:11,
               cursor:"pointer",
               border:`1px solid ${activo ? (COLOR_SPLIT[d.key] || C.lime) : C.line}`,
-              background: activo ? `${COLOR_SPLIT[d.key] || C.lime}1a` : C.panel,
+              background: activo ? `${alfa(COLOR_SPLIT[d.key] || C.lime, 10)}` : C.panel,
               color: activo ? (COLOR_SPLIT[d.key] || C.lime) : C.muted,
               display:"flex", flexDirection:"column", alignItems:"center", gap:2, lineHeight:1
             }}
@@ -14387,9 +14412,9 @@ tr:last-child td{border-bottom:none}
                       <span style={{
                         fontSize:10,
                         fontWeight:700,
-                        background:"rgba(107,78,255,0.12)",
+                        background:"rgba(91,33,182,0.16)",
                         color:C.lime,
-                        border:`1px solid rgba(107,78,255,0.3)`,
+                        border:`1px solid rgba(91,33,182,0.3)`,
                         borderRadius:6,
                         padding:"2px 6px",
                         display:"inline-flex",
@@ -14403,9 +14428,9 @@ tr:last-child td{border-bottom:none}
                       <span style={{
                         fontSize:10,
                         fontWeight:700,
-                        background:"rgba(255,177,61,0.12)",
+                        background:"rgba(180,83,9,0.16)",
                         color:C.amber,
-                        border:`1px solid rgba(255,177,61,0.3)`,
+                        border:`1px solid rgba(180,83,9,0.3)`,
                         borderRadius:6,
                         padding:"2px 6px",
                         display:"inline-flex",
@@ -14438,8 +14463,8 @@ tr:last-child td{border-bottom:none}
                   position:"absolute",
                   right:12,
                   top:12,
-                  background:"rgba(107,78,255,0.06)",
-                  border:`1px solid rgba(107,78,255,0.2)`,
+                  background:"rgba(91,33,182,0.10)",
+                  border:`1px solid rgba(91,33,182,0.2)`,
                   borderRadius:8,
                   width:28,
                   height:28,
@@ -14460,9 +14485,9 @@ tr:last-child td{border-bottom:none}
                   <div style={{display:"flex", gap:6, flexWrap:"wrap", marginBottom:10}}>
                     {ex.musculos.map((m, idx) => (
                       <span key={m} style={{...tag,
-                        background: idx === 0 ? "rgba(205,255,74,0.15)" : idx <= 2 ? "rgba(74,214,255,0.12)" : "rgba(154,160,136,0.08)",
+                        background: idx === 0 ? "rgba(77,124,15,0.19)" : idx <= 2 ? "rgba(14,116,144,0.16)" : "rgba(95,107,87,0.12)",
                         color: idx === 0 ? C.lime : idx <= 2 ? C.cyan : C.muted,
-                        border: `1px solid ${idx === 0 ? "rgba(205,255,74,0.3)" : idx <= 2 ? "rgba(74,214,255,0.2)" : "rgba(154,160,136,0.15)"}`
+                        border: `1px solid ${idx === 0 ? "rgba(77,124,15,0.3)" : idx <= 2 ? "rgba(14,116,144,0.2)" : "rgba(95,107,87,0.19)"}`
                       }}>{m}</span>
                     ))}
                   </div>
@@ -14486,7 +14511,7 @@ tr:last-child td{border-bottom:none}
                       fontWeight:700, 
                       cursor:"pointer", 
                       border:`1px solid ${setType === "work" ? C.lime : C.line}`, 
-                      background: setType === "work" ? "rgba(107,78,255,.12)" : "transparent", 
+                      background: setType === "work" ? "rgba(91,33,182,0.16)" : "transparent", 
                       color: setType === "work" ? C.lime : C.muted
                     }}
                   >
@@ -14502,7 +14527,7 @@ tr:last-child td{border-bottom:none}
                       fontWeight:700, 
                       cursor:"pointer", 
                       border:`1px solid ${setType === "warmup" ? C.amber : C.line}`, 
-                      background: setType === "warmup" ? "rgba(255,177,61,.12)" : "transparent", 
+                      background: setType === "warmup" ? "rgba(180,83,9,0.16)" : "transparent", 
                       color: setType === "warmup" ? C.amber : C.muted
                     }}
                   >
@@ -14518,7 +14543,7 @@ tr:last-child td{border-bottom:none}
                       fontWeight:700, 
                       cursor:"pointer", 
                       border:`1px solid ${setType === "dropset" ? C.rose : C.line}`, 
-                      background: setType === "dropset" ? "rgba(255,107,152,.15)" : "transparent", 
+                      background: setType === "dropset" ? "rgba(190,18,60,0.19)" : "transparent", 
                       color: setType === "dropset" ? C.rose : C.muted
                     }}
                   >
@@ -14539,13 +14564,13 @@ tr:last-child td{border-bottom:none}
                           onChange={e => { const n2=[...dropRows]; n2[idx]={...n2[idx],w:e.target.value}; setDropRows(n2); }}
                           type="number" inputMode="decimal" className="ph"
                           placeholder="kg"
-                          style={{flex:1.2, minWidth:0, background:C.panel2, border:`1px solid rgba(255,107,152,0.4)`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
+                          style={{flex:1.2, minWidth:0, background:C.panel2, border:`1px solid rgba(190,18,60,0.4)`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
                         />
                         <input
                           value={row.reps}
                           onChange={e => { const n2=[...dropRows]; n2[idx]={...n2[idx],reps:e.target.value}; setDropRows(n2); }}
                           className="ph" placeholder="reps"
-                          style={{flex:1, minWidth:0, background:C.panel2, border:`1px solid rgba(255,107,152,0.4)`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
+                          style={{flex:1, minWidth:0, background:C.panel2, border:`1px solid rgba(190,18,60,0.4)`, borderRadius:9, padding:"8px 5px", color:C.ink, fontSize:13.5, outline:"none"}}
                         />
                         {idx > 0 && (
                           <button
@@ -14558,12 +14583,12 @@ tr:last-child td{border-bottom:none}
                     <div style={{display:"flex", gap:4, alignItems:"center", marginTop:2}}>
                       <button
                         onClick={() => setDropRows(prev => [...prev, {w:"", reps:""}])}
-                        style={{flex:1, height:32, borderRadius:8, border:`1px dashed rgba(255,107,152,0.5)`, background:"transparent", color:C.rose, cursor:"pointer", fontSize:11, fontWeight:700}}
+                        style={{flex:1, height:32, borderRadius:8, border:`1px dashed rgba(190,18,60,0.5)`, background:"transparent", color:C.rose, cursor:"pointer", fontSize:11, fontWeight:700}}
                       >+ drop</button>
                       <select
                         value={rir}
                         onChange={e => setRir(e.target.value)}
-                        style={{width:60, background:C.panel2, border:`1px solid rgba(255,107,152,0.4)`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:12, outline:"none", textAlign:"center", cursor:"pointer"}}
+                        style={{width:60, background:C.panel2, border:`1px solid rgba(190,18,60,0.4)`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:12, outline:"none", textAlign:"center", cursor:"pointer"}}
                       >
                         <option value="-">RIR</option>
                         <option value="0">RIR 0</option>
@@ -14620,7 +14645,7 @@ tr:last-child td{border-bottom:none}
                       placeholder="ser."
                       style={{width:44, minWidth:0, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 2px", color:C.ink, fontSize:13.5, outline:"none", textAlign:"center"}}
                     />
-                    <button onClick={() => addSet(ex.name)} style={{width:36, height:35, borderRadius:9, border:"none", background:C.lime, color:"#0c0e0b", cursor:"pointer", fontSize:18, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center"}}>＋</button>
+                    <button onClick={() => addSet(ex.name)} style={{width:36, height:35, borderRadius:9, border:"none", background:C.lime, color:C.onAccent, cursor:"pointer", fontSize:18, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center"}}>＋</button>
                   </div>
                 )}
 
@@ -14673,7 +14698,7 @@ tr:last-child td{border-bottom:none}
                       if (!isNaN(s.w) && !isNaN(repsNum) && repsNum > 0) {
                         const rmVal = s.w * (1 + (repsNum + rirNum) / 30);
                         return (
-                          <span style={{fontSize:11, color:C.cyan, background:"rgba(74,214,255,0.08)", padding:"2px 5px", borderRadius:4, fontWeight:600}}>
+                          <span style={{fontSize:11, color:C.cyan, background:"rgba(14,116,144,0.12)", padding:"2px 5px", borderRadius:4, fontWeight:600}}>
                             RM: {Math.round(rmVal)} kg
                           </span>
                         );
@@ -14681,7 +14706,7 @@ tr:last-child td{border-bottom:none}
                       return null;
                     })()}
                     {s.type === "warmup" && (
-                      <span style={{fontSize:10, color:C.amber, background:"rgba(255,177,61,.12)", padding:"2px 6px", borderRadius:4, fontWeight:700}}>
+                      <span style={{fontSize:10, color:C.amber, background:"rgba(180,83,9,0.16)", padding:"2px 6px", borderRadius:4, fontWeight:700}}>
                         Calentamiento
                       </span>
                     )}
@@ -14738,7 +14763,7 @@ tr:last-child td{border-bottom:none}
                   </div>
                   <button
                     onClick={() => { setMergeTarget(""); setEditExObj({ ex: { name: n }, isMerging: true }); }}
-                    style={{background:"rgba(74,214,255,0.1)", color:C.cyan, fontWeight:700, fontSize:11.5, padding:"6px 12px", borderRadius:8, border:`1px solid ${C.cyan}44`, cursor:"pointer", whiteSpace:"nowrap"}}
+                    style={{background:"rgba(14,116,144,0.14)", color:C.cyan, fontWeight:700, fontSize:11.5, padding:"6px 12px", borderRadius:8, border:`1px solid ${alfa(C.cyan, 27)}`, cursor:"pointer", whiteSpace:"nowrap"}}
                   >
                     🔗 Fusionar
                   </button>
@@ -14800,7 +14825,7 @@ tr:last-child td{border-bottom:none}
                     border:"none", 
                     cursor:"pointer", 
                     background: importBusy ? C.panel2 : C.lime, 
-                    color: importBusy ? C.muted : "#0c0e0b", 
+                    color: importBusy ? C.muted : C.onAccent, 
                     fontWeight:800, 
                     fontSize:14, 
                     display:"flex", 
@@ -14915,7 +14940,7 @@ tr:last-child td{border-bottom:none}
                 <div style={{display:"flex", gap:8, marginTop:4}}>
                   <button 
                     onClick={handleConfirmAndImport}
-                    style={{flex:1, padding:"10px", borderRadius:8, border:"none", background:C.lime, color:"#0c0e0b", fontWeight:800, fontSize:13, cursor:"pointer"}}
+                    style={{flex:1, padding:"10px", borderRadius:8, border:"none", background:C.lime, color:C.onAccent, fontWeight:800, fontSize:13, cursor:"pointer"}}
                   >
                     Confirmar e Importar
                   </button>
@@ -14932,10 +14957,10 @@ tr:last-child td{border-bottom:none}
         ) : (
           <div>
             <div style={{display:"flex", gap:7, marginBottom:10}}>
-              <button onClick={() => { setAddMode("nombre"); setAddText(""); }} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "nombre" ? C.lime : C.line}`, background: addMode === "nombre" ? "rgba(107,78,255,.12)" : "transparent", color: addMode === "nombre" ? C.lime : C.muted}}>
+              <button onClick={() => { setAddMode("nombre"); setAddText(""); }} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "nombre" ? C.lime : C.line}`, background: addMode === "nombre" ? "rgba(91,33,182,0.16)" : "transparent", color: addMode === "nombre" ? C.lime : C.muted}}>
                 Sé el nombre
               </button>
-              <button onClick={() => { setAddMode("describir"); setAddText(""); }} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "describir" ? C.lime : C.line}`, background: addMode === "describir" ? "rgba(107,78,255,.12)" : "transparent", color: addMode === "describir" ? C.lime : C.muted}}>
+              <button onClick={() => { setAddMode("describir"); setAddText(""); }} style={{flex:1, padding:"8px", borderRadius:9, fontSize:12, fontWeight:700, cursor:"pointer", border:`1px solid ${addMode === "describir" ? C.lime : C.line}`, background: addMode === "describir" ? "rgba(91,33,182,0.16)" : "transparent", color: addMode === "describir" ? C.lime : C.muted}}>
                 Describirlo
               </button>
             </div>
@@ -14961,10 +14986,10 @@ tr:last-child td{border-bottom:none}
                   // el desplegable sin ordenar.
                   EQUIPO_ORDER.forEach(eq => { if (groups[eq]) groups[eq].sort((a,b) => a.name.localeCompare(b.name,"es")); });
                   return (
-                    <div style={{position:"absolute", top:"calc(100% + 4px)", left:0, right:0, background:C.bg, border:`1px solid ${C.line}`, borderRadius:12, zIndex:60, overflow:"hidden", boxShadow:"0 8px 28px rgba(0,0,0,0.45)", maxHeight:320, overflowY:"auto"}}>
+                    <div style={{position:"absolute", top:"calc(100% + 4px)", left:0, right:0, background:C.bg, border:`1px solid ${C.line}`, borderRadius:12, zIndex:60, overflow:"hidden", boxShadow:"0 8px 28px rgba(24,28,19,0.45)", maxHeight:320, overflowY:"auto"}}>
                       {EQUIPO_ORDER.filter(eq => groups[eq]).map(eq => (
                         <div key={eq}>
-                          <div style={{padding:"6px 12px 4px", fontSize:9.5, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", background:"rgba(0,0,0,0.18)", position:"sticky", top:0}}>
+                          <div style={{padding:"6px 12px 4px", fontSize:9.5, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", background:"rgba(24,28,19,0.18)", position:"sticky", top:0}}>
                             {EQUIPO_LABEL[eq]}
                           </div>
                           {groups[eq].map(ex => (
@@ -15010,7 +15035,7 @@ tr:last-child td{border-bottom:none}
               <button
                 onClick={addExercise}
                 disabled={addBusy}
-                style={{flex:1, padding:"10px", borderRadius:10, border:"none", background: addBusy ? C.panel2 : C.lime, color: addBusy ? C.muted : "#0c0e0b", cursor:"pointer", fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
+                style={{flex:1, padding:"10px", borderRadius:10, border:"none", background: addBusy ? C.panel2 : C.lime, color: addBusy ? C.muted : C.onAccent, cursor:"pointer", fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
               >
                 {addBusy ? <><Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/>Procesando…</> : (addMode === "nombre" ? "Añadir ejercicio nuevo" : "Identificar y añadir")}
               </button>
@@ -15031,7 +15056,7 @@ tr:last-child td{border-bottom:none}
           border:"none", 
           cursor:"pointer", 
           background:`linear-gradient(90deg, ${C.cyan}, ${C.lime})`,
-          color:"#0c0e0b",
+          color:C.onAccent,
           fontWeight:800, 
           fontSize:14, 
           display:"flex", 
@@ -15048,7 +15073,7 @@ tr:last-child td{border-bottom:none}
       <button 
         onClick={suggest} 
         disabled={dayBusy} 
-        style={{width:"100%", marginTop:12, padding:"12px", borderRadius:12, border:"none", cursor:"pointer", background: dayBusy ? C.panel2 : C.lime, color: dayBusy ? C.muted : "#0c0e0b", fontWeight:800, fontSize:14, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:8}}
+        style={{width:"100%", marginTop:12, padding:"12px", borderRadius:12, border:"none", cursor:"pointer", background: dayBusy ? C.panel2 : C.lime, color: dayBusy ? C.muted : C.onAccent, fontWeight:800, fontSize:14, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:8}}
       >
         {dayBusy ? <><Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/>Planificando…</> : <><Sparkles size={16}/>Rutina sugerida para hoy</>}
       </button>
@@ -15066,7 +15091,7 @@ tr:last-child td{border-bottom:none}
       {editSetObj && (
         <div style={{
           position:"fixed", top:0, left:0, right:0, bottom:0,
-          background:"rgba(0,0,0,0.6)", backdropFilter:"blur(4px)",
+          background:"rgba(24,28,19,0.6)", backdropFilter:"blur(4px)",
           display:"grid", placeItems:"center", zIndex:9999, padding:20
         }} onClick={() => setEditSetObj(null)}>
           <div style={{
@@ -15077,10 +15102,10 @@ tr:last-child td{border-bottom:none}
               <>
                 <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Opciones de Serie</div>
                 <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>{editSetObj.s.w} kg x {editSetObj.s.reps}</div>
-                <button onClick={() => setEditSetObj({...editSetObj, isEditing: true})} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
+                <button onClick={() => setEditSetObj({...editSetObj, isEditing: true})} style={{background:C.lime, color:C.onAccent, fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
                   ✏️ Editar Serie
                 </button>
-                <button onClick={() => { delSetFromDay(editSetObj.exName, editSetObj.s); setEditSetObj(null); }} style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}>
+                <button onClick={() => { delSetFromDay(editSetObj.exName, editSetObj.s); setEditSetObj(null); }} style={{background:"rgba(190,18,60,0.19)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}>
                   🗑️ Borrar Serie
                 </button>
               </>
@@ -15106,7 +15131,7 @@ tr:last-child td{border-bottom:none}
                     setExlog({ ...exlog, [editSetObj.exName]: updatedSets });
                   }
                   setEditSetObj(null);
-                }} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
+                }} style={{background:C.lime, color:C.onAccent, fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
                   Guardar
                 </button>
               </>
@@ -15121,7 +15146,7 @@ tr:last-child td{border-bottom:none}
       {editExObj && (
         <div style={{
           position:"fixed", top:0, left:0, right:0, bottom:0,
-          background:"rgba(0,0,0,0.6)", backdropFilter:"blur(4px)",
+          background:"rgba(24,28,19,0.6)", backdropFilter:"blur(4px)",
           display:"grid", placeItems:"center", zIndex:9999, padding:20
         }} onClick={() => setEditExObj(null)}>
           <div style={{
@@ -15147,7 +15172,7 @@ tr:last-child td{border-bottom:none}
                         onClick={() => { moveExercise(editExObj.ex.name, s.key); setEditExObj(null); }}
                         style={{
                           display:"flex", alignItems:"center", gap:10, textAlign:"left",
-                          background: actual ? "transparent" : `${color}12`,
+                          background: actual ? "transparent" : `${alfa(color, 7)}`,
                           border:`1px solid ${actual ? C.line : color + "55"}`,
                           borderRadius:12, padding:"10px 12px",
                           cursor: actual ? "default" : "pointer", opacity: actual ? .5 : 1,
@@ -15174,18 +15199,18 @@ tr:last-child td{border-bottom:none}
                 <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>
                   {editExObj.ex.name}
                 </div>
-                <button onClick={() => setEditExObj({...editExObj, isEditing: true})} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
+                <button onClick={() => setEditExObj({...editExObj, isEditing: true})} style={{background:C.lime, color:C.onAccent, fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer"}}>
                   ✏️ Editar Ejercicio
                 </button>
                 <button
                   onClick={() => setEditExObj({...editExObj, isMoving: true})}
-                  style={{background:"rgba(205,255,74,0.08)", color:C.lime, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.lime}44`, cursor:"pointer"}}
+                  style={{background:"rgba(77,124,15,0.12)", color:C.lime, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${alfa(C.lime, 27)}`, cursor:"pointer"}}
                 >
                   ↔️ Mover a otro día
                 </button>
                 <button
                   onClick={() => { setMergeTarget(""); setEditExObj({...editExObj, isMerging: true}); }}
-                  style={{background:"rgba(74,214,255,0.1)", color:C.cyan, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.cyan}44`, cursor:"pointer"}}
+                  style={{background:"rgba(14,116,144,0.14)", color:C.cyan, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${alfa(C.cyan, 27)}`, cursor:"pointer"}}
                 >
                   🔗 Fusionar con otro ejercicio
                 </button>
@@ -15196,7 +15221,7 @@ tr:last-child td{border-bottom:none}
                     delExFromSession(canonKey, dateToUse);
                     setEditExObj(null);
                   }}
-                  style={{background:"rgba(255, 61, 113, 0.15)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}
+                  style={{background:"rgba(190,18,60,0.19)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}
                 >
                   🗑️ Quitar series de este día
                 </button>
@@ -15227,7 +15252,7 @@ tr:last-child td{border-bottom:none}
                     setEditExObj(null);
                     setMergeTarget("");
                   }}
-                  style={{background: mergeTarget ? C.lime : C.line, color: mergeTarget ? "#0c0e0b" : C.muted, fontWeight:800, padding:12, borderRadius:12, border:"none", cursor: mergeTarget ? "pointer" : "default"}}
+                  style={{background: mergeTarget ? C.lime : C.line, color: mergeTarget ? C.onAccent : C.muted, fontWeight:800, padding:12, borderRadius:12, border:"none", cursor: mergeTarget ? "pointer" : "default"}}
                 >
                   Confirmar Fusión
                 </button>
@@ -15284,8 +15309,8 @@ tr:last-child td{border-bottom:none}
                           setRefreshMuscleBusy(false);
                         }}
                         style={{
-                          background: refreshMuscleBusy ? C.panel2 : "rgba(205,255,74,0.1)",
-                          border: `1px solid ${refreshMuscleBusy ? C.line : "rgba(205,255,74,0.4)"}`,
+                          background: refreshMuscleBusy ? C.panel2 : "rgba(77,124,15,0.14)",
+                          border: `1px solid ${refreshMuscleBusy ? C.line : "rgba(77,124,15,0.4)"}`,
                           color: refreshMuscleBusy ? C.muted : C.lime,
                           borderRadius: 8, padding: "3px 8px", fontSize: 10.5,
                           fontWeight: 800, cursor: refreshMuscleBusy ? "default" : "pointer",
@@ -15330,7 +15355,7 @@ tr:last-child td{border-bottom:none}
                     }
                   }
                   setEditExObj(null);
-                }} style={{background:C.lime, color:"#0c0e0b", fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
+                }} style={{background:C.lime, color:C.onAccent, fontWeight:800, padding:12, borderRadius:12, border:"none", cursor:"pointer", marginTop:8}}>
                   Guardar
                 </button>
               </>
@@ -15344,13 +15369,13 @@ tr:last-child td{border-bottom:none}
       {confirmRemoveEx !== null && (
         <div style={{
           position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
-          background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)",
+          background: "rgba(24,28,19,0.7)", backdropFilter: "blur(4px)",
           display: "grid", placeItems: "center", zIndex: 9999, padding: 20
         }}>
           <div style={{
             background: C.panel, border: `1px solid ${C.line}`, borderRadius: 16,
             padding: 20, width: "100%", maxWidth: 360, display: "flex",
-            flexDirection: "column", gap: 14, boxShadow: "0 10px 30px rgba(0,0,0,0.5)"
+            flexDirection: "column", gap: 14, boxShadow: "0 10px 30px rgba(24,28,19,0.5)"
           }}>
             <div style={{fontSize: 16, fontWeight: 800, color: C.ink, textAlign: "center"}}>
               Quitar Ejercicio
@@ -15386,14 +15411,14 @@ tr:last-child td{border-bottom:none}
       {showSplitsEditor && (
         <div style={{
           position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
-          background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)",
+          background: "rgba(24,28,19,0.75)", backdropFilter: "blur(4px)",
           display: "grid", placeItems: "center", zIndex: 9998, padding: 16
         }}>
           <div style={{
             background: C.panel, border: `1px solid ${C.line}`, borderRadius: 16,
             padding: 20, width: "100%", maxWidth: 460, display: "flex",
             flexDirection: "column", gap: 14, maxHeight: "calc(100vh - 32px)",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.12)"
+            boxShadow: "0 8px 32px rgba(24,28,19,0.16)"
           }}>
             <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
               <span style={{fontSize:14, fontWeight:900, color:C.lime, letterSpacing:".05em"}}>
@@ -15414,7 +15439,7 @@ tr:last-child td{border-bottom:none}
                   onClick={() => setEditingSplitIdx(idx)}
                   style={{
                     padding:"6px 12px", borderRadius:8,
-                    background: editingSplitIdx === idx ? `${C.lime}22` : C.panel2,
+                    background: editingSplitIdx === idx ? `${alfa(C.lime, 13)}` : C.panel2,
                     border: `1px solid ${editingSplitIdx === idx ? C.lime : C.line}`,
                     color: editingSplitIdx === idx ? C.lime : C.muted,
                     fontSize:12, fontWeight:800, cursor:"pointer"
@@ -15584,7 +15609,7 @@ tr:last-child td{border-bottom:none}
                           setNewExText("");
                         }
                       }}
-                      style={{padding:"0 14px", background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+                      style={{padding:"0 14px", background:C.lime, color:C.onAccent, border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
                     >
                       Añadir
                     </button>
@@ -15602,7 +15627,7 @@ tr:last-child td{border-bottom:none}
                       }
                     }}
                     style={{
-                      background:"none", border:`1px solid ${C.rose}44`, color:C.rose,
+                      background:"none", border:`1px solid ${alfa(C.rose, 27)}`, color:C.rose,
                       borderRadius:8, padding:"6px 12px", fontSize:11.5, fontWeight:700, cursor:"pointer"
                     }}
                   >
@@ -15690,7 +15715,7 @@ tr:last-child td{border-bottom:none}
 
                   setEditSplitsData(editSplitsData.map(day => ({ ...day, ex: [...assignments[day.key]] })));
                 }}
-                style={{width:"100%", padding:"8px", background:"none", border:`1px solid ${C.cyan}66`, color:C.cyan, borderRadius:8, fontSize:11.5, fontWeight:700, cursor:"pointer"}}
+                style={{width:"100%", padding:"8px", background:"none", border:`1px solid ${alfa(C.cyan, 40)}`, color:C.cyan, borderRadius:8, fontSize:11.5, fontWeight:700, cursor:"pointer"}}
               >
                 Recuperar atajos del historial
               </button>
@@ -15703,7 +15728,7 @@ tr:last-child td{border-bottom:none}
                 </button>
                 <button
                   onClick={() => saveSplitsAndSyncExercises(editSplitsData)}
-                  style={{flex:1, padding:"10px", background:C.lime, color:"#0c0e0b", border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
+                  style={{flex:1, padding:"10px", background:C.lime, color:C.onAccent, border:"none", borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"}}
                 >
                   Guardar Todo
                 </button>
@@ -15913,7 +15938,7 @@ CRÍTICO: "Masa Esquelética" ≠ "Músculo esquelético". Masa Esquelética = h
       </div>
 
       <label
-        style={{display:"flex", alignItems:"center", justifyContent:"center", gap:6, width:"100%", height:38, borderRadius:10, border:`1px solid ${C.cyan}`, background:`${C.cyan}18`, color:C.cyan, fontSize:12.5, fontWeight:800, cursor:"pointer", marginBottom:8, boxSizing:"border-box"}}
+        style={{display:"flex", alignItems:"center", justifyContent:"center", gap:6, width:"100%", height:38, borderRadius:10, border:`1px solid ${C.cyan}`, background:`${alfa(C.cyan, 9)}`, color:C.cyan, fontSize:12.5, fontWeight:800, cursor:"pointer", marginBottom:8, boxSizing:"border-box"}}
       >
         📷 {previews.length > 0 ? `Añadir más (+${previews.length} cargada${previews.length !== 1 ? 's' : ''})` : "Elegir capturas o PDF"}
         <input type="file" accept="image/*,application/pdf" multiple style={{display:"none"}} onChange={onFiles}/>
@@ -15947,7 +15972,7 @@ CRÍTICO: "Masa Esquelética" ≠ "Músculo esquelético". Masa Esquelética = h
               disabled={busy}
               style={{flex:1, height:38, borderRadius:10, border:"none",
                 background: busy ? C.panel2 : `linear-gradient(135deg,${C.cyan},${C.lime})`,
-                color: busy ? C.muted : "#0c0e0b",
+                color: busy ? C.muted : C.onAccent,
                 fontSize:12.5, fontWeight:800, cursor: busy ? "default" : "pointer",
                 display:"flex", alignItems:"center", justifyContent:"center", gap:6
               }}
@@ -16053,7 +16078,7 @@ CRÍTICO: "Masa Esquelética" ≠ "Músculo esquelético". Masa Esquelética = h
             onClick={doSave}
             style={{width:"100%", height:42, borderRadius:11, border:"none", marginTop:12,
               background:`linear-gradient(135deg,${C.lime},${C.cyan})`,
-              color:"#0c0e0b", fontSize:13, fontWeight:800, cursor:"pointer"
+              color:C.onAccent, fontSize:13, fontWeight:800, cursor:"pointer"
             }}
           >
             💾 Guardar medición
@@ -16108,7 +16133,7 @@ Analiza la evolución y da retroalimentación concreta. Formato: párrafos corto
                 setFitAnalysisBusy(false);
               }}
               disabled={fitAnalysisBusy}
-              style={{width:"100%", height:40, borderRadius:10, border:`1px solid ${C.cyan}`, background:`${C.cyan}12`, color:fitAnalysisBusy?C.muted:C.cyan, fontSize:12.5, fontWeight:800, cursor:fitAnalysisBusy?"default":"pointer", marginTop:8, display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
+              style={{width:"100%", height:40, borderRadius:10, border:`1px solid ${C.cyan}`, background:`${alfa(C.cyan, 7)}`, color:fitAnalysisBusy?C.muted:C.cyan, fontSize:12.5, fontWeight:800, cursor:fitAnalysisBusy?"default":"pointer", marginTop:8, display:"flex", alignItems:"center", justifyContent:"center", gap:6}}
             >
               {fitAnalysisBusy ? <><span style={{animation:"spin 1s linear infinite", display:"inline-block"}}>⟳</span> Analizando…</> : "✦ Analizar composición con IA"}
             </button>
@@ -16867,9 +16892,9 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           </div>
         </div>
         <div style={{position:"relative", height:12, background:C.panel2, borderRadius:6, overflow:"hidden", display:"flex", border:`1px solid ${C.line}`}}>
-          <div style={{width:`${underPct}%`, height:"100%", background:"rgba(74,214,255,.07)"}}/>
-          <div style={{width:`${normalPct}%`, height:"100%", background:"rgba(107,78,255,.10)"}}/>
-          <div style={{width:`${overPct}%`, height:"100%", background:"rgba(255,107,138,.07)"}}/>
+          <div style={{width:`${underPct}%`, height:"100%", background:"rgba(14,116,144,0.11)"}}/>
+          <div style={{width:`${normalPct}%`, height:"100%", background:"rgba(91,33,182,0.14)"}}/>
+          <div style={{width:`${overPct}%`, height:"100%", background:"rgba(190,18,60,0.11)"}}/>
           
           <div 
             style={{
@@ -17030,7 +17055,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                 fontWeight:700, 
                 cursor:"pointer", 
                 border:`1px solid ${type === k ? TYPES[k][1] : C.line}`, 
-                background: type === k ? "rgba(255,255,255,.05)" : "transparent", 
+                background: type === k ? "rgba(27,31,22,0.09)" : "transparent", 
                 color: type === k ? TYPES[k][1] : C.muted
               }}
             >
@@ -17064,13 +17089,13 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
             <div style={{display:"flex", gap:6, marginBottom:8, flexWrap:"wrap"}}>
               {[["bascula","Báscula"],["inbody","InBody"],["manual","Manual"]].map(([v,l]) => (
                 <button key={v} className="btn-active-scale" onClick={() => setFuente(v)}
-                  style={{flex:1, minWidth:70, background: fuente===v ? "rgba(74,214,255,0.12)" : "transparent", border:`1px solid ${fuente===v ? C.cyan : C.line}`, borderRadius:8, padding:"5px 4px", color: fuente===v ? C.cyan : C.muted, fontSize:11, fontWeight:700}}>
+                  style={{flex:1, minWidth:70, background: fuente===v ? "rgba(14,116,144,0.16)" : "transparent", border:`1px solid ${fuente===v ? C.cyan : C.line}`, borderRadius:8, padding:"5px 4px", color: fuente===v ? C.cyan : C.muted, fontSize:11, fontWeight:700}}>
                   {l}
                 </button>
               ))}
               <button className="btn-active-scale" onClick={() => setAyunas(a => !a)}
                 title="Medir siempre en las mismas condiciones hace comparable la serie"
-                style={{flex:1, minWidth:80, background: ayunas ? "rgba(205,255,74,0.12)" : "transparent", border:`1px solid ${ayunas ? C.lime : C.line}`, borderRadius:8, padding:"5px 4px", color: ayunas ? C.lime : C.muted, fontSize:11, fontWeight:700}}>
+                style={{flex:1, minWidth:80, background: ayunas ? "rgba(77,124,15,0.16)" : "transparent", border:`1px solid ${ayunas ? C.lime : C.line}`, borderRadius:8, padding:"5px 4px", color: ayunas ? C.lime : C.muted, fontSize:11, fontWeight:700}}>
                 {ayunas ? "✓ En ayunas" : "En ayunas"}
               </button>
             </div>
@@ -17104,7 +17129,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           const chk = detectWeightOutlier(metricslog, weight);
           if (!chk.outlier) return null;
           return (
-            <div style={{marginTop:-4, marginBottom:10, background:"rgba(255,177,61,0.10)", border:`1px solid ${C.amber}55`, borderRadius:10, padding:"8px 11px", display:"flex", gap:7, alignItems:"flex-start"}}>
+            <div style={{marginTop:-4, marginBottom:10, background:"rgba(180,83,9,0.14)", border:`1px solid ${alfa(C.amber, 33)}`, borderRadius:10, padding:"8px 11px", display:"flex", gap:7, alignItems:"flex-start"}}>
               <ShieldAlert size={14} color={C.amber} style={{flexShrink:0, marginTop:1}}/>
               <div style={{fontSize:11, color:C.muted, lineHeight:1.45}}>
                 <b style={{color:C.amber}}>Comprueba el dato.</b> {chk.reason}
@@ -17162,7 +17187,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           </div>
         )}
 
-        <button onClick={() => { if(type === "peso") savePeso(); else if(type === "composicion") saveComposicion(); }} style={{width:"100%", marginTop:8, padding:"10px", borderRadius:10, border:"none", cursor:"pointer", background:C.lime, color:"#0c0e0b", fontWeight:800, fontSize:14}}>
+        <button onClick={() => { if(type === "peso") savePeso(); else if(type === "composicion") saveComposicion(); }} style={{width:"100%", marginTop:8, padding:"10px", borderRadius:10, border:"none", cursor:"pointer", background:C.lime, color:C.onAccent, fontWeight:800, fontSize:14}}>
           {buttonLabels[type] || "Guardar"}
         </button>
       </div>
@@ -17238,7 +17263,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
             <div style={{display:"flex", gap:6, marginBottom:8}}>
               {[["hombre","Hombre"],["mujer","Mujer"]].map(([v,l]) => (
                 <button key={v} className="btn-active-scale" onClick={() => updateBodyProfile({ sexo: v })}
-                  style={{flex:1, background: bp.sexo===v ? "rgba(205,255,74,0.12)" : "transparent", border:`1px solid ${bp.sexo===v ? C.lime : C.line}`, borderRadius:8, padding:"6px 4px", color: bp.sexo===v ? C.lime : C.muted, fontSize:11.5, fontWeight:700}}>
+                  style={{flex:1, background: bp.sexo===v ? "rgba(77,124,15,0.16)" : "transparent", border:`1px solid ${bp.sexo===v ? C.lime : C.line}`, borderRadius:8, padding:"6px 4px", color: bp.sexo===v ? C.lime : C.muted, fontSize:11.5, fontWeight:700}}>
                   {l}
                 </button>
               ))}
@@ -17263,7 +17288,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               {Object.entries(GOAL_PRESETS).map(([k, g]) => (
                 <button key={k} className="btn-active-scale"
                   onClick={() => updateBodyProfile({ objetivo: k, ritmoKgSemana: g.ritmo })}
-                  style={{flex:1, background: bp.objetivo===k ? "rgba(74,214,255,0.12)" : "transparent", border:`1px solid ${bp.objetivo===k ? C.cyan : C.line}`, borderRadius:8, padding:"6px 3px", color: bp.objetivo===k ? C.cyan : C.muted, fontSize:11, fontWeight:700}}>
+                  style={{flex:1, background: bp.objetivo===k ? "rgba(14,116,144,0.16)" : "transparent", border:`1px solid ${bp.objetivo===k ? C.cyan : C.line}`, borderRadius:8, padding:"6px 3px", color: bp.objetivo===k ? C.cyan : C.muted, fontSize:11, fontWeight:700}}>
                   {g.label}
                 </button>
               ))}
@@ -17275,7 +17300,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               {ACTIVITY_LEVELS.map(a => (
                 <button key={a.key} className="btn-active-scale" title={a.desc}
                   onClick={() => updateBodyProfile({ actividad: a.key })}
-                  style={{flex:"1 1 auto", background: bp.actividad===a.key ? "rgba(205,255,74,0.12)" : "transparent", border:`1px solid ${bp.actividad===a.key ? C.lime : C.line}`, borderRadius:8, padding:"5px 7px", color: bp.actividad===a.key ? C.lime : C.muted, fontSize:10.5, fontWeight:700}}>
+                  style={{flex:"1 1 auto", background: bp.actividad===a.key ? "rgba(77,124,15,0.16)" : "transparent", border:`1px solid ${bp.actividad===a.key ? C.lime : C.line}`, borderRadius:8, padding:"5px 7px", color: bp.actividad===a.key ? C.lime : C.muted, fontSize:10.5, fontWeight:700}}>
                   {a.label}
                 </button>
               ))}
@@ -17312,14 +17337,14 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                 </div>
                 {onApplyTargets && (
                   <button className="btn-active-scale" onClick={onApplyTargets}
-                    style={{width:"100%", padding:"10px 0", borderRadius:10, border:"none", background:C.lime, color:"#0c0e0b", fontWeight:800, fontSize:12.5, display:"flex", alignItems:"center", justifyContent:"center", gap:6}}>
+                    style={{width:"100%", padding:"10px 0", borderRadius:10, border:"none", background:C.lime, color:C.onAccent, fontWeight:800, fontSize:12.5, display:"flex", alignItems:"center", justifyContent:"center", gap:6}}>
                     <Check size={14}/> Aplicar estos objetivos
                   </button>
                 )}
 
                 {/* Avisos derivados del cruce entre composición y entrenamiento */}
                 {strengthLossAlert && (
-                  <div style={{marginTop:10, background:"rgba(255,177,61,0.10)", border:`1px solid ${C.amber}55`, borderRadius:10, padding:"9px 11px"}}>
+                  <div style={{marginTop:10, background:"rgba(180,83,9,0.14)", border:`1px solid ${alfa(C.amber, 33)}`, borderRadius:10, padding:"9px 11px"}}>
                     <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:3}}>
                       <TrendingUp size={13} color={C.amber} style={{transform:"scaleY(-1)"}}/>
                       <span style={{fontSize:10, fontWeight:800, color:C.amber, textTransform:"uppercase", letterSpacing:".05em"}}>
@@ -17330,7 +17355,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                   </div>
                 )}
                 {refeedAlert && (
-                  <div style={{marginTop:8, background:"rgba(74,214,255,0.10)", border:`1px solid ${C.cyan}55`, borderRadius:10, padding:"9px 11px"}}>
+                  <div style={{marginTop:8, background:"rgba(14,116,144,0.14)", border:`1px solid ${alfa(C.cyan, 33)}`, borderRadius:10, padding:"9px 11px"}}>
                     <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:3}}>
                       <Flame size={13} color={C.cyan}/>
                       <span style={{fontSize:10, fontWeight:800, color:C.cyan, textTransform:"uppercase", letterSpacing:".05em"}}>
@@ -17341,7 +17366,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                   </div>
                 )}
                 {metabolicAdaptation && (
-                  <div style={{marginTop:8, background:"rgba(255,177,61,0.08)", border:`1px solid ${C.amber}44`, borderRadius:10, padding:"9px 11px"}}>
+                  <div style={{marginTop:8, background:"rgba(180,83,9,0.12)", border:`1px solid ${alfa(C.amber, 27)}`, borderRadius:10, padding:"9px 11px"}}>
                     <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:3}}>
                       <Flame size={13} color={C.amber}/>
                       <span style={{fontSize:10, fontWeight:800, color:C.amber, textTransform:"uppercase", letterSpacing:".05em"}}>
@@ -17352,7 +17377,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                   </div>
                 )}
                 {recompAlert && (
-                  <div style={{marginTop:8, background:"rgba(205,255,74,0.10)", border:`1px solid ${C.lime}55`, borderRadius:10, padding:"9px 11px"}}>
+                  <div style={{marginTop:8, background:"rgba(77,124,15,0.14)", border:`1px solid ${alfa(C.lime, 33)}`, borderRadius:10, padding:"9px 11px"}}>
                     <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:3}}>
                       <Check size={13} color={C.lime}/>
                       <span style={{fontSize:10, fontWeight:800, color:C.lime, textTransform:"uppercase", letterSpacing:".05em"}}>
@@ -17483,7 +17508,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
               {RANGOS.map(r => (
                 <button key={r.d} className="btn-active-scale"
                   onClick={() => { setEvoRango(r.d); setEvoIdx(null); }}
-                  style={{flex:1, background: evoRango===r.d ? "rgba(205,255,74,0.12)" : "transparent",
+                  style={{flex:1, background: evoRango===r.d ? "rgba(77,124,15,0.16)" : "transparent",
                     border:`1px solid ${evoRango===r.d ? C.lime : C.line}`, borderRadius:8, padding:"5px 4px",
                     color: evoRango===r.d ? C.lime : C.muted, fontSize:11, fontWeight:700}}>
                   {r.l}
@@ -17498,7 +17523,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                 return (
                   <button key={s.key} className="btn-active-scale"
                     onClick={() => setEvoMetricas(m => ({ ...m, [s.key]: !m[s.key] }))}
-                    style={{display:"inline-flex", alignItems:"center", gap:5, background: on ? `${s.color}18` : "transparent",
+                    style={{display:"inline-flex", alignItems:"center", gap:5, background: on ? `${alfa(s.color, 9)}` : "transparent",
                       border:`1px solid ${on ? s.color : C.line}`, borderRadius:20, padding:"4px 10px",
                       color: on ? s.color : C.muted, fontSize:10.5, fontWeight:700}}>
                     <span style={{width:8, height:8, borderRadius:"50%", background: on ? s.color : C.line, display:"inline-block"}}/>
@@ -17569,7 +17594,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                 </div>
 
                 {recTodo.recomposing && !punto && (
-                  <div style={{marginTop:8, background:"rgba(205,255,74,0.10)", border:`1px solid ${C.lime}55`, borderRadius:10, padding:"8px 11px", fontSize:11, color:C.muted, lineHeight:1.45}}>
+                  <div style={{marginTop:8, background:"rgba(77,124,15,0.14)", border:`1px solid ${alfa(C.lime, 33)}`, borderRadius:10, padding:"8px 11px", fontSize:11, color:C.muted, lineHeight:1.45}}>
                     <b style={{color:C.lime}}>Vas bien.</b> Estás perdiendo grasa manteniendo (o ganando) masa magra.
                   </div>
                 )}
@@ -17653,7 +17678,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
         const bodyAge = Math.max(18, Math.round(AGE + (bmi - 22) * 1.1 + (G - 15) * 0.7 + (V - 4) * 1.3 - (smi - 9) * 1.8));
 
         const chip = (label, col) => (
-          <span style={{fontSize:10, fontWeight:700, color:col, background:`${col}1a`, border:`1px solid ${col}40`, borderRadius:20, padding:"2px 9px"}}>{label}</span>
+          <span style={{fontSize:10, fontWeight:700, color:col, background:`${alfa(col, 10)}`, border:`1px solid ${alfa(col, 25)}`, borderRadius:20, padding:"2px 9px"}}>{label}</span>
         );
 
         const miniCard = (label, val, hint, col=C.ink) => (
@@ -17744,7 +17769,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
             {/* === BLOQUE 5: Control de peso + Tipo de cuerpo === */}
             <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px"}}>
               <div style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em", marginBottom:10}}>Para llegar a tu meta ({goalW} kg)</div>
-              <div style={{background:`rgba(205,255,74,0.05)`, border:`1px solid rgba(205,255,74,0.18)`, borderRadius:10, padding:"12px 14px", marginBottom:12}}>
+              <div style={{background:`rgba(77,124,15,0.09)`, border:`1px solid rgba(77,124,15,0.18)`, borderRadius:10, padding:"12px 14px", marginBottom:12}}>
                 <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:10}}>
                   {[
                     ["Grasa a perder", `−${fatToLose.toFixed(1)} kg`],
@@ -17979,7 +18004,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                 key={d}
                 onClick={() => setStatsPeriod(d)}
                 style={{
-                  background: statsPeriod === d ? "rgba(107,78,255,.14)" : C.panel2,
+                  background: statsPeriod === d ? "rgba(91,33,182,0.18)" : C.panel2,
                   border: `1px solid ${statsPeriod === d ? C.lime : C.line}`,
                   color: statsPeriod === d ? C.lime : C.muted,
                   fontSize: 10,
@@ -18121,7 +18146,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                     return (
                       <button key={t.k} className="btn-active-scale"
                         onClick={() => { setNotaFiltro(t.k); setNotaLimite(20); }}
-                        style={{background: on ? "rgba(205,255,74,0.12)" : "transparent",
+                        style={{background: on ? "rgba(77,124,15,0.16)" : "transparent",
                           border:`1px solid ${on ? C.lime : C.line}`, borderRadius:20, padding:"4px 10px",
                           color: on ? C.lime : C.muted, fontSize:10.5, fontWeight:700}}>
                         {t.lbl} <span style={{opacity:.7}}>{n}</span>
@@ -18565,10 +18590,10 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
                 padding:"10px 6px", borderRadius:12, cursor:"pointer",
                 background: sel ? C.lime : C.panel,
                 border: sel ? `1.5px solid ${C.lime}` : `1px solid ${C.line}`,
-                color: sel ? "#0c0e0b" : C.muted,
-                boxShadow: sel ? "0 2px 8px rgba(205,255,74,0.2)" : "none"
+                color: sel ? C.onAccent : C.muted,
+                boxShadow: sel ? "0 2px 8px rgba(77,124,15,0.2)" : "none"
               }}>
-                <Ic size={14} color={sel ? "#0c0e0b" : C.muted} strokeWidth={sel ? 2.5 : 1.8}/>
+                <Ic size={14} color={sel ? C.onAccent : C.muted} strokeWidth={sel ? 2.5 : 1.8}/>
                 <span style={{fontSize:11, fontWeight:700, whiteSpace:"nowrap"}}>{label}</span>
               </button>
             );
@@ -18589,7 +18614,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
               }}
               className="btn-active-scale"
               style={{
-                background: "rgba(205,255,74,0.1)",
+                background: "rgba(77,124,15,0.14)",
                 border: "none",
                 color: C.lime,
                 fontSize: 11.5,
@@ -18625,7 +18650,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
             }}
             className="btn-active-scale"
             style={{
-              background: "rgba(205,255,74,0.1)",
+              background: "rgba(77,124,15,0.14)",
               border: "none",
               color: C.lime,
               fontSize: 11.5,
@@ -18683,7 +18708,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
               padding:"6px 12px", 
               borderRadius:9, 
               background: shopBusy ? C.panel2 : C.lime, 
-              color: shopBusy ? C.muted : "#0c0e0b", 
+              color: shopBusy ? C.muted : C.onAccent, 
               fontSize:11.5, 
               fontWeight:800,
               cursor:"pointer",
@@ -18768,7 +18793,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
               style={{
                 padding:"4px 10px",
                 borderRadius:6,
-                background: showMealsAiPanel ? "rgba(107,78,255,.12)" : C.panel2,
+                background: showMealsAiPanel ? "rgba(91,33,182,0.16)" : C.panel2,
                 border: `1px solid ${showMealsAiPanel ? C.lime : C.line}`,
                 color: showMealsAiPanel ? C.lime : C.muted,
                 fontSize:11,
@@ -18801,7 +18826,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
               <button 
                 onClick={adjustMealsWithAI}
                 disabled={aiMealsBusy || !mealsPrompt.trim()}
-                style={{padding:"0 12px", background: aiMealsBusy ? C.panel : C.lime, color: aiMealsBusy ? C.muted : "#0c0e0b", fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center"}}
+                style={{padding:"0 12px", background: aiMealsBusy ? C.panel : C.lime, color: aiMealsBusy ? C.muted : C.onAccent, fontWeight:800, borderRadius:8, fontSize:11.5, cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center"}}
               >
                 {aiMealsBusy ? <Loader2 size={14} style={{animation:"spin 1s linear infinite"}}/> : <Send size={14}/>}
               </button>
@@ -18811,12 +18836,12 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
         )}
 
         {previewMeals && (
-          <div className="pop" style={{background:"rgba(74,214,255,.05)", border:`1px solid ${C.cyan}`, borderRadius:12, padding:12, marginBottom:12}}>
+          <div className="pop" style={{background:"rgba(14,116,144,0.09)", border:`1px solid ${C.cyan}`, borderRadius:12, padding:12, marginBottom:12}}>
             <div style={{fontSize:11.5, fontWeight:800, color:C.cyan, display:"flex", alignItems:"center", gap:6, marginBottom:8}}>
               <Sparkles size={12}/> Vista previa de cambios generada por la IA
             </div>
             <div style={{display:"flex", gap:6, marginTop:8}}>
-              <button onClick={handleConfirmMeals} style={{flex:1, padding:"6px 12px", background:C.lime, color:"#0c0e0b", fontWeight:800, borderRadius:6, fontSize:11, cursor:"pointer"}}>
+              <button onClick={handleConfirmMeals} style={{flex:1, padding:"6px 12px", background:C.lime, color:C.onAccent, fontWeight:800, borderRadius:6, fontSize:11, cursor:"pointer"}}>
                 Confirmar y Aplicar
               </button>
               <button onClick={handleCancelPreview} style={{padding:"6px 12px", background:"none", border:`1px solid ${C.line}`, color:C.muted, fontWeight:700, borderRadius:6, fontSize:11, cursor:"pointer"}}>
@@ -18846,7 +18871,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
               </div>
               <span style={{fontSize:12, color:C.muted, fontVariantNumeric:"tabular-nums"}}>{meal.kcal}</span>
             </div>
-            <ul style={{margin:0, paddingLeft:16, fontSize:13, color:"#dde0cf", lineHeight:1.45}}>
+            <ul style={{margin:0, paddingLeft:16, fontSize:13, color:"#70774d", lineHeight:1.45}}>
               {meal.opts.map((opt, oidx) => (
                 <li key={oidx} style={{marginBottom:4}}>{opt}</li>
               ))}
@@ -18872,13 +18897,13 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
       {editingMealIdx !== null && (
         <div style={{
           position: "fixed", top: 0, left: 0, width: "100%", height: "100%",
-          background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center",
+          background: "rgba(24,28,19,0.75)", display: "flex", alignItems: "center",
           justifyContent: "center", zIndex: 9999, padding: 16
         }}>
           <div style={{
             background: C.panel, border: `1px solid ${C.line}`, borderRadius: 16,
             padding: 20, width: "100%", maxWidth: 420, display: "flex",
-            flexDirection: "column", gap: 14, boxShadow: "0 10px 30px rgba(0,0,0,0.5)"
+            flexDirection: "column", gap: 14, boxShadow: "0 10px 30px rgba(24,28,19,0.5)"
           }}>
             <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
               <span style={{fontSize:14, fontWeight:900, color:C.lime}}>
@@ -18929,7 +18954,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
                       />
                       <button 
                         onClick={() => removeOptionField(oIdx)}
-                        style={{background:"rgba(255,107,138,0.1)", border:"none", borderRadius:8, color:C.rose, cursor:"pointer", padding:"0 10px", display:"flex", alignItems:"center"}}
+                        style={{background:"rgba(190,18,60,0.14)", border:"none", borderRadius:8, color:C.rose, cursor:"pointer", padding:"0 10px", display:"flex", alignItems:"center"}}
                       >
                         <Trash2 size={13}/>
                       </button>
@@ -18954,7 +18979,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
                 <button 
                   onClick={() => deleteMeal(editingMealIdx)}
                   style={{
-                    padding:"8px 14px", background:"rgba(255,107,138,0.15)", color:C.rose, border:`1px solid ${C.rose}44`,
+                    padding:"8px 14px", background:"rgba(190,18,60,0.19)", color:C.rose, border:`1px solid ${alfa(C.rose, 27)}`,
                     borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"
                   }}
                 >
@@ -18964,7 +18989,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
               <button 
                 onClick={saveMeal}
                 style={{
-                  flex:1, padding:"8px 14px", background:C.lime, color:"#0c0e0b", border:"none",
+                  flex:1, padding:"8px 14px", background:C.lime, color:C.onAccent, border:"none",
                   borderRadius:8, fontSize:12, fontWeight:800, cursor:"pointer"
                 }}
               >
@@ -18977,7 +19002,7 @@ function Plan({presetKey, setPresetKey, customPresets, setCustomPresets, shoppin
 
 
       {/* Version footer */}
-      <div style={{textAlign:"center", padding:"8px 0 24px", fontSize:9, color:"rgba(154,160,136,0.4)", fontWeight:700, letterSpacing:".1em"}}>
+      <div style={{textAlign:"center", padding:"8px 0 24px", fontSize:9, color:"rgba(95,107,87,0.4)", fontWeight:700, letterSpacing:".1em"}}>
         {APP_VERSION}
       </div>
     </div>

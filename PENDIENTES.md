@@ -311,3 +311,41 @@ Se comprobó en el navegador el tramo alto, que es el que estaba roto: fondo
 degradado, en línea hay que usar `background`, nunca `backgroundColor`. Las
 clases con degradado son `.muscle-heatmap-cell`, `.comp-metric-box`,
 `.chat-bubble.user` y `.chat-bubble.assistant`.
+
+---
+
+## Tema claro (W51)
+
+El fondo pasa de negro a blanco. La marca sigue siendo verde, pero el lima
+`#cdff4a` daba **1.3:1 de contraste sobre blanco** — ilegible como texto. El
+acento es ahora `#4d7c0f`, que sirve a la vez de texto y de relleno, y sobre un
+relleno de acento el texto es siempre `--on-accent` (blanco).
+
+Casi todo el color ya salía de variables CSS, así que el grueso del cambio está
+en `:root`. Lo demás:
+
+| Qué | Por qué |
+|-----|---------|
+| `--on-accent`, `--track`, `--overlay`, `--tint-*` | El tema oscuro daba por hecho que "texto sobre acento" era el color del fondo, y que las pistas de las barras eran blanco translúcido. Sobre blanco ninguna de las dos cosas vale |
+| Sombras `rgba(0,0,0,.4-.6)` → sombras suaves y frías | El negro al 40% sobre blanco ensucia en vez de elevar |
+| Resplandores lima → sombras verdes | Un *glow* sobre blanco se ve como suciedad, no como brillo |
+| Barrido de contraste automático | Se recalculó cada color de texto con menos de 4:1 sobre blanco y se oscureció hasta 4.6:1 (ámbar, rosa, oro de los PR…) |
+| Escala del Volumen Semanal | Era violeta → lima, que no significaba nada. Ahora gris → ámbar → verde claro → verde sólido: nada / poco / suficiente / en objetivo |
+| Silueta del mapa muscular | El músculo sin trabajar era verde muy oscuro: sobre blanco la figura entera era una mancha negra. Ahora gris claro, y el borde del calor es más oscuro que el relleno, no más claro |
+| Preloader, `theme-color`, manifiesto y ventana de espera de la IA | Seguían en negro: la app abría con un fogonazo oscuro antes de pintar |
+| Pantallas de error críticas | De negro sobre rojo a un fondo claro; siguen diciendo lo mismo |
+
+### Un fallo que llevaba tiempo escondido
+
+`` `${C.lime}44` `` — el truco de pegarle el alfa en hexadecimal a un color.
+Pero los tokens de `C` **ya eran variables CSS**, así que eso producía
+literalmente `var(--accent-primary)44`: CSS inválido, y el borde o el fondo
+simplemente no se pintaban. Sobre negro no se notaba. Eran **47 sitios**.
+
+Ahora se usa `alfa(color, pct)` con `color-mix`, que sí sabe mezclar una
+variable — y funciona igual si lo que recibe es un hex de verdad.
+
+**Los PDF no se tocaron.** Se imprimen en papel blanco y ya tenían su propia
+paleta. La frontera fiable resultó ser que los colores de la interfaz van
+entrecomillados y los del CSS de los PDF van sueltos; el primer intento los
+separaba por si la línea tenía etiquetas HTML, y eso descartaba media interfaz.
