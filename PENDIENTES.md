@@ -628,3 +628,43 @@ conviene rotarlo"*, *"32 días sin hacerlo"*.
 La misma lectura viaja al prompt, para que el PDF no contradiga lo que la app
 acaba de recomendar: al ROTAR se le pide cambiar rango de repeticiones o técnica
 en vez de subir carga a ciegas, y al NUEVO arrancar conservador.
+
+---
+
+## El análisis de tendencia llegaba cortado y en genérico (W61)
+
+Terminaba a media frase — *"...4 kg en aproximadamente 2.5 meses,"* — y no daba
+ni proyecciones ni recomendaciones concretas.
+
+### Por qué se cortaba
+
+`maxOutputTokens` en texto libre era **2048**, y un modelo con razonamiento se
+los gasta pensando antes de escribir nada. Subido a 8192. (El panel no
+recortaba: la respuesta llegaba así de la API.)
+
+### Por qué era genérico
+
+El coach solo veía una lista de pesos. La app ya calculaba, y no le pasaba:
+
+- ritmo real en kg/semana por regresión, y semanas hasta la meta
+- proyección a 12 semanas con partición grasa/magra tipo Forbes
+- BMR, TDEE estimado, TDEE **medido** por consumo y peso real
+- adaptación metabólica, refeed/diet break, recomposición, pérdida de fuerza
+- cintura y ratio cintura/altura con su clasificación
+
+Ahora va todo, y la respuesta se pide en cinco secciones fijas: **Dónde estás ·
+Proyección · Nutrición: qué ajustar · Entrenamiento: qué ajustar · Qué vigilar**,
+con la instrucción de citar números reales y no adjetivos.
+
+### Tres errores que solo se vieron interceptando el prompt
+
+Se capturó la llamada real en el navegador para leer lo que se enviaba:
+
+- `calcWeightTrend` devuelve `kgPerWeek`, no `slope` → el ritmo salía `NaN`
+- `getTrendWeight(metricslog, alpha)` recibía una **fecha** como alfa
+- `refeedAlert.message` no existe (es `reason`) → *"Refeed: undefined"*, y
+  `waistMetrics.riesgo` es un objeto → *"(\[object Object\])"*
+
+Los tres habrían entrado en el prompt como datos, no como huecos: el modelo
+habría razonado sobre ellos. Además la proyección mostraba cuatro semanas
+consecutivas que se diferencian en 200 g; ahora son hitos repartidos (0/4/8/12).

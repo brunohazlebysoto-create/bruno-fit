@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W60";
+const APP_VERSION = "v2026.07.29-W61";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -773,8 +773,10 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
         const generationConfig = {
           temperature: 0.2,
           // 8192 se quedaba corto para el plan de rutina y la respuesta llegaba
-          // cortada a media lista de ejercicios
-          maxOutputTokens: options.maxTokens || (responseSchema ? 24576 : 2048)
+          // cortada a media lista de ejercicios. Y en texto libre, 2048 se los
+          // come el propio razonamiento del modelo antes de escribir nada:
+          // el análisis de tendencia acababa cortado a media frase.
+          maxOutputTokens: options.maxTokens || (responseSchema ? 24576 : 8192)
         };
         
         if (responseSchema) {
@@ -17822,10 +17824,59 @@ function Registro({
       });
     });
 
+    // ── Todo lo que la app YA calcula y el análisis no estaba usando ──
+    // Sin esto el coach solo veía una lista de pesos y respondía en genérico,
+    // teniendo la app la proyección, el TDEE medido y las alertas a mano.
+    const r1 = (v) => v == null || isNaN(v) ? null : Math.round(v * 10) / 10;
+    const tendenciaPeso = calcWeightTrend(metricslog);   // { kgPerWeek, trend, dataPoints }
+    const pesoTend = getTrendWeight(metricslog);         // el 2º parámetro es alfa, no una fecha
+    const objetivoKg = parseFloat(bodyProfile?.pesoObjetivo) || GOAL_W;
+    const faltan = r1(metricsToUse.weight - objetivoKg);
+    const ritmoSem = tendenciaPeso?.kgPerWeek != null ? r1(tendenciaPeso.kgPerWeek) : null;
+    const semanasAMeta = (ritmoSem && ritmoSem < 0 && faltan > 0) ? Math.ceil(faltan / Math.abs(ritmoSem)) : null;
+
+    // Hitos repartidos: cuatro semanas seguidas se diferencian en 200 g y no
+    // dicen nada; 0/4/8/12 sí muestran hacia dónde va
+    const proy = projections || [];
+    const proyText = proy.length
+      ? [0, Math.floor(proy.length / 3), Math.floor((proy.length * 2) / 3), proy.length - 1]
+          .filter((v, i, a2) => a2.indexOf(v) === i)
+          .map(i => proy[i])
+          .filter(Boolean)
+          .map(p => `sem ${p.semana}: ${p.peso}kg · ${p.grasaPct}% grasa · ${p.musculo}kg músculo`)
+          .join(" | ")
+      : "sin proyección calculada";
+
+    const objText = nutritionTargets
+      ? `BMR ${nutritionTargets.bmr} · TDEE estimado ${nutritionTargets.tdee} · objetivo ${nutritionTargets.kcal} kcal (P ${nutritionTargets.p}g / C ${nutritionTargets.c}g / G ${nutritionTargets.f}g / fibra ${nutritionTargets.fibra}g)`
+      : "objetivos sin calcular";
+
+    const alertas = [
+      tdeeEstimate ? `TDEE MEDIDO por consumo y peso real: ${tdeeEstimate} kcal` : null,
+      metabolicAdaptation?.detected ? `Adaptación metabólica: ${metabolicAdaptation.message}` : null,
+      refeedAlert?.recommended ? `Refeed/diet break recomendado (${refeedAlert.kind}): ${refeedAlert.reason} · ${refeedAlert.weeksInDeficit} semanas en déficit, adherencia ${refeedAlert.adherencePct}%` : null,
+      recompAlert ? `Recomposición detectada: ${recompAlert.message}` : null,
+      strengthLossAlert ? `Pérdida de fuerza en déficit: ${strengthLossAlert.message}` : null,
+      waistMetrics?.available ? `Cintura ${waistMetrics.cintura}cm · cintura/altura ${waistMetrics.whtr} (${waistMetrics.riesgo?.label || "?"}) · ${waistMetrics.deltaTotal} cm desde el inicio` : null,
+    ].filter(Boolean).join("\n");
+
     try{
       const sys = `Eres el coach personal de Bruno. ${getProfileStr(metricsToUse.weight, metricsToUse.musculo, metricsToUse.grasaPct, metricsToUse.visceral, bodyProfile)}
 Objetivo principal: reducción de grasa corporal manteniendo masa muscular. Dieta hiperproteica.
-Responde en español con análisis específico y 3-5 sugerencias concretas y accionables basadas en los datos reales. Formato: 1 párrafo de análisis + lista de sugerencias numeradas.`;
+
+Responde en español, con MARKDOWN y estas cinco secciones, en este orden y con estos títulos exactos:
+
+**Dónde estás** — 2-3 frases con los números reales: peso de tendencia, ritmo semanal, qué parte de lo perdido es grasa y qué parte magra. Di si el ritmo es adecuado, lento o demasiado agresivo.
+
+**Proyección** — usando el ritmo actual: cuándo llegas al objetivo, con qué composición, y qué pasaría si mantienes exactamente lo que haces hoy. Da fechas y kilos, no adjetivos.
+
+**Nutrición: qué ajustar** — calorías y macros concretos, con el número exacto y el porqué. Si el TDEE medido difiere del estimado, explica cuál usar.
+
+**Entrenamiento: qué ajustar** — frecuencia, volumen y qué priorizar según los PRs y los días entrenados.
+
+**Qué vigilar** — 2-3 riesgos concretos de sus propios datos (estancamiento, pérdida de fuerza, adaptación metabólica, adherencia baja) y la señal que indicaría que hay que corregir.
+
+Cita SIEMPRE números reales del contexto. No inventes datos que no estén. Si falta un dato para una sección, dilo en una línea y sigue.`;
       const userMsg = `DATOS DE BRUNO para análisis completo:
 
 📊 HISTORIAL DE PESO (cronológico): ${series}
@@ -17840,7 +17891,17 @@ Actual → Músculo: ${metricsToUse.musculo}kg | Grasa: ${metricsToUse.grasaPct}
 🏋️ ENTRENAMIENTO: ${recentWorkoutDays.size} días entrenados en últimas 4 semanas
 PRs actuales: ${prText}
 
-Analiza la tendencia de peso y composición corporal, identifica si está progresando hacia su objetivo de definición, y da sugerencias ESPECÍFICAS de calorías, macros y frecuencia de entrenamiento basadas en estos datos reales.`;
+📈 TENDENCIA CALCULADA
+Peso de tendencia (suavizado): ${pesoTend != null ? pesoTend + "kg" : "sin datos"}
+Ritmo: ${ritmoSem != null ? `${ritmoSem} kg/semana (${tendenciaPeso.trend}, sobre ${tendenciaPeso.dataPoints} mediciones)` : "sin tendencia fiable"}
+Objetivo: ${objetivoKg}kg · faltan ${faltan != null ? faltan + "kg" : "?"}${semanasAMeta ? ` · a este ritmo, ~${semanasAMeta} semanas` : ""}
+
+🔮 PROYECCIÓN A 12 SEMANAS (partición grasa/magra tipo Forbes): ${proyText}
+
+🎯 OBJETIVOS CALCULADOS: ${objText}
+
+⚠️ SEÑALES DETECTADAS POR LA APP:
+${alertas || "ninguna"}`;
       const out = await callGemini([{role:"user", content:userMsg}], sys);
       setTrend(out);
       saveKey("last_trend", out);
