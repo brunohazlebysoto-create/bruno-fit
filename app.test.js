@@ -2038,3 +2038,67 @@ describe('respuestas de IA cortadas a medias', () => {
     expect(() => cleanAndParseJSON('no soy json')).toThrow(/incompleta o mal formada/);
   });
 });
+
+describe('revisión de la lectura del informe corporal', () => {
+  const { validateBodyMetrics } = require('./app.js');
+
+  test('detecta el mismo número en kg y en % — el fallo real del informe', () => {
+    // "Músculo esquelético: 42.9 kg" y "Músculo esquelético: 42.9 %"
+    const { entry, avisos } = validateBodyMetrics(
+      { peso: 92.1, grasaPct: 25.1, smmKg: 42.9, musculoEsq: 42.9 }, 180);
+    expect(entry.musculoEsq).toBeCloseTo(46.6, 0);   // 42.9 / 92.1
+    expect(avisos.join(" ")).toMatch(/musculoEsq/);
+  });
+
+  test('rellena lo que falta con las identidades físicas', () => {
+    const { entry } = validateBodyMetrics({ peso: 92.1, grasaPct: 25.1, masaOsea: 4.6 }, 180);
+    expect(entry.masaGrasa).toBeCloseTo(23.1, 1);      // 92.1 × 25.1%
+    expect(entry.pesoSinGrasa).toBeCloseTo(69, 1);     // 92.1 − 23.1
+    expect(entry.masaMuscular).toBeCloseTo(64.4, 1);   // 69 − 4.6
+    expect(entry.musculo).toBeCloseTo(64.4, 1);        // lo que lee el resto de la app
+    expect(entry.imc).toBeCloseTo(28.4, 1);            // 92.1 / 1.8²
+  });
+
+  test('corrige un valor que se contradice con el resto', () => {
+    const { entry, avisos } = validateBodyMetrics(
+      { peso: 92.1, grasaPct: 25.1, masaGrasa: 31 }, 180);   // 31 no cuadra con 25.1%
+    expect(entry.masaGrasa).toBeCloseTo(23.1, 1);
+    expect(avisos.join(" ")).toMatch(/masaGrasa/);
+  });
+
+  test('descarta lecturas imposibles en vez de guardarlas', () => {
+    const { entry, avisos } = validateBodyMetrics({ peso: 92, grasaPct: 251, visceral: 400 }, 180);
+    expect(entry.grasaPct).toBeUndefined();
+    expect(entry.visceral).toBeUndefined();
+    expect(avisos.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test('cuando puede, repara el orden imposible en vez de solo avisar', () => {
+    // Masa muscular 80 con peso sin grasa 69: se recalcula desde la identidad
+    const { entry, avisos } = validateBodyMetrics(
+      { peso: 92, grasaPct: 25, masaMuscular: 80, pesoSinGrasa: 69, masaOsea: 4.6 }, 180);
+    expect(entry.masaMuscular).toBeCloseTo(64.4, 1);
+    expect(avisos.join(" ")).toMatch(/masaMuscular/);
+  });
+
+  test('avisa cuando el orden es imposible y no hay forma de repararlo', () => {
+    // El músculo esquelético no puede superar a la masa muscular total, y aquí
+    // no hay ninguna identidad de la que recalcularlo
+    const { avisos } = validateBodyMetrics(
+      { peso: 92, grasaPct: 25, smmKg: 70, masaMuscular: 64.4, pesoSinGrasa: 69, masaOsea: 4.6 }, 180);
+    expect(avisos.join(" ")).toMatch(/no puede superar/);
+  });
+
+  test('una lectura correcta no genera ruido', () => {
+    const { avisos } = validateBodyMetrics(
+      { peso: 92.1, imc: 28.4, grasaPct: 25.1, masaGrasa: 23.1, pesoSinGrasa: 69,
+        masaOsea: 4.6, masaMuscular: 64.4, visceral: 9 }, 180);
+    expect(avisos).toEqual([]);
+  });
+
+  test('sin altura no inventa el IMC, y sin peso no rompe', () => {
+    expect(validateBodyMetrics({ peso: 92, grasaPct: 25 }, null).entry.imc).toBeUndefined();
+    expect(validateBodyMetrics({}, 180).avisos).toEqual([]);
+    expect(validateBodyMetrics(null, 180).entry).toEqual({});
+  });
+});

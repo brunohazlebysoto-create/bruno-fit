@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W56";
+const APP_VERSION = "v2026.07.29-W57";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1093,6 +1093,90 @@ function normalizeBodyEntry(raw) {
   return e;
 }
 
+// Rangos plausibles en un adulto. Fuera de esto no es una medición: es un error
+// de lectura de la imagen.
+const RANGOS_BIO = {
+  peso: [25, 300], imc: [10, 70], grasaPct: [3, 70], masaGrasa: [0.5, 150],
+  grasaSubc: [1, 60], masaMuscular: [10, 120], smmKg: [8, 80], musculoEsq: [15, 65],
+  masaOsea: [0.8, 8], pesoSinGrasa: [20, 150], aguaKg: [15, 100], pctAgua: [30, 80],
+  proteinaKg: [3, 30], pctProteina: [5, 30], visceral: [1, 30], bmr: [700, 4500],
+  edadCorporal: [10, 110], smi: [3, 20], puntuacion: [0, 100], whr: [0.4, 1.5],
+};
+
+// Revisa una medición contra sus propias identidades físicas y la repara.
+// Leer un informe desde una foto falla de formas concretas y detectables: el
+// mismo número copiado en la casilla de kg y en la de %, un decimal perdido, un
+// campo que no cuadra con el resto. Y como estos datos ajustan después los
+// planes de nutrición y entrenamiento, un error aquí se propaga a todo.
+// Devuelve la medición corregida y la lista de lo que se tocó, para enseñarla.
+function validateBodyMetrics(raw, alturaCm) {
+  const e = normalizeBodyEntry(raw);
+  const avisos = [];
+  const n = (k) => { const v = parseFloat(e[k]); return isFinite(v) ? v : null; };
+  const set = (k, v, motivo) => {
+    const antes = n(k);
+    const nuevo = Math.round(v * 10) / 10;
+    if (antes != null && Math.abs(antes - nuevo) < 0.05) return;
+    e[k] = nuevo;
+    avisos.push(antes == null ? `${k}: faltaba, se calculó ${nuevo} (${motivo})`
+                              : `${k}: ${antes} no cuadra, corregido a ${nuevo} (${motivo})`);
+  };
+
+  // 1) Fuera de rango = lectura errónea. Se descarta antes de usarla para nada.
+  Object.entries(RANGOS_BIO).forEach(([k, [min, max]]) => {
+    const v = n(k);
+    if (v != null && (v < min || v > max)) {
+      avisos.push(`${k}: ${v} está fuera de lo posible, se descarta`);
+      delete e[k];
+    }
+  });
+
+  const peso = n("peso") ?? n("weight");
+  if (peso == null) return { entry: e, avisos };
+
+  // 2) El mismo número en kg y en %: imposible salvo casualidad, y es el fallo
+  //    típico al leer dos filas seguidas del informe con el mismo rótulo.
+  const paresKgPct = [["smmKg", "musculoEsq"], ["masaGrasa", "grasaPct"], ["aguaKg", "pctAgua"], ["proteinaKg", "pctProteina"]];
+  paresKgPct.forEach(([kg, pct]) => {
+    if (n(kg) != null && n(pct) != null && Math.abs(n(kg) - n(pct)) < 0.05) {
+      const calculado = Math.round((n(kg) / peso) * 1000) / 10;
+      avisos.push(`${pct}: venía igual que ${kg} (${n(kg)}), que no puede ser; recalculado a ${calculado}%`);
+      e[pct] = calculado;
+    }
+  });
+
+  // 3) Identidades de la composición. Se rellena lo que falte y se corrige lo
+  //    que se contradiga, tomando como ancla el peso y el % de grasa.
+  if (n("grasaPct") != null) set("masaGrasa", peso * n("grasaPct") / 100, "peso × % de grasa");
+  else if (n("masaGrasa") != null) set("grasaPct", (n("masaGrasa") / peso) * 100, "masa grasa ÷ peso");
+
+  if (n("masaGrasa") != null) set("pesoSinGrasa", peso - n("masaGrasa"), "peso − masa grasa");
+  if (n("pesoSinGrasa") != null && n("masaOsea") != null) set("masaMuscular", n("pesoSinGrasa") - n("masaOsea"), "peso sin grasa − hueso");
+  if (n("masaMuscular") != null) e.musculo = n("masaMuscular");
+
+  // 4) Orden obligatorio: SMM ≤ masa muscular ≤ peso sin grasa ≤ peso
+  const cadena = [["smmKg", n("smmKg")], ["masaMuscular", n("masaMuscular")], ["pesoSinGrasa", n("pesoSinGrasa")], ["peso", peso]];
+  for (let i = 0; i < cadena.length - 1; i++) {
+    const [ka, va] = cadena[i], [kb, vb] = cadena[i + 1];
+    if (va != null && vb != null && va > vb + 0.2) {
+      avisos.push(`${ka} (${va}) no puede superar a ${kb} (${vb}): revísalo`);
+    }
+  }
+
+  // 5) IMC y SMI se derivan de la altura, así que se comprueban con ella
+  const h = parseFloat(alturaCm);
+  if (h > 50) {
+    const m2 = (h / 100) ** 2;
+    set("imc", peso / m2, "peso ÷ altura²");
+    if (n("smmKg") != null && n("smi") != null && Math.abs(n("smi") - n("smmKg") / m2) > 4) {
+      avisos.push(`smi: ${n("smi")} no encaja con un músculo esquelético de ${n("smmKg")} kg`);
+    }
+  }
+
+  if (n("peso") != null) e.weight = n("peso");
+  return { entry: e, avisos };
+}
+
 // Composición vigente a una fecha, arrastrando el último valor conocido de cada
 // campo. Antes se leía SOLO la entrada más reciente: si el lunes te hacías un
 // InBody y el martes te pesabas en una báscula normal, el martes la app perdía
@@ -1723,20 +1807,41 @@ function buildRecompositionSeries(metricslog) {
 
   let lastGrasa = null, lastCintura = null;
   const points = [];
+  const r1 = (v) => Math.round(v * 10) / 10;
   dates.forEach(d => {
-    const e = metricslog[d] || {};
-    const peso = ema[d] ?? parseFloat(e.weight);
+    const e = normalizeBodyEntry(metricslog[d]);
+    const pesoReal = parseFloat(e.weight);
+    const peso = ema[d] ?? pesoReal;
     if (!(peso > 0)) return;
     const g = parseFloat(e.grasaPct);
     if (!isNaN(g) && g > 0) lastGrasa = g;
     const c = parseFloat(e.cintura);
     if (!isNaN(c) && c > 0) lastCintura = c;
+
+    // Si ese día HAY una medición real de masa grasa o magra, se usa esa. Antes
+    // se derivaba siempre del peso suavizado (93.8 × 74.9% = 70.3 kg) y no
+    // cuadraba con los 69 kg que el propio informe había medido: el gráfico y
+    // el registro decían cosas distintas del mismo día.
+    const magraMedida = parseFloat(e.pesoSinGrasa);
+    const grasaMedida = parseFloat(e.masaGrasa);
+    const medido = (magraMedida > 0 || grasaMedida > 0) && pesoReal > 0;
+
+    const magra = magraMedida > 0 ? r1(magraMedida)
+      : (grasaMedida > 0 && pesoReal > 0) ? r1(pesoReal - grasaMedida)
+      : lastGrasa != null ? r1(peso * (1 - lastGrasa / 100)) : null;
+    const grasaKg = grasaMedida > 0 ? r1(grasaMedida)
+      : (magraMedida > 0 && pesoReal > 0) ? r1(pesoReal - magraMedida)
+      : lastGrasa != null ? r1(peso * (lastGrasa / 100)) : null;
+
     points.push({
       date: d,
-      peso: Math.round(peso * 10) / 10,
+      // En los días con medición se muestra el peso de ese día; el suavizado
+      // solo rellena los días sin pesada
+      peso: r1(medido ? pesoReal : peso),
+      pesoTendencia: r1(peso),
+      medido,
       grasaPct: lastGrasa,
-      magra: lastGrasa != null ? Math.round(peso * (1 - lastGrasa / 100) * 10) / 10 : null,
-      grasaKg: lastGrasa != null ? Math.round(peso * (lastGrasa / 100) * 10) / 10 : null,
+      magra, grasaKg,
       cintura: lastCintura,
     });
   });
@@ -16348,7 +16453,7 @@ tr:last-child td{border-bottom:none}
 /* ===== FITDAYS TRENDS MINI-CHART ===== */
 
 /* ===== FITDAYS IMPORT COMPONENT ===== */
-function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
+function FitdaysImport({ metricslog, setMetricslog, geminiKey, bodyProfile }) {
   const [previews, setPreviews] = React.useState([]);
   const [imagesData, setImagesData] = React.useState([]);
   const [busy, setBusy] = React.useState(false);
@@ -16361,6 +16466,7 @@ function FitdaysImport({ metricslog, setMetricslog, geminiKey }) {
   const [segMusculoOpen, setSegMusculoOpen] = React.useState(false);
   const [fitAnalysis, setFitAnalysis] = React.useState("");
   const [fitAnalysisBusy, setFitAnalysisBusy] = React.useState(false);
+  const [avisos, setAvisos] = useState([]);
 
   const compressImage = (file) => compressImageToDataUrl(file, 600, 0.8);
 
@@ -16456,10 +16562,15 @@ CRÍTICO: "Masa Esquelética" ≠ "Músculo esquelético". Masa Esquelética = h
       if (!parsed || parsed.peso == null) {
         setErr("No se detectaron datos. Intenta con otras capturas.");
       } else {
-        setExtracted(parsed);
+        // Se revisa contra las identidades físicas ANTES de enseñarlo: leer un
+        // informe desde una foto falla de formas detectables, y estos datos
+        // ajustan después los planes de nutrición y entrenamiento.
+        const revision = validateBodyMetrics(parsed, bodyProfile?.alturaCm);
+        setAvisos(revision.avisos);
+        setExtracted(revision.entry);
         const f = {};
         Object.keys(FITDAYS_SCHEMA.properties).forEach(k => {
-          if (parsed[k] != null) f[k] = String(parsed[k]);
+          if (revision.entry[k] != null) f[k] = String(revision.entry[k]);
         });
         setForm(f);
       }
@@ -16519,7 +16630,9 @@ CRÍTICO: "Masa Esquelética" ≠ "Músculo esquelético". Masa Esquelética = h
     // grasaPct…), no solo con el del informe: si no, los datos quedaban en el
     // registro pero la composición seguía en los valores por defecto.
     const current = metricslog[date] || {};
-    const updated = normalizeBodyEntry({ ...current, ...entry, fuente: "inbody" });
+    const revision = validateBodyMetrics({ ...current, ...entry, fuente: "inbody" }, bodyProfile?.alturaCm);
+    setAvisos(revision.avisos);
+    const updated = revision.entry;
     const newLog = { ...metricslog, [date]: updated };
     // Una sola vía de guardado: setMetricslog ya persiste y sincroniza. El
     // saveKey suelto que había aquí escribía por detrás y se saltaba ese camino.
@@ -16542,6 +16655,22 @@ CRÍTICO: "Masa Esquelética" ≠ "Músculo esquelético". Masa Esquelética = h
       <div style={{fontSize:10.5, color:C.muted, marginBottom:10, lineHeight:1.45}}>
         Sube la captura de tu báscula, InBody o Fitdays y la IA extrae los valores. Podrás revisarlos antes de guardar.
       </div>
+
+      {/* Qué se corrigió al revisar la lectura. Se enseña SIEMPRE, porque estos
+          datos ajustan después los planes: un error aquí se propaga a todo. */}
+      {avisos.length > 0 && (
+        <div style={{background:"rgba(180,83,9,0.08)", border:`1px solid rgba(180,83,9,0.28)`, borderRadius:10, padding:"9px 11px", marginBottom:10}}>
+          <div style={{fontSize:11, fontWeight:800, color:C.amber, marginBottom:4}}>
+            ⚠ Se revisaron {avisos.length} valor{avisos.length !== 1 ? "es" : ""} de la lectura
+          </div>
+          <ul style={{margin:0, paddingLeft:16, fontSize:10.5, color:C.muted, lineHeight:1.55}}>
+            {avisos.map((a, i) => <li key={i}>{a}</li>)}
+          </ul>
+          <div style={{fontSize:10, color:C.muted, marginTop:5, opacity:.85}}>
+            Compáralos con tu informe antes de guardar y corrige a mano lo que haga falta.
+          </div>
+        </div>
+      )}
 
       <label
         style={{display:"flex", alignItems:"center", justifyContent:"center", gap:6, width:"100%", height:38, borderRadius:10, border:`1px solid ${C.cyan}`, background:`${alfa(C.cyan, 9)}`, color:C.cyan, fontSize:12.5, fontWeight:800, cursor:"pointer", marginBottom:8, boxSizing:"border-box"}}
@@ -17802,6 +17931,7 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
           Va aquí, pegada al formulario manual, porque son las dos formas de
           registrar la MISMA medición — antes estaban en extremos opuestos. */}
       <FitdaysImport
+        bodyProfile={bodyProfile}
         metricslog={metricslog}
         setMetricslog={setMetricslog}
         geminiKey={geminiKey}
@@ -19641,7 +19771,7 @@ if (typeof module !== 'undefined' && module.exports) {
     evaluateRecovery, calcRestingHRBaseline, buildRecompositionSeries, getWeeklyStats,
     RECOVERY_FIELDS, getLocalDateStr,
     normalizeMuscle, canonMuscleName, dedupeMuscles, calcMuscleVolumeBalance, SLUG_MUSCLE,
-    normalizeBodyEntry, mergeMetricsUpTo,
+    normalizeBodyEntry, mergeMetricsUpTo, validateBodyMetrics, RANGOS_BIO,
     repairTruncatedJSON, cleanAndParseJSON,
     inferMusclesFromName, musclesOfExercise, listUncountedExercises,
     splitOfExercise, moveExerciseBetweenSplits, removeExerciseFromSplitPure,

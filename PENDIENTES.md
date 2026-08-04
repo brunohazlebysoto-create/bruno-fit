@@ -515,3 +515,42 @@ TDEE 2918 · Objetivo 2370 kcal · P 188 C 256 G 66 F 33
 El peso es el del día 28 y la composición viene del InBody del 27, que es
 justo lo que antes se perdía. El BMR cuadra con Katch-McArdle sobre 72.2 kg
 (370 + 21.6 × 72.2 = 1930): el plan ya sale de los datos reales.
+
+---
+
+## El gráfico decía una cosa y el registro otra (W57)
+
+### La discordancia
+
+`buildRecompositionSeries` dibujaba el **peso suavizado** y derivaba de él la
+masa magra: 93.8 × 74.9% = 70.3 kg. Pero el informe había **medido** 69 kg. El
+gráfico y el registro decían cosas distintas del mismo día.
+
+Ahora, cuando el día tiene una medición real de masa grasa o magra, se usa esa;
+el suavizado solo rellena los días sin pesada. Cada punto lleva `medido` y
+`pesoTendencia` por separado, para no volver a mezclar las dos cosas.
+
+### Errores al extraer
+
+En el informe se veía **"Músculo esquelético: 42.9 kg"** y **"Músculo
+esquelético: 42.9 %"** — el mismo número en dos unidades, que es imposible.
+Leer un informe desde una foto falla de formas concretas y detectables, y como
+estos datos ajustan después los planes de nutrición y entrenamiento, un error
+aquí se propaga a todo.
+
+`validateBodyMetrics` revisa la lectura contra sus propias identidades físicas:
+
+| Comprobación | Qué hace |
+|---|---|
+| Rangos plausibles | Un `grasaPct` de 251 no es una medición, es una lectura mal hecha: se descarta |
+| Mismo número en kg y en % | `smmKg` = `musculoEsq` no puede ser: se recalcula el % desde los kg y el peso |
+| `masaGrasa` = peso × %grasa | Rellena lo que falte y **corrige lo que se contradiga** |
+| `pesoSinGrasa` = peso − grasa | |
+| `masaMuscular` = peso sin grasa − hueso | Y de ahí sale `musculo`, que es lo que lee el resto de la app |
+| SMM ≤ masa muscular ≤ peso sin grasa ≤ peso | Cuando se puede se repara; cuando no, se avisa |
+| IMC y SMI contra la altura del perfil | |
+
+Lo corregido **se enseña siempre** antes de guardar, campo por campo y con el
+motivo: *"musculoEsq: venía igual que smmKg (42.9), que no puede ser;
+recalculado a 46.6%"*. Corregir en silencio sería peor que no corregir: los
+datos son del usuario y tiene que poder contrastarlos con su informe.
