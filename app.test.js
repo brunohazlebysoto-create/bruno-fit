@@ -1912,3 +1912,84 @@ describe('porción muscular en vez de grupo entero', () => {
     expect(buildDaySummary(exlog, ejercicios, '2026-03-10').detail.length).toBe(d.length);
   });
 });
+
+describe('mediciones de InBody: guardado y lectura', () => {
+  const { normalizeBodyEntry, mergeMetricsUpTo, calcNutritionTargets, DEFAULT_BODY_PROFILE } = require('./app.js');
+
+  test('traduce el vocabulario del informe al de la app', () => {
+    // El informe trae "masaMuscular"; toda la app lee `musculo`
+    const e = normalizeBodyEntry({ peso: 92.3, grasaPct: 24.5, masaMuscular: 64.7, visceral: 9 });
+    expect(e.weight).toBe(92.3);
+    expect(e.musculo).toBe(64.7);
+  });
+
+  test('deduce el músculo cuando el informe no lo da directo', () => {
+    // Solo SMM
+    expect(normalizeBodyEntry({ peso: 90, smmKg: 40 }).musculo).toBe(40);
+    // Solo porcentaje de músculo esquelético
+    expect(normalizeBodyEntry({ peso: 90, musculoEsq: 45 }).musculo).toBe(40.5);
+    // Peso sin grasa menos hueso
+    expect(normalizeBodyEntry({ peso: 90, pesoSinGrasa: 68, masaOsea: 3.2 }).musculo).toBe(64.8);
+    // Prioridad: masa muscular gana a SMM (son cosas distintas, ~65 vs ~38 kg)
+    expect(normalizeBodyEntry({ peso: 92, masaMuscular: 64.7, smmKg: 38.1 }).musculo).toBe(64.7);
+  });
+
+  test('deduce el % de grasa desde la masa grasa', () => {
+    expect(normalizeBodyEntry({ peso: 92, masaGrasa: 23 }).grasaPct).toBe(25);
+    // Si ya viene, no se toca
+    expect(normalizeBodyEntry({ peso: 92, masaGrasa: 23, grasaPct: 24.1 }).grasaPct).toBe(24.1);
+  });
+
+  test('una pesada normal al día siguiente ya no borra la composición', () => {
+    // El fallo real: se leía SOLO la entrada más reciente, así que el martes
+    // la app perdía el % de grasa y la masa muscular del InBody del lunes
+    const log = {
+      '2026-03-10': { weight: 92.3, grasaPct: 24.5, masaMuscular: 64.7, visceral: 9, cintura: 96 },
+      '2026-03-11': { weight: 91.8, fuente: 'bascula' },
+    };
+    const m = mergeMetricsUpTo(log, '2026-03-11');
+    expect(m.weight).toBe(91.8);      // el peso sí es el nuevo
+    expect(m.musculo).toBe(64.7);     // la composición se arrastra
+    expect(m.grasaPct).toBe(24.5);
+    expect(m.cintura).toBe(96);
+  });
+
+  test('lo que describe un día concreto no se arrastra', () => {
+    const log = {
+      '2026-03-10': { weight: 92, pasos: 12000, suenoHoras: 8, fcReposo: 54 },
+      '2026-03-11': { weight: 91.8 },
+    };
+    const m = mergeMetricsUpTo(log, '2026-03-11');
+    expect(m.pasos).toBeUndefined();     // los pasos de ayer no son los de hoy
+    expect(m.suenoHoras).toBeUndefined();
+    expect(m.fcReposo).toBeUndefined();
+    // Pero el mismo día sí se leen
+    expect(mergeMetricsUpTo(log, '2026-03-10').pasos).toBe(12000);
+  });
+
+  test('no mira mediciones posteriores a la fecha consultada', () => {
+    const log = {
+      '2026-03-10': { weight: 92, grasaPct: 25 },
+      '2026-03-20': { weight: 89, grasaPct: 22 },
+    };
+    expect(mergeMetricsUpTo(log, '2026-03-15').weight).toBe(92);
+    expect(mergeMetricsUpTo(log, '2026-03-15').grasaPct).toBe(25);
+  });
+
+  test('con la composición bien leída, los objetivos cambian de verdad', () => {
+    // Es el motivo por el que el plan salía mal: sin `musculo`, Katch-McArdle
+    // usaba la masa magra por defecto y el BMR no se movía
+    const conInbody = calcNutritionTargets(DEFAULT_BODY_PROFILE, normalizeBodyEntry({ peso: 92, grasaPct: 18, masaMuscular: 70 }));
+    const sinComposicion = calcNutritionTargets(DEFAULT_BODY_PROFILE, normalizeBodyEntry({ peso: 92, grasaPct: 32, masaMuscular: 55 }));
+    expect(conInbody.kcal).not.toBe(sinComposicion.kcal);
+    expect(conInbody.p).toBeGreaterThan(sinComposicion.p);   // más magro → más proteína
+  });
+
+  test('entradas vacías o corruptas no rompen nada', () => {
+    expect(normalizeBodyEntry(null)).toEqual({});
+    expect(normalizeBodyEntry("x")).toEqual({});
+    expect(mergeMetricsUpTo(null, '2026-03-11')).toEqual({});
+    expect(mergeMetricsUpTo({ '2026-03-10': null }, '2026-03-11')).toEqual({});
+    expect(normalizeBodyEntry({ peso: "no", masaMuscular: "" }).musculo).toBeUndefined();
+  });
+});

@@ -465,3 +465,53 @@ queda como grupo en vez de inventar una etiqueta que suene precisa y no lo sea.
 
 Los dos prompts de IA reciben ahora el reparto por porción y se les pide
 explícitamente usarlo en vez del grupo.
+
+---
+
+## Los datos del InBody sí se guardaban — se leían mal (W55)
+
+Tres fallos encadenados. Los datos llegaban al registro; lo que fallaba era todo
+lo que venía después, y por eso el plan salía con números que no correspondían.
+
+### 1. El informe y la app hablaban idiomas distintos
+
+El informe trae `masaMuscular`, `smmKg`, `pesoSinGrasa`… pero **toda la app lee
+`musculo`**, y ese campo no se escribía nunca. Resultado: importabas un InBody,
+los datos quedaban guardados, y la composición seguía en los valores por defecto
+(64.7 kg de músculo, 26.2% de grasa) hardcodeados desde el principio.
+
+`normalizeBodyEntry` traduce, con prioridad: masa muscular → SMM → % de músculo
+sobre el peso → peso sin grasa menos hueso. **Masa muscular y masa esquelética
+no son lo mismo**: confundirlas daría ~38 kg donde hay ~65. También deduce el %
+de grasa desde la masa grasa cuando el informe no lo da directo.
+
+### 2. Una pesada normal borraba la composición
+
+`getMetricsForDate` leía **solo la entrada más reciente**. Si el lunes te hacías
+un InBody y el martes te pesabas en una báscula normal, el martes la app perdía
+el % de grasa y la masa muscular y volvía a los valores por defecto. Con eso se
+recalculaban el BMR, los macros y el plan entero.
+
+`mergeMetricsUpTo` arrastra el último valor **conocido de cada campo**. Lo que
+describe un día concreto —pasos, sueño, FC en reposo, análisis de una foto— no
+se arrastra: los pasos de ayer no son los de hoy.
+
+### 3. El importador escribía por detrás
+
+Llamaba a `setMetricslog` (que ya persiste y sincroniza) **y además** a un
+`saveKey("metricslog", …)` suelto, que competía con la escritura asíncrona del
+primero. Ahora hay una sola vía.
+
+### Comprobado en el navegador
+
+Con un InBody del 27 (vocabulario de informe) y una pesada normal el 28:
+
+```
+PESO 91.9 kg · MAGRA 72.2 kg · GRASA 19.7 kg · MÚSCULO 68.9 kg
+BMR 1930 por Katch-McArdle · masa magra 72.2 kg · proteína 2.6 g/kg magra
+TDEE 2918 · Objetivo 2370 kcal · P 188 C 256 G 66 F 33
+```
+
+El peso es el del día 28 y la composición viene del InBody del 27, que es
+justo lo que antes se perdía. El BMR cuadra con Katch-McArdle sobre 72.2 kg
+(370 + 21.6 × 72.2 = 1930): el plan ya sale de los datos reales.

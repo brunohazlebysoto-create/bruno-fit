@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W54";
+const APP_VERSION = "v2026.07.29-W55";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -993,6 +993,67 @@ const FITDAYS_SCHEMA = {
 };
 // Campos de FITDAYS_SCHEMA que son strings (no numéricos)
 const FITDAYS_STRING_FIELDS = new Set(["tipoCuerpo"]);
+
+/* ===== MEDICIONES CORPORALES: NORMALIZACIÓN Y ARRASTRE ===== */
+
+// Campos que describen UN día concreto y no deben arrastrarse: los pasos de
+// ayer no son los de hoy, ni el análisis de una foto vale para otra fecha.
+const CAMPOS_DEL_DIA = new Set([
+  "fuente", "ayunas", "suenoHoras", "suenoCalidad", "pasos", "fcReposo",
+  "photoAnalysis", "fitdaysAIAnalysis", "notas", "fecha",
+]);
+
+const _num = (v) => { const n = parseFloat(v); return isFinite(n) ? n : null; };
+
+// Traduce una medición al vocabulario que lee el resto de la app.
+// El informe de InBody/Fitdays trae "masaMuscular", "smmKg" o "pesoSinGrasa",
+// pero toda la app lee `musculo`. Sin esta traducción, importar un InBody
+// guardaba los datos y aun así la composición seguía en los valores por
+// defecto: de ahí venían el % de grasa raro y los objetivos mal calculados.
+function normalizeBodyEntry(raw) {
+  if (!raw || typeof raw !== "object") return {};
+  const e = { ...raw };
+  const peso = _num(e.weight) ?? _num(e.peso);
+  if (peso != null) e.weight = peso;
+
+  if (_num(e.grasaPct) == null) {
+    const mg = _num(e.masaGrasa);
+    if (mg != null && peso) e.grasaPct = Math.round((mg / peso) * 1000) / 10;
+  }
+
+  if (_num(e.musculo) == null) {
+    // Prioridad: masa muscular > SMM > % de músculo sobre el peso >
+    // peso sin grasa menos hueso. Lo que la app llama `musculo` es masa
+    // muscular, no masa esquelética: mezclarlas daría ~38 kg en vez de ~65.
+    const pctMusc = _num(e.musculoEsq);
+    const magra = _num(e.pesoSinGrasa), hueso = _num(e.masaOsea) ?? _num(e.masaEsqueletica);
+    const musculo = _num(e.masaMuscular) ?? _num(e.smmKg)
+      ?? (pctMusc != null && peso ? Math.round(peso * pctMusc) / 100 : null)
+      ?? (magra != null && hueso != null ? Math.round((magra - hueso) * 10) / 10 : null);
+    if (musculo != null) e.musculo = musculo;
+  }
+  return e;
+}
+
+// Composición vigente a una fecha, arrastrando el último valor conocido de cada
+// campo. Antes se leía SOLO la entrada más reciente: si el lunes te hacías un
+// InBody y el martes te pesabas en una báscula normal, el martes la app perdía
+// el % de grasa y la masa muscular y volvía a los valores por defecto — con eso
+// se recalculaban el BMR, los macros y el plan entero.
+function mergeMetricsUpTo(metricslog, dateStr) {
+  const fechas = Object.keys(metricslog || {}).filter(d => d <= dateStr).sort();
+  const out = {};
+  fechas.forEach((d, i) => {
+    const esUltima = i === fechas.length - 1;
+    const e = normalizeBodyEntry(metricslog[d]);
+    Object.entries(e).forEach(([k, v]) => {
+      if (v === "" || v == null) return;
+      if (CAMPOS_DEL_DIA.has(k) && !esUltima) return;  // solo del día consultado
+      out[k] = v;
+    });
+  });
+  return out;
+}
 
 /* ===== COMPONENTE PRINCIPAL APP ===== */
 
@@ -2965,9 +3026,10 @@ export default function App(){
     const entries = Object.entries(metricslog || {})
       .filter(([d]) => d <= dateStr)
       .sort((a, b) => b[0] < a[0] ? -1 : (b[0] > a[0] ? 1 : 0));
-    
+
     if (entries.length > 0) {
-      const latest = entries[0][1] || {};
+      // No la última entrada: el último valor CONOCIDO de cada campo
+      const latest = mergeMetricsUpTo(metricslog, dateStr);
       return {
         weight: parseFloat(latest.weight) || (parseFloat(bodyProfile?.pesoInicial) || START_W),
         musculo: parseFloat(latest.musculo) || (bodyComp ? bodyComp.musculo : 64.7),
@@ -16390,13 +16452,15 @@ CRÍTICO: "Masa Esquelética" ≠ "Músculo esquelético". Masa Esquelética = h
       setErr("Se requiere el peso para guardar.");
       return;
     }
-    // Map peso -> weight for metricslog compatibility
-    if (entry.peso != null && entry.weight == null) entry.weight = entry.peso;
+    // Se guarda con el vocabulario que lee el resto de la app (weight, musculo,
+    // grasaPct…), no solo con el del informe: si no, los datos quedaban en el
+    // registro pero la composición seguía en los valores por defecto.
     const current = metricslog[date] || {};
-    const updated = { ...current, ...entry };
+    const updated = normalizeBodyEntry({ ...current, ...entry, fuente: "inbody" });
     const newLog = { ...metricslog, [date]: updated };
+    // Una sola vía de guardado: setMetricslog ya persiste y sincroniza. El
+    // saveKey suelto que había aquí escribía por detrás y se saltaba ese camino.
     setMetricslog(newLog);
-    saveKey("metricslog", newLog);
     setSaved(true);
     setErr("");
   };
@@ -19514,6 +19578,7 @@ if (typeof module !== 'undefined' && module.exports) {
     evaluateRecovery, calcRestingHRBaseline, buildRecompositionSeries, getWeeklyStats,
     RECOVERY_FIELDS, getLocalDateStr,
     normalizeMuscle, canonMuscleName, dedupeMuscles, calcMuscleVolumeBalance, SLUG_MUSCLE,
+    normalizeBodyEntry, mergeMetricsUpTo,
     inferMusclesFromName, musclesOfExercise, listUncountedExercises,
     splitOfExercise, moveExerciseBetweenSplits, removeExerciseFromSplitPure,
     makeComboExercise, buildComboSets,
