@@ -554,3 +554,44 @@ Lo corregido **se enseña siempre** antes de guardar, campo por campo y con el
 motivo: *"musculoEsq: venía igual que smmKg (42.9), que no puede ser;
 recalculado a 46.6%"*. Corregir en silencio sería peor que no corregir: los
 datos son del usuario y tiene que poder contrastarlos con su informe.
+
+---
+
+## La rutina con IA metía músculos que no tocaban (W59)
+
+En un día de "Pierna Cuádriceps + Hombros" el plan salía con bíceps. Dos causas:
+
+1. **El historial se sacaba de TODO `exlog`**, no de los ejercicios del día:
+   `Object.keys(exlog).filter(...)` barría el registro entero, así que entraban
+   ejercicios de otros días del split.
+2. **Nada se lo prohibía.** El prompt decía qué grupos había, pero no que fueran
+   los únicos.
+
+Ahora el historial se limita a los ejercicios del día, el prompt lo dice
+explícito —*"está PROHIBIDO añadir un grupo que no esté en esa lista"*— y hay
+una red de seguridad que recorta la respuesta: si el modelo añade un grupo o un
+ejercicio de fuera, se descarta antes de imprimir.
+
+### Preselección
+
+Pulsar **PDF IA** ya no genera directamente: abre una hoja con los ejercicios
+del día agrupados por músculo, todos marcados. Se desmarca lo que no entra y la
+IA trabaja **solo con lo elegido**. Es la forma directa de que el plan sea el
+del día y no lo que el modelo considere conveniente.
+
+---
+
+## Un fallo que llevaba tiempo y otro que lo acompañaba (W58)
+
+`onClick={analyze}` le pasaba el **evento del clic** como lista de pesos, así que
+`evento.map` reventaba y tumbaba la app entera. Era el botón *"Analizar peso y
+composición corporal (IA)"*.
+
+Al auditar los 58 manejadores pasados por referencia apareció el mismo patrón en
+`onClick={syncLocalToSupabase}`: el evento llegaba como `silent`, que es
+*truthy*, y **silenciaba los errores de sincronización**. Si la sincronización
+fallaba, no avisaba de nada.
+
+Además de arreglar las dos llamadas, `analyze` ignora ahora un primer argumento
+que no sea un array: la función no debería depender de que quien la llame
+acierte.

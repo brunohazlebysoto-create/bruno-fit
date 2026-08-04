@@ -119,6 +119,13 @@ const ESCENAS = [
       await page.getByRole("button", { name: "Aperturas", exact: true }).click({ timeout: 5000 });
     },
   },
+  {
+    // Elegir qué ejercicios entran en la rutina antes de generarla
+    id: "entreno-13-elegir-rutina",
+    tab: "Entreno",
+    scrollHasta: "Editar Splits",
+    accion: async (page) => { await page.getByRole("button", { name: /PDF IA/ }).click({ timeout: 5000 }); },
+  },
   // Posicionar por texto en vez de por píxeles: este panel se mueve cada vez
   // que crece algo por encima, y con scroll fijo la captura acabaría en otro sitio
   { id: "entreno-10-volumen-semanal", tab: "Entreno", scrollHasta: "Volumen Semanal" },

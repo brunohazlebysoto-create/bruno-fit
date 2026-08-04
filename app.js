@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W58";
+const APP_VERSION = "v2026.07.29-W59";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -12371,6 +12371,7 @@ function Entreno({
   const [editExObj, setEditExObj] = useState(null);
   const [comboFilas, setComboFilas] = useState({});   // nombre del combinado → filas kg/reps/RIR
   const [comboSel, setComboSel] = useState([]);       // ejercicios elegidos al crear uno
+  const [rutinaSel, setRutinaSel] = useState(null);   // hoja de selección previa al PDF con IA
   const [refreshMuscleBusy, setRefreshMuscleBusy] = useState(false);
   const [exTab, setExTab] = useState("texto"); // 'texto' or 'nuevo'
   const [mergeTarget, setMergeTarget] = useState("");
@@ -13169,7 +13170,10 @@ tr:last-child td{border-bottom:none}
 
   // --- Splits Manual Actions & Helpers ---
 
-  const buildRoutinePDF = async (splitKey) => {
+  // `soloEstos` = nombres elegidos en la hoja de selección. Sin él, el historial
+  // se sacaba de TODO el exlog y la IA acababa metiendo bíceps en un día de
+  // pierna y hombro.
+  const buildRoutinePDF = async (splitKey, soloEstos = null) => {
     if (pdfBusy) return;
     setPdfBusy(true);
     // Abrir la ventana AHORA (dentro del gesto del click) para que móvil no la
@@ -13226,7 +13230,9 @@ tr:last-child td{border-bottom:none}
       };
 
       // ── Target body parts for this split ──
-      const assignedExs = (exercises || {})[splitKey] || [];
+      const elegidos = soloEstos instanceof Set ? soloEstos : null;
+      const assignedExs = ((exercises || {})[splitKey] || [])
+        .filter(ex => !elegidos || elegidos.has(ex.name));
       const bpCount = {};
       assignedExs.forEach(ex => {
         const primaryM = (ex.musculos || [])[0];
@@ -13248,8 +13254,11 @@ tr:last-child td{border-bottom:none}
       // ── Build exercise history context for AI ──
       const el = exlog || {};
       const historyLines = [];
+      const nombresDelDia = new Set(assignedExs.map(e => e.name));
       for (const bp of targetBPs) {
-        const bpExs = Object.keys(el).filter(name => getExBP(name) === bp);
+        // Solo los ejercicios DEL DÍA (o los elegidos). Antes se barría todo el
+        // historial y entraban ejercicios de otros días del split.
+        const bpExs = Object.keys(el).filter(name => nombresDelDia.has(name) && getExBP(name) === bp);
         if (!bpExs.length) continue;
         historyLines.push(`\n### ${bp.toUpperCase()}`);
         for (const name of bpExs) {
@@ -13333,7 +13342,11 @@ tr:last-child td{border-bottom:none}
 - Si BAJANDO → baja 5% la carga y consolida técnica
 - Si NUEVO → comienza con 60% del 1RM estimado
 
-REGLAS DE SELECCIÓN:
+REGLAS DE SELECCIÓN (ESTRICTAS):
+- Los grupos musculares de la sesión son EXACTAMENTE estos y NINGUNO MÁS: ${targetBPs.join(", ")}
+- Está PROHIBIDO añadir un grupo que no esté en esa lista. Si un ejercicio trabaja
+  bíceps o tríceps como secundario, NO crees un grupo para ellos.
+- Usa ÚNICAMENTE ejercicios de la lista de abajo. No inventes ni traigas otros.
 - Elige EXACTAMENTE 3 ejercicios por grupo muscular del historial
 - Prioriza ejercicios con más sesiones totales (más datos = mejor análisis)
 - Incluye al menos 1 compuesto pesado (mayor 1RM) por grupo
@@ -13361,6 +13374,21 @@ sessionNotes: resume la estrategia de esta sesión en 2-3 oraciones (menciona la
         { maxTokens: 32768, timeoutMs: 120000 });
       const plan = cleanAndParseJSON(typeof raw === "string" ? raw : JSON.stringify(raw));
       if (!plan?.muscleGroups?.length) throw new Error("La IA no generó ejercicios. Verifica tu historial e intenta de nuevo.");
+
+      // Red de seguridad: por muy claro que sea el prompt, el modelo a veces
+      // añade un grupo que no tocaba. Se recorta a lo pedido en vez de imprimir
+      // una rutina con músculos que no son los del día.
+      const gruposPedidos = new Set(targetBPs.map(b2 => b2.toLowerCase()));
+      plan.muscleGroups = plan.muscleGroups
+        .filter(g => !gruposPedidos.size || gruposPedidos.has(String(g?.name || "").toLowerCase()))
+        .map(g => ({
+          ...g,
+          exercises: (g.exercises || []).filter(ex => !nombresDelDia.size || nombresDelDia.has(ex?.name)),
+        }))
+        .filter(g => g.exercises.length);
+      if (!plan.muscleGroups.length) {
+        throw new Error("La IA propuso ejercicios que no son de este día. Vuelve a intentarlo.");
+      }
 
       // ── Build HTML ──
       let exRows = "";
@@ -14878,7 +14906,7 @@ tr:last-child td{border-bottom:none}
         })}
         <div style={{marginLeft:"auto", display:"flex", gap:6}}>
           <button
-            onClick={() => buildRoutinePDF(sel)}
+            onClick={() => setRutinaSel(new Set((dayExs || []).map(e => e.name)))}
             disabled={pdfBusy}
             title="Generar plan de sesión con IA"
             style={{
@@ -16091,6 +16119,78 @@ tr:last-child td{border-bottom:none}
           </div>
         </div>
       )}
+      {/* Elegir qué entra en la rutina ANTES de generarla. Es la forma directa
+          de que el plan sea del día y no de lo que el modelo crea conveniente. */}
+      {rutinaSel !== null && (() => {
+        const lista = dayExs || [];
+        const porGrupo = {};
+        lista.forEach(e => {
+          const g = canonMuscleName((e.musculos || [])[0] || "") || "Otros";
+          (porGrupo[g] = porGrupo[g] || []).push(e);
+        });
+        const elegidos = lista.filter(e => rutinaSel.has(e.name));
+        const alternar = (n) => setRutinaSel(prev => {
+          const s2 = new Set(prev);
+          if (s2.has(n)) s2.delete(n); else s2.add(n);
+          return s2;
+        });
+        return (
+          <div style={{position:"fixed", top:0, left:0, right:0, bottom:0, background:C.overlay,
+            backdropFilter:"blur(4px)", display:"grid", placeItems:"center", zIndex:9999, padding:20}}
+            onClick={() => setRutinaSel(null)}>
+            <div onClick={e => e.stopPropagation()} style={{background:C.panel, border:`1px solid ${C.line}`,
+              borderRadius:16, padding:18, width:"100%", maxWidth:360, maxHeight:"85dvh", overflowY:"auto",
+              display:"flex", flexDirection:"column", gap:10}}>
+              <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Rutina con IA</div>
+              <div style={{fontSize:11.5, color:C.muted, textAlign:"center", lineHeight:1.5}}>
+                Elige qué entra en el plan de <strong style={{color:C.ink}}>{dayObj.name}</strong>.
+                La IA trabajará solo con lo marcado.
+              </div>
+
+              {Object.entries(porGrupo).map(([grupo, exs]) => (
+                <div key={grupo}>
+                  <div style={{fontSize:10, fontWeight:800, color:C.muted, textTransform:"uppercase",
+                    letterSpacing:".07em", margin:"4px 0 5px"}}>{grupo}</div>
+                  <div style={{display:"flex", flexDirection:"column", gap:5}}>
+                    {exs.map(e => {
+                      const on = rutinaSel.has(e.name);
+                      return (
+                        <button key={e.name} onClick={() => alternar(e.name)}
+                          style={{display:"flex", alignItems:"center", gap:9, textAlign:"left",
+                            background: on ? "rgba(77,124,15,0.10)" : C.panel2,
+                            border:`1px solid ${on ? C.lime : C.line}`, borderRadius:10,
+                            padding:"8px 10px", cursor:"pointer"}}>
+                          <span style={{width:18, height:18, borderRadius:5, flexShrink:0, display:"grid",
+                            placeItems:"center", background: on ? C.lime : "transparent",
+                            border:`1px solid ${on ? C.lime : C.line}`, color:C.onAccent, fontSize:11, fontWeight:900}}>
+                            {on ? "✓" : ""}
+                          </span>
+                          <span style={{fontSize:12.5, fontWeight:600, color: on ? C.ink : C.muted, flex:1,
+                            minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{e.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+
+              <button
+                onClick={() => { const s2 = rutinaSel; setRutinaSel(null); buildRoutinePDF(sel, s2); }}
+                disabled={elegidos.length === 0 || pdfBusy}
+                style={{marginTop:4, padding:"11px", borderRadius:11, border:"none", fontWeight:800, fontSize:13,
+                  background: elegidos.length ? C.lime : C.panel2, color: elegidos.length ? C.onAccent : C.muted,
+                  cursor: elegidos.length ? "pointer" : "not-allowed"}}>
+                {elegidos.length ? `Generar con ${elegidos.length} ejercicio${elegidos.length !== 1 ? "s" : ""}` : "Elige al menos uno"}
+              </button>
+              <button onClick={() => setRutinaSel(null)}
+                style={{background:"none", border:"none", color:C.muted, fontWeight:700, padding:6, cursor:"pointer"}}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
       {confirmRemoveEx !== null && (
         <div style={{
           position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
