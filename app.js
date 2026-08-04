@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W51";
+const APP_VERSION = "v2026.07.29-W52";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -2235,6 +2235,76 @@ function splitOfExercise(exercises, splits, name) {
   const porCatalogo = Object.keys(exercises || {}).find(k => (exercises[k] || []).some(e => e?.name === name));
   if (porCatalogo) return porCatalogo;
   return ((splits || []).find(s => (s.ex || []).includes(name)) || {}).key || null;
+}
+
+/* ===== EJERCICIO COMBINADO (biserie / triserie) ===== */
+// Dos o tres ejercicios que se hacen seguidos, sin descanso entre medias.
+function makeComboExercise(nombres, exercises) {
+  const partes = [];
+  (nombres || []).forEach(n => {
+    const t = String(n || "").trim();
+    if (t && !partes.includes(t)) partes.push(t);
+  });
+  if (partes.length < 2 || partes.length > 3) return null;
+  return {
+    name: partes.join(" + "),
+    combo: partes,
+    tecnico: (partes.length === 2 ? "Biserie" : "Triserie") + ": sin descanso entre ejercicios",
+    equipo: "combinado",
+    // La unión de los músculos de las partes, agrupada y ordenada por cuántas
+    // los trabajan — así el combinado cuenta igual que sus componentes
+    musculos: dedupeMuscles(partes.map(n => musclesOfExercise(n, exercises))),
+  };
+}
+
+// Series de una combinación.
+// Se guarda UNA serie en CADA ejercicio, no una en el combinado: los PRs, los
+// gráficos, el reparto muscular y la fatiga están indexados por nombre y así
+// siguen funcionando sin cambiar nada. Lo que las une es `comboId`, que permite
+// mostrarlas juntas y saber que se hicieron sin descanso.
+function buildComboSets(nombres, filas, fechaISO) {
+  const partes = (nombres || []).filter(Boolean);
+  const base = new Date(fechaISO).getTime();
+  if (partes.length < 2 || isNaN(base)) return [];
+  const comboName = partes.join(" + ");
+  const id = "c" + base + "-" + partes.length;
+  const salida = [];
+  partes.forEach((exName, i) => {
+    const f = (filas || [])[i] || {};
+    const w = parseFloat(f.w);
+    if (!(w > 0)) return;
+    const rir = f.rir === "-" || f.rir === undefined || f.rir === null || f.rir === "" ? null : parseInt(f.rir);
+    salida.push({
+      exName,
+      set: {
+        // +i ms: conserva el orden dentro de la combinación
+        date: new Date(base + i).toISOString(),
+        w,
+        reps: String(f.reps ?? "").trim() || "-",
+        rir: isNaN(rir) ? null : rir,
+        type: "work",
+        comboId: id, combo: comboName, comboPos: i + 1,
+      },
+    });
+  });
+  // Una combinación con una sola parte registrada no es una combinación
+  return salida.length >= 2 ? salida : [];
+}
+
+// Quita un ejercicio de UN día del split. No toca `exlog`: las series y los PRs
+// se conservan, así que volver a añadirlo recupera todo el historial. Es lo que
+// distingue "quitarlo de este día" de "borrar el ejercicio".
+function removeExerciseFromSplitPure(exercises, splits, name, splitKey) {
+  const listas = exercises || {};
+  if (!name || !splitKey) return { exercises: listas, splits: splits || [] };
+  const nextExercises = { ...listas };
+  if (nextExercises[splitKey]) {
+    nextExercises[splitKey] = nextExercises[splitKey].filter(e => e?.name !== name);
+  }
+  const nextSplits = (splits || []).map(s =>
+    s.key === splitKey ? { ...s, ex: (s.ex || []).filter(n => n !== name) } : s
+  );
+  return { exercises: nextExercises, splits: nextSplits };
 }
 
 // Mueve un ejercicio de un día del split a otro.
@@ -11856,6 +11926,8 @@ function Entreno({
   const [dropRows, setDropRows] = useState([{w:"", reps:""}]);
   const [editSetObj, setEditSetObj] = useState(null);
   const [editExObj, setEditExObj] = useState(null);
+  const [comboFilas, setComboFilas] = useState({});   // nombre del combinado → filas kg/reps/RIR
+  const [comboSel, setComboSel] = useState([]);       // ejercicios elegidos al crear uno
   const [refreshMuscleBusy, setRefreshMuscleBusy] = useState(false);
   const [exTab, setExTab] = useState("texto"); // 'texto' or 'nuevo'
   const [mergeTarget, setMergeTarget] = useState("");
@@ -12551,6 +12623,39 @@ tr:last-child td{border-bottom:none}
     fontSize: 9, lineHeight: 1, display: "grid", placeItems: "center",
   });
 
+  // Registra una vuelta del combinado: una serie en cada ejercicio, todas con
+  // el mismo comboId. No se guarda nada bajo el nombre del combinado, que
+  // duplicaría el volumen de sus partes.
+  const addComboSets = (ex) => {
+    const filas = comboFilas[ex.name] || [];
+    const [a, m, d] = selectedDateStr.split("-");
+    const ahora = new Date();
+    const base = new Date(+a, +m - 1, +d, ahora.getHours(), ahora.getMinutes(), ahora.getSeconds(), ahora.getMilliseconds());
+    const nuevos = buildComboSets(ex.combo, filas, base.toISOString());
+    if (!nuevos.length) return;
+    const next = { ...exlog };
+    nuevos.forEach(({ exName, set }) => {
+      const key = findExlogKey(exName);
+      next[key] = [set, ...(next[key] || [])].slice(0, MAX_SETS_PER_EXERCISE);
+    });
+    setExlog(next);
+    setComboFilas(prev => ({ ...prev, [ex.name]: ex.combo.map(() => ({ w: "", reps: "", rir: "-" })) }));
+  };
+
+  // Crea el combinado como un ejercicio más del día
+  const crearCombinado = () => {
+    const nuevo = makeComboExercise(comboSel, exercises);
+    if (!nuevo) return;
+    const yaEsta = (dayExs || []).some(e => e.name === nuevo.name);
+    if (!yaEsta) {
+      setExercises({ ...exercises, [sel]: [...dayExs, nuevo] });
+      setSplits((splits || DEFAULT_SPLITS).map(x =>
+        x.key === sel ? { ...x, ex: [...new Set([...(x.ex || []), nuevo.name])] } : x));
+    }
+    setComboSel([]);
+    setOpen(nuevo.name);
+  };
+
   const delSet = (n, i) => {
     const arr = [...(exlog[n] || [])];
     arr.splice(i, 1);
@@ -12976,23 +13081,13 @@ tr:last-child td{border-bottom:none}
     setShowSplitsEditor(false);
   };
 
-  const removeExerciseFromSplit = (exName) => {
-    const updatedExercises = { ...exercises };
-    if (updatedExercises[sel]) {
-      updatedExercises[sel] = updatedExercises[sel].filter(e => e.name !== exName);
-    }
-    setExercises(updatedExercises);
-    
-    const nextSplits = (splits || DEFAULT_SPLITS).map(s => {
-      if (s.key === sel) {
-        return {
-          ...s,
-          ex: s.ex.filter(name => name !== exName)
-        };
-      }
-      return s;
-    });
-    setSplits(nextSplits);
+  // `clave` permite quitarlo desde el detalle de una sesión, donde el ejercicio
+  // puede pertenecer a un split distinto del que está abierto.
+  const removeExerciseFromSplit = (exName, clave) => {
+    const key = clave || splitOfExercise(exercises, splits || DEFAULT_SPLITS, exName) || sel;
+    const r = removeExerciseFromSplitPure(exercises, splits || DEFAULT_SPLITS, exName, key);
+    setExercises(r.exercises);
+    setSplits(r.splits);
     setConfirmRemoveEx(null);
   };
 
@@ -14210,6 +14305,12 @@ tr:last-child td{border-bottom:none}
                                     {s.drops?.length > 1 ? `Drop ×${s.drops.length}` : "Drop Set"}
                                   </span>
                                 )}
+                                {/* Sin esto, una biserie parecía dos series sueltas */}
+                                {s.comboId && (
+                                  <span title={s.combo} style={{fontSize:10, color:C.cyan, background:"rgba(14,116,144,0.14)", padding:"2px 6px", borderRadius:4, fontWeight:700, whiteSpace:"nowrap"}}>
+                                    ⛓ {s.comboPos}/{(s.combo || "").split(" + ").length}
+                                  </span>
+                                )}
                                 <button onClick={() => delSetFromDay(exName, s)} style={{marginLeft:"auto", background:"none", border:"none", cursor:"pointer", color:C.muted}}>
                                   <Trash2 size={14}/>
                                 </button>
@@ -14499,6 +14600,67 @@ tr:last-child td{border-bottom:none}
 
                 {renderRecomendacion(ex.name)}
 
+                {/* Un combinado se registra de una vez: una fila por ejercicio.
+                    Cada serie se guarda en SU ejercicio (los PRs, los gráficos y
+                    el reparto muscular siguen funcionando), unidas por comboId. */}
+                {ex.combo && ex.combo.length >= 2 && (() => {
+                  const filas = comboFilas[ex.name] || ex.combo.map(() => ({ w: "", reps: "", rir: "-" }));
+                  const setFila = (i, campo, valor) => setComboFilas(prev => {
+                    const base = prev[ex.name] || ex.combo.map(() => ({ w: "", reps: "", rir: "-" }));
+                    const copia = base.map(f => ({ ...f }));
+                    copia[i] = { ...copia[i], [campo]: valor };
+                    return { ...prev, [ex.name]: copia };
+                  });
+                  const listas = filas.filter(f => parseFloat(f.w) > 0).length;
+                  return (
+                    <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:12, padding:"10px 12px", marginBottom:10}}>
+                      <div style={{fontSize:10, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", marginBottom:2}}>
+                        {ex.combo.length === 2 ? "Biserie" : "Triserie"} · sin descanso entre ejercicios
+                      </div>
+                      <div style={{fontSize:9.5, color:C.muted, opacity:.85, marginBottom:8}}>
+                        Cada ejercicio guarda su propia serie; quedan enlazadas como una vuelta.
+                      </div>
+                      {ex.combo.map((parte, i) => {
+                        const ul = last(parte);
+                        return (
+                          <div key={parte} style={{marginBottom:8}}>
+                            <div style={{display:"flex", alignItems:"baseline", gap:6, marginBottom:3}}>
+                              <span style={{fontSize:10, fontWeight:800, color:C.lime, minWidth:14}}>{i + 1}º</span>
+                              <span style={{fontSize:12, fontWeight:600, color:C.ink, flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{parte}</span>
+                              {ul && <span style={{fontSize:10, color:C.cyan}}>últ. {ul.w}×{ul.reps}</span>}
+                            </div>
+                            <div style={{display:"flex", gap:6}}>
+                              <input type="number" inputMode="decimal" placeholder="kg" value={filas[i]?.w ?? ""}
+                                onChange={e => setFila(i, "w", e.target.value)}
+                                style={{flex:1, minWidth:0, padding:"7px 8px", borderRadius:8, border:`1px solid ${C.line}`, background:C.panel, color:C.ink, fontSize:13}}/>
+                              <input type="number" inputMode="numeric" placeholder="reps" value={filas[i]?.reps ?? ""}
+                                onChange={e => setFila(i, "reps", e.target.value)}
+                                style={{flex:1, minWidth:0, padding:"7px 8px", borderRadius:8, border:`1px solid ${C.line}`, background:C.panel, color:C.ink, fontSize:13}}/>
+                              <select value={filas[i]?.rir ?? "-"} onChange={e => setFila(i, "rir", e.target.value)}
+                                style={{width:74, padding:"7px 6px", borderRadius:8, border:`1px solid ${C.line}`, background:C.panel, color:C.ink, fontSize:12}}>
+                                {["-", "0", "1", "2", "3", "4"].map(v => <option key={v} value={v}>{v === "-" ? "RIR" : "RIR " + v}</option>)}
+                              </select>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <button
+                        onClick={() => addComboSets(ex)}
+                        disabled={listas < 2}
+                        style={{width:"100%", marginTop:4, padding:"10px", borderRadius:10, border:"none", fontWeight:800, fontSize:13,
+                          background: listas >= 2 ? C.lime : C.panel, color: listas >= 2 ? C.onAccent : C.muted,
+                          cursor: listas >= 2 ? "pointer" : "not-allowed"}}
+                      >
+                        {listas >= 2 ? "Registrar la vuelta completa" : "Rellena al menos 2 ejercicios"}
+                      </button>
+                    </div>
+                  );
+                })()}
+
+                {/* Un combinado se registra arriba, con una fila por ejercicio.
+                    Dejar aquí el formulario suelto guardaría la serie bajo el
+                    nombre del combinado y duplicaría el volumen de sus partes. */}
+                {!ex.combo && (<>
                 {/* Tipo de set */}
                 <div style={{display:"flex", gap:6, marginBottom:8}}>
                   <button 
@@ -14648,6 +14810,7 @@ tr:last-child td{border-bottom:none}
                     <button onClick={() => addSet(ex.name)} style={{width:36, height:35, borderRadius:9, border:"none", background:C.lime, color:C.onAccent, cursor:"pointer", fontSize:18, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center"}}>＋</button>
                   </div>
                 )}
+                </>)}
 
                 <Chart entries={cd}/>
 
@@ -14800,9 +14963,69 @@ tr:last-child td{border-bottom:none}
           >
             Añadir Ejercicio Manual
           </button>
+          <button
+            onClick={() => setExTab("combo")}
+            style={{
+              flex:1, padding:"8px 0", background:"none", border:"none",
+              borderBottom: exTab === "combo" ? `2px solid ${C.lime}` : "none",
+              color: exTab === "combo" ? C.lime : C.muted, fontWeight:700, fontSize:12.5, cursor:"pointer"
+            }}
+          >
+            Combinado
+          </button>
         </div>
 
-        {exTab === "texto" ? (
+        {exTab === "combo" ? (
+          <div>
+            <div style={{fontSize:12, color:C.muted, lineHeight:1.5, marginBottom:10}}>
+              Elige <strong style={{color:C.ink}}>2 o 3</strong> ejercicios de este día para hacerlos seguidos,
+              sin descanso. Se registran de una vez, pero cada uno guarda su propia serie:
+              no se pierden PRs ni gráficos.
+            </div>
+            <div style={{display:"flex", flexDirection:"column", gap:6, maxHeight:210, overflowY:"auto", marginBottom:10}}>
+              {(dayExs || []).filter(e => !e.combo).map(e => {
+                const puesto = comboSel.indexOf(e.name);
+                const elegido = puesto >= 0;
+                const lleno = comboSel.length >= 3 && !elegido;
+                return (
+                  <button
+                    key={e.name}
+                    disabled={lleno}
+                    onClick={() => setComboSel(prev => elegido ? prev.filter(n => n !== e.name) : [...prev, e.name])}
+                    style={{
+                      display:"flex", alignItems:"center", gap:9, textAlign:"left",
+                      background: elegido ? "rgba(77,124,15,0.10)" : C.panel2,
+                      border:`1px solid ${elegido ? C.lime : C.line}`,
+                      borderRadius:10, padding:"8px 10px", cursor: lleno ? "not-allowed" : "pointer",
+                      opacity: lleno ? .45 : 1,
+                    }}
+                  >
+                    <span style={{width:20, height:20, borderRadius:"50%", flexShrink:0, display:"grid", placeItems:"center",
+                      background: elegido ? C.lime : "transparent", border:`1px solid ${elegido ? C.lime : C.line}`,
+                      color: C.onAccent, fontSize:10, fontWeight:800}}>{elegido ? puesto + 1 : ""}</span>
+                    <span style={{fontSize:12.5, fontWeight:600, color:C.ink, flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{e.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {comboSel.length >= 2 && (
+              <div style={{fontSize:12, color:C.ink, background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"8px 10px", marginBottom:10}}>
+                <span style={{color:C.muted}}>Quedará como: </span>
+                <strong>{comboSel.join(" + ")}</strong>
+              </div>
+            )}
+            <button
+              onClick={crearCombinado}
+              disabled={comboSel.length < 2}
+              style={{width:"100%", padding:"11px", borderRadius:10, border:"none", fontWeight:800, fontSize:13,
+                background: comboSel.length >= 2 ? C.lime : C.panel2,
+                color: comboSel.length >= 2 ? C.onAccent : C.muted,
+                cursor: comboSel.length >= 2 ? "pointer" : "not-allowed"}}
+            >
+              {comboSel.length >= 2 ? `Crear ${comboSel.length === 2 ? "biserie" : "triserie"}` : "Elige al menos 2"}
+            </button>
+          </div>
+        ) : exTab === "texto" ? (
           <div>
             {!verificationList ? (
               <>
@@ -15213,6 +15436,14 @@ tr:last-child td{border-bottom:none}
                   style={{background:"rgba(14,116,144,0.14)", color:C.cyan, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${alfa(C.cyan, 27)}`, cursor:"pointer"}}
                 >
                   🔗 Fusionar con otro ejercicio
+                </button>
+                {/* Quitarlo del día es distinto de borrar sus series: el
+                    historial se conserva y volver a añadirlo lo recupera */}
+                <button
+                  onClick={() => { setConfirmRemoveEx(editExObj.ex.name); setEditExObj(null); }}
+                  style={{background:C.panel2, color:C.muted, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.line}`, cursor:"pointer"}}
+                >
+                  ➖ Quitar de este día
                 </button>
                 <button
                   onClick={() => {
@@ -19035,7 +19266,8 @@ if (typeof module !== 'undefined' && module.exports) {
     RECOVERY_FIELDS, getLocalDateStr,
     normalizeMuscle, canonMuscleName, dedupeMuscles, calcMuscleVolumeBalance, SLUG_MUSCLE,
     inferMusclesFromName, musclesOfExercise, listUncountedExercises,
-    splitOfExercise, moveExerciseBetweenSplits,
+    splitOfExercise, moveExerciseBetweenSplits, removeExerciseFromSplitPure,
+    makeComboExercise, buildComboSets,
     default: App
   };
 }

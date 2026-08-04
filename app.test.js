@@ -178,7 +178,7 @@ describe('App Component', () => {
       entrenoTabButton.click();
     });
 
-    expect(screen.getByText('ENTRENAMIENTO · SPLIT')).toBeInTheDocument();
+    expect(screen.getByText('ENTRENAMIENTO')).toBeInTheDocument();
 
     const perfilTabButton = screen.getAllByText('Perfil')[0].closest('button');
 
@@ -1276,7 +1276,7 @@ describe('robustez con datos reales precargados', () => {
     await act(async () => { regTab.click(); });
     const entTab = screen.getAllByText('Entreno')[0].closest('button');
     await act(async () => { entTab.click(); });
-    expect(screen.getByText('ENTRENAMIENTO · SPLIT')).toBeInTheDocument();
+    expect(screen.getByText('ENTRENAMIENTO')).toBeInTheDocument();
   });
 });
 
@@ -1707,5 +1707,85 @@ describe('mover un ejercicio de día', () => {
     const { exercises, splits } = base();
     expect(splitOfExercise(exercises, splits, 'Sentadilla')).toBe('B');
     expect(splitOfExercise(exercises, splits, 'No existe')).toBeNull();
+  });
+});
+
+describe('quitar de un día y ejercicios combinados', () => {
+  const { removeExerciseFromSplitPure, makeComboExercise, buildComboSets } = require('./app.js');
+
+  const base = () => ({
+    exercises: {
+      A: [{ name: 'Press banca', musculos: ['Pectoral', 'Tríceps'] },
+          { name: 'Aperturas', musculos: ['Pectoral', 'Deltoides anterior'] }],
+      B: [{ name: 'Sentadilla', musculos: ['Cuádriceps'] }],
+    },
+    splits: [
+      { key: 'A', name: 'Pecho', ex: ['Press banca', 'Aperturas'] },
+      { key: 'B', name: 'Pierna', ex: ['Sentadilla'] },
+    ],
+  });
+
+  test('quitar de un día lo saca de las dos listas y no toca los otros días', () => {
+    const { exercises, splits } = base();
+    const r = removeExerciseFromSplitPure(exercises, splits, 'Aperturas', 'A');
+    expect(r.exercises.A.map(e => e.name)).toEqual(['Press banca']);
+    expect(r.splits.find(s => s.key === 'A').ex).toEqual(['Press banca']);
+    expect(r.exercises.B).toEqual(exercises.B);
+    // No muta lo que recibe
+    expect(exercises.A).toHaveLength(2);
+  });
+
+  test('el combinado une nombres y músculos sin repetir', () => {
+    const { exercises } = base();
+    const c = makeComboExercise(['Press banca', 'Aperturas'], exercises);
+    expect(c.name).toBe('Press banca + Aperturas');
+    expect(c.combo).toEqual(['Press banca', 'Aperturas']);
+    // "Deltoides anterior" y "Tríceps" se agrupan; el pectoral, en ambos, va primero
+    expect(c.musculos[0]).toBe('Pectoral');
+    expect(new Set(c.musculos).size).toBe(c.musculos.length);
+    expect(c.tecnico).toMatch(/Biserie/);
+    expect(makeComboExercise(['Press banca', 'Aperturas', 'Fondos'], exercises).tecnico).toMatch(/Triserie/);
+  });
+
+  test('hacen falta entre 2 y 3 ejercicios, y sin repetir', () => {
+    const { exercises } = base();
+    expect(makeComboExercise(['Press banca'], exercises)).toBeNull();
+    expect(makeComboExercise([], exercises)).toBeNull();
+    expect(makeComboExercise(['a', 'b', 'c', 'd'], exercises)).toBeNull();
+    // Un duplicado no cuenta como segundo ejercicio
+    expect(makeComboExercise(['Press banca', 'Press banca'], exercises)).toBeNull();
+  });
+
+  test('cada serie se guarda en SU ejercicio, unidas por comboId', () => {
+    const fecha = new Date(2026, 2, 10, 19, 0).toISOString();
+    const r = buildComboSets(['Press banca', 'Aperturas'],
+      [{ w: '80', reps: '8', rir: '1' }, { w: '20', reps: '12', rir: '0' }], fecha);
+    expect(r.map(x => x.exName)).toEqual(['Press banca', 'Aperturas']);
+    expect(r[0].set.w).toBe(80);
+    expect(r[1].set.reps).toBe('12');
+    expect(r[0].set.comboId).toBe(r[1].set.comboId);       // misma vuelta
+    expect(r[0].set.combo).toBe('Press banca + Aperturas');
+    expect([r[0].set.comboPos, r[1].set.comboPos]).toEqual([1, 2]);
+    // El orden dentro de la vuelta se conserva en la marca de tiempo
+    expect(new Date(r[0].set.date).getTime()).toBeLessThan(new Date(r[1].set.date).getTime());
+    // Nada se guarda bajo el nombre del combinado: duplicaría el volumen
+    expect(r.some(x => x.exName.includes(' + '))).toBe(false);
+  });
+
+  test('una vuelta a medias no se registra', () => {
+    const fecha = new Date(2026, 2, 10, 19, 0).toISOString();
+    expect(buildComboSets(['A', 'B'], [{ w: '80', reps: '8' }, { w: '', reps: '' }], fecha)).toEqual([]);
+    expect(buildComboSets(['A', 'B'], [{ w: '0', reps: '8' }, { w: '0', reps: '8' }], fecha)).toEqual([]);
+    expect(buildComboSets(['A'], [{ w: '80', reps: '8' }], fecha)).toEqual([]);
+    expect(buildComboSets(['A', 'B'], [{ w: '80' }, { w: '20' }], 'fecha mala')).toEqual([]);
+  });
+
+  test('sin reps ni RIR la serie sigue siendo válida', () => {
+    const fecha = new Date(2026, 2, 10, 19, 0).toISOString();
+    const r = buildComboSets(['A', 'B'], [{ w: '80' }, { w: '20', reps: '10' }], fecha);
+    expect(r).toHaveLength(2);
+    expect(r[0].set.reps).toBe('-');
+    expect(r[0].set.rir).toBeNull();
+    expect(r[0].set.type).toBe('work');
   });
 });

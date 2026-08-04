@@ -349,3 +349,43 @@ variable — y funciona igual si lo que recibe es un hex de verdad.
 paleta. La frontera fiable resultó ser que los colores de la interfaz van
 entrecomillados y los del CSS de los PDF van sueltos; el primer intento los
 separaba por si la línea tenía etiquetas HTML, y eso descartaba media interfaz.
+
+---
+
+## Quitar de un día y ejercicios combinados (W52)
+
+### Quitar de un día
+
+Existía "Quitar de este split", pero solo en la lista del split y atado al día
+que estuviera abierto. Ahora está también en **Opciones de Ejercicio → ➖ Quitar
+de este día**, y resuelve el día real del ejercicio (`splitOfExercise`), así que
+funciona igual desde el detalle de una sesión.
+
+`removeExerciseFromSplitPure` no toca `exlog`: **volver a añadirlo recupera todo
+el historial**. Eso es lo que separa "quitarlo de este día" de "borrar el
+ejercicio", que sí se lleva los registros por delante.
+
+### Combinados (biserie / triserie)
+
+Dos o tres ejercicios que se hacen seguidos, sin descanso. Se crean desde la
+pestaña **Combinado**, eligiendo del propio día, y quedan como un ejercicio más:
+`{ name: "Press banca + Aperturas", combo: [...], musculos: unión }`.
+
+**Cómo se guardan.** Una serie en **cada** ejercicio, no una en el combinado,
+todas con el mismo `comboId`:
+
+- los PRs, los gráficos, el reparto muscular y la fatiga están indexados por
+  nombre y siguen funcionando sin tocar nada
+- guardarlo bajo el nombre del combinado habría **duplicado el volumen** de sus
+  partes, y encima habría creado un ejercicio que ningún gráfico conoce
+- `comboId` las une: en el detalle del día salen con un distintivo ⛓ 1/2, para
+  que una biserie no parezca dos series sueltas
+
+En la tarjeta de un combinado se oculta el formulario suelto de una serie: si
+estuviera, registraría bajo el nombre del combinado y volveríamos al problema
+del párrafo anterior.
+
+Comprobado en el navegador: registrar una vuelta suma 1 serie a *Press banca* y
+1 a *Aperturas*, con el mismo `comboId`, y **nada** queda guardado bajo
+"Press banca + Aperturas". Al quitar un ejercicio del día, sus 12 series siguen
+donde estaban.

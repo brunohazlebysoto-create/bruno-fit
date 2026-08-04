@@ -100,6 +100,25 @@ const ESCENAS = [
       await page.getByRole("button", { name: /Mover a otro día/ }).click({ timeout: 5000 });
     },
   },
+  {
+    // Menú del ejercicio: mover, quitar del día, quitar series, fusionar
+    id: "entreno-11-menu-ejercicio",
+    tab: "Entreno",
+    scroll: 1700,
+    accion: async (page) => { await page.getByRole("button", { name: "Opciones del ejercicio" }).first().click({ timeout: 5000 }); },
+  },
+  {
+    // Crear un combinado (biserie/triserie) eligiendo ejercicios del día
+    id: "entreno-12-crear-combinado",
+    tab: "Entreno",
+    scrollHasta: "Añadir Ejercicio Manual",
+    accion: async (page) => {
+      await page.getByRole("button", { name: "Combinado" }).click({ timeout: 5000 });
+      await page.waitForTimeout(400);
+      await page.getByRole("button", { name: "Press banca", exact: true }).click({ timeout: 5000 });
+      await page.getByRole("button", { name: "Aperturas", exact: true }).click({ timeout: 5000 });
+    },
+  },
   // Posicionar por texto en vez de por píxeles: este panel se mueve cada vez
   // que crece algo por encima, y con scroll fijo la captura acabaría en otro sitio
   { id: "entreno-10-volumen-semanal", tab: "Entreno", scrollHasta: "Volumen Semanal" },
