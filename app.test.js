@@ -1993,3 +1993,48 @@ describe('mediciones de InBody: guardado y lectura', () => {
     expect(normalizeBodyEntry({ peso: "no", masaMuscular: "" }).musculo).toBeUndefined();
   });
 });
+
+describe('respuestas de IA cortadas a medias', () => {
+  const { repairTruncatedJSON, cleanAndParseJSON } = require('./app.js');
+
+  test('cierra un array cortado descartando el elemento incompleto', () => {
+    // Es el fallo real: el modelo agota el cupo a mitad de la lista
+    const cortado = '{"muscleGroups":[{"name":"Pecho","exercises":[{"name":"Press banca","workSets":[{"weight":90,"reps":8}]},{"name":"Ape';
+    const r = JSON.parse(repairTruncatedJSON(cortado));
+    expect(r.muscleGroups[0].name).toBe('Pecho');
+    expect(r.muscleGroups[0].exercises).toHaveLength(1);       // se descarta el incompleto
+    expect(r.muscleGroups[0].exercises[0].name).toBe('Press banca');
+  });
+
+  test('corta dentro de una cadena y aun así salva lo anterior', () => {
+    const cortado = '{"a":1,"notas":["uno","dos","tre';
+    const r = JSON.parse(repairTruncatedJSON(cortado));
+    expect(r.a).toBe(1);
+    expect(r.notas).toEqual(['uno', 'dos']);
+  });
+
+  test('no toca un JSON que está completo', () => {
+    expect(repairTruncatedJSON('{"a":1,"b":[1,2]}')).toBeNull();
+    expect(repairTruncatedJSON('[1,2,3]')).toBeNull();
+  });
+
+  test('no se inventa nada si no hay nada que salvar', () => {
+    expect(repairTruncatedJSON('{"a')).toBeNull();
+    expect(repairTruncatedJSON('')).toBeNull();
+  });
+
+  test('las llaves de escape no confunden al reparador', () => {
+    const cortado = '{"txt":"con \\"comillas\\" dentro","lista":[1,2,3';
+    const r = JSON.parse(repairTruncatedJSON(cortado));
+    expect(r.txt).toBe('con "comillas" dentro');
+    expect(r.lista).toEqual([1, 2]);
+  });
+
+  test('cleanAndParseJSON repara en vez de reventar', () => {
+    const cortado = '```json\n{"plan":[{"ej":"Press","series":3},{"ej":"Ape';
+    const r = cleanAndParseJSON(cortado);
+    expect(r.plan).toHaveLength(1);
+    // Y cuando de verdad no hay nada que hacer, el mensaje es entendible
+    expect(() => cleanAndParseJSON('no soy json')).toThrow(/incompleta o mal formada/);
+  });
+});

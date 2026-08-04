@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W55";
+const APP_VERSION = "v2026.07.29-W56";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -508,6 +508,52 @@ const getProfileStr = (weight = 93.9, musculo = 64.7, grasaPct = 26.2, visceral 
   return `Bruno: ${p.sexo}, ${p.edad} años, ${p.alturaCm} cm, ${weight} kg. Objetivo: ${objetivoTxt}; ${musculo} kg de músculo, ${grasaPct}% grasa${lean ? `, ${lean} kg de masa magra` : ""}, visceral grado ${visceral}. Dieta hiperproteica.`;
 };
 
+// Repara un JSON que llegó cortado a medias.
+// Pasa cuando el modelo agota su cupo de salida (finishReason MAX_TOKENS): el
+// texto termina en mitad de un elemento y JSON.parse falla con un "Expected ','
+// or ']' at position N" que no le dice nada a nadie. A un plan al que le falta
+// el último ejercicio todavía se le puede sacar partido; tirarlo entero, no.
+function repairTruncatedJSON(txt) {
+  const escanear = (s) => {
+    let enString = false, escape = false;
+    const pila = [];
+    let ultimaComa = -1, ultimoCierre = -1;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (escape) { escape = false; continue; }
+      if (c === "\\") { escape = true; continue; }
+      if (enString) { if (c === '"') enString = false; continue; }
+      if (c === '"') { enString = true; continue; }
+      if (c === "{" || c === "[") pila.push(c === "{" ? "}" : "]");
+      else if (c === "}" || c === "]") { pila.pop(); ultimoCierre = i; }
+      else if (c === "," && pila.length) ultimaComa = i;
+    }
+    return { enString, pila, ultimaComa, ultimoCierre };
+  };
+
+  let estado = escanear(txt);
+  if (!estado.pila.length && !estado.enString) return null; // no estaba cortado
+
+  // Retroceder hasta el último punto donde había un valor completo. Si ese
+  // punto cae dentro de una cadena, se prueba con el anterior.
+  let base = txt;
+  for (let intento = 0; intento < 5; intento++) {
+    const e = escanear(base);
+    const corte = Math.max(e.ultimaComa, e.ultimoCierre);
+    if (corte < 0) return null;
+    base = base.slice(0, base[corte] === "," ? corte : corte + 1);
+    const tras = escanear(base);
+    if (!tras.enString && tras.pila.length) {
+      const candidato = base + tras.pila.slice().reverse().join("");
+      try { JSON.parse(candidato); return candidato; } catch (_) { /* seguir recortando */ }
+    }
+    if (!tras.enString && !tras.pila.length) {
+      try { JSON.parse(base); return base; } catch (_) { /* seguir recortando */ }
+    }
+  }
+  return null;
+}
+
 const cleanAndParseJSON = (str) => {
   if (!str) throw new Error("JSON string is empty");
   let cleaned = str.trim();
@@ -517,19 +563,24 @@ const cleanAndParseJSON = (str) => {
   try {
     return JSON.parse(cleaned.trim());
   } catch (e) {
+    // Estos dos recortes son tentativas: si fallan hay que seguir probando, no
+    // reventar. Antes lanzaban aquí mismo y nunca se llegaba a la reparación.
     const firstBrace = cleaned.indexOf("{");
     const lastBrace = cleaned.lastIndexOf("}");
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      cleaned = cleaned.substring(firstBrace, lastBrace + 1);
-      return JSON.parse(cleaned);
+      try { return JSON.parse(cleaned.substring(firstBrace, lastBrace + 1)); } catch (_) {}
     }
     const firstBracket = cleaned.indexOf("[");
     const lastBracket = cleaned.lastIndexOf("]");
     if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
-      cleaned = cleaned.substring(firstBracket, lastBracket + 1);
-      return JSON.parse(cleaned);
+      try { return JSON.parse(cleaned.substring(firstBracket, lastBracket + 1)); } catch (_) {}
     }
-    throw e;
+    // Último recurso: puede que solo esté cortado por el final
+    const reparado = repairTruncatedJSON(cleaned);
+    if (reparado) {
+      try { return JSON.parse(reparado); } catch (_) {}
+    }
+    throw new Error("La respuesta de la IA llegó incompleta o mal formada. Vuelve a intentarlo.");
   }
 };
 
@@ -619,7 +670,7 @@ function htmlEsperaIA(titulo, subtitulo, color = "#4d7c0f") {
     setInterval(function(){
       s++; el.textContent = s + ' s';
       if (s === 25) avi.textContent = 'Sigue en curso. Los modelos gratuitos suelen tardar más.';
-      if (s === 60) avi.textContent = 'Está tardando de más. Si no responde, prueba con otro modelo en Perfil → Ajustes.';
+      if (s === 90) avi.textContent = 'Está tardando de más. Si no responde, prueba con otro modelo en Perfil → Ajustes.';
     }, 1000);
   <\/script>
 </body></html>`;
@@ -721,7 +772,9 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
         
         const generationConfig = {
           temperature: 0.2,
-          maxOutputTokens: options.maxTokens || (responseSchema ? 8192 : 2048)
+          // 8192 se quedaba corto para el plan de rutina y la respuesta llegaba
+          // cortada a media lista de ejercicios
+          maxOutputTokens: options.maxTokens || (responseSchema ? 24576 : 2048)
         };
         
         if (responseSchema) {
@@ -769,6 +822,11 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
         // gemini-2.5-flash thinking models prepend a {thought:true} part before the actual response
         const textPart = parts.find(p => !p.thought && p.text != null) || parts[parts.length - 1];
         const textOut = textPart?.text || "";
+        if (finishReason === "MAX_TOKENS") {
+          // Se devuelve igualmente: cleanAndParseJSON sabe reparar un JSON
+          // cortado y suele salvarse casi todo el contenido.
+          console.warn("[Gemini] respuesta cortada por límite de tokens; se intentará reparar");
+        }
         if (!textOut && responseSchema) {
           throw new Error("El modelo devolvió una respuesta vacía. Intenta de nuevo o cambia el modelo en Perfil → Ajustes.");
         }
@@ -13155,18 +13213,19 @@ tr:last-child td{border-bottom:none}
 - Si NUEVO → comienza con 60% del 1RM estimado
 
 REGLAS DE SELECCIÓN:
-- Elige EXACTAMENTE 3-4 ejercicios por grupo muscular del historial
+- Elige EXACTAMENTE 3 ejercicios por grupo muscular del historial
 - Prioriza ejercicios con más sesiones totales (más datos = mejor análisis)
 - Incluye al menos 1 compuesto pesado (mayor 1RM) por grupo
 - Ordena: compuesto multi-articular → compuesto secundario → aislamiento
 - Si hay estancamiento en un ejercicio, rótalos por una variación del historial
 
 FORMATO DE CADA EJERCICIO:
-- workSets: 3-4 series con el peso PROGRESADO (no la última sesión exacta)
-- warmupSets: 3 series al 40%, 60%, 75% del peso de trabajo
-- techniqueNotes: 3-4 puntos concisos y accionables
-- coachRationale: por qué este ejercicio hoy y en este orden
-- progressionHint: cuándo y cuánto aumentar la próxima vez
+- workSets: 3 series con el peso PROGRESADO (no la última sesión exacta)
+- warmupSets: 2 series al 50% y 75% del peso de trabajo
+- techniqueNotes: 2 puntos, máximo 12 palabras cada uno
+- coachRationale: UNA frase de máximo 18 palabras
+- progressionHint: UNA frase de máximo 14 palabras
+Sé breve: un plan que no cabe en la respuesta llega cortado y no sirve.
 
 HISTORIAL COMPLETO (analiza TODAS las fechas para detectar tendencia real):
 ${historyLines.join("\n")}
@@ -13174,7 +13233,11 @@ ${historyLines.join("\n")}
 Grupos musculares de hoy: ${targetBPs.join(", ")}
 sessionNotes: resume la estrategia de esta sesión en 2-3 oraciones (menciona la progresión planificada vs última sesión)`;
 
-      const raw = await callGemini([{ role:"user", content:userMsg }], sysPrompt, ROUTINE_SCHEMA);
+      // El plan de rutina es la generación más larga de la app: con los 45 s por
+      // defecto la primera clave se agotaba, reintentaba con la siguiente y el
+      // usuario acababa esperando 45 s por clave para no recibir nada.
+      const raw = await callGemini([{ role:"user", content:userMsg }], sysPrompt, ROUTINE_SCHEMA,
+        { maxTokens: 32768, timeoutMs: 120000 });
       const plan = cleanAndParseJSON(typeof raw === "string" ? raw : JSON.stringify(raw));
       if (!plan?.muscleGroups?.length) throw new Error("La IA no generó ejercicios. Verifica tu historial e intenta de nuevo.");
 
@@ -19579,6 +19642,7 @@ if (typeof module !== 'undefined' && module.exports) {
     RECOVERY_FIELDS, getLocalDateStr,
     normalizeMuscle, canonMuscleName, dedupeMuscles, calcMuscleVolumeBalance, SLUG_MUSCLE,
     normalizeBodyEntry, mergeMetricsUpTo,
+    repairTruncatedJSON, cleanAndParseJSON,
     inferMusclesFromName, musclesOfExercise, listUncountedExercises,
     splitOfExercise, moveExerciseBetweenSplits, removeExerciseFromSplitPure,
     makeComboExercise, buildComboSets,
