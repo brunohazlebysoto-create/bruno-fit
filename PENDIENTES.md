@@ -595,3 +595,36 @@ fallaba, no avisaba de nada.
 Además de arreglar las dos llamadas, `analyze` ignora ahora un primer argumento
 que no sea un array: la función no debería depender de que quien la llame
 acierte.
+
+---
+
+## Recomendado, rotar, nuevo o variante (W60)
+
+La hoja de selección pedía decidir sobre 13 ejercicios sin dar ninguna pista, y
+con todo marcado. Ahora `recommendDayExercises` los lee y los clasifica.
+
+El criterio no es una opinión: sale del propio historial de cada ejercicio.
+
+| Estado | Qué significa | De dónde sale |
+|---|---|---|
+| **RECOMENDADO** | Entra hoy | Compuesto del grupo, carga subiendo, historial suficiente, hecho hace poco |
+| **ROTAR** | Entra, pero está agotado | Mismo peso 3+ sesiones, carga bajando, o más de 30 días sin tocarlo |
+| **NUEVO** | Entra, sin datos aún | Sin sesiones registradas |
+| **VARIANTE** | Alternativa, desmarcada | No entró en el top 3 de su grupo; dice **a quién sustituye** |
+
+Cada uno lleva el porqué en una línea: *"carga subiendo (+5 kg)"*, *"estancado:
+conviene rotarlo"*, *"32 días sin hacerlo"*.
+
+### Tres cosas que salieron al mirarlo en pantalla
+
+- **"RECOMENDADO · estancado: conviene rotarlo"** se contradecía a sí mismo. Si
+  entra pero está agotado, es otro estado — no un recomendado con letra pequeña.
+- **"Sin registros" no es estar agotado.** Un ejercicio que nunca hiciste no
+  está quemado: no tiene datos. Mezclarlos hacía que apareciera como ROTAR, que
+  ahí no significa nada.
+- Los grupos salían **alfabéticos**; ahora en el orden del día, que es el que el
+  usuario ya conoce.
+
+La misma lectura viaja al prompt, para que el PDF no contradiga lo que la app
+acaba de recomendar: al ROTAR se le pide cambiar rango de repeticiones o técnica
+en vez de subir carga a ciegas, y al NUEVO arrancar conservador.

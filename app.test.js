@@ -2141,3 +2141,141 @@ describe('serie de evolución: qué es dato y qué es relleno', () => {
     expect(typeof pts[0].pesoTendencia).toBe('number');   // el suavizado sigue disponible aparte
   });
 });
+
+describe('qué se recomienda hoy y qué es variante', () => {
+  const { recommendDayExercises } = require('./app.js');
+
+  const HOY = new Date(2026, 2, 20, 12, 0);
+  const dia = (n) => { const d = new Date(HOY); d.setDate(d.getDate() - n); return d.toISOString(); };
+  const sesionesDe = (pesos, cada = 4) => pesos.flatMap((w, i) =>
+    [{ date: dia((pesos.length - 1 - i) * cada + 1), w, reps: 8, type: 'work' }]);
+
+  const exercises = { B: [
+    { name: 'Sentadilla', musculos: ['Cuádriceps'] },
+    { name: 'Prensa 45°', musculos: ['Cuádriceps'] },
+    { name: 'Extensión cuádriceps', musculos: ['Cuádriceps'] },
+    { name: 'Sentadilla búlgara', musculos: ['Cuádriceps'] },
+    { name: 'Vuelos laterales', musculos: ['Deltoides'] },
+  ]};
+
+  test('lo que sube de carga se recomienda; lo estancado pasa a variante', () => {
+    const exlog = {
+      'Sentadilla': sesionesDe([100, 105, 110, 115, 120, 125]),        // subiendo
+      'Prensa 45°': sesionesDe([180, 180, 180, 180, 180, 180]),        // estancada
+      'Extensión cuádriceps': sesionesDe([40, 42, 45, 47, 50, 52]),    // subiendo
+      'Sentadilla búlgara': sesionesDe([30, 30, 30, 30, 30, 30]),      // estancada
+      'Vuelos laterales': sesionesDe([10, 11, 12]),
+    };
+    const r = recommendDayExercises(exlog, exercises, 'B', { hoy: HOY });
+    const de = (n) => r.find(x => x.name === n);
+    expect(de('Sentadilla').rol).toBe('recomendado');
+    expect(de('Sentadilla').motivo).toMatch(/subiendo/);
+    expect(de('Sentadilla búlgara').rol).toBe('variante');
+    expect(de('Sentadilla búlgara').motivo).toMatch(/estancado/);
+    // Toda variante dice a quién sustituye, y ese alguien está en la sesión
+    r.filter(x => x.rol === 'variante').forEach(v => {
+      expect(de(v.sustituyeA).rol).not.toBe('variante');
+      expect(de(v.sustituyeA).grupo).toBe(v.grupo);
+    });
+  });
+
+  test('como mucho 3 recomendados por grupo', () => {
+    const exlog = {};
+    exercises.B.forEach(e => { exlog[e.name] = sesionesDe([50, 55, 60, 65]); });
+    const r = recommendDayExercises(exlog, exercises, 'B', { hoy: HOY });
+    const porGrupo = {};
+    r.filter(x => x.rol !== 'variante').forEach(x => { porGrupo[x.grupo] = (porGrupo[x.grupo] || 0) + 1; });
+    expect(porGrupo['Cuádriceps']).toBe(3);
+    expect(porGrupo['Deltoides']).toBe(1);   // solo hay uno, y no se queda sin
+  });
+
+  test('un ejercicio abandonado pierde prioridad y lo dice', () => {
+    const exlog = {
+      'Sentadilla': [{ date: dia(70), w: 120, reps: 5, type: 'work' }],
+      'Prensa 45°': sesionesDe([180, 185, 190, 195]),
+      'Extensión cuádriceps': sesionesDe([40, 45, 50, 55]),
+      'Sentadilla búlgara': sesionesDe([30, 32, 34, 36]),
+    };
+    const r = recommendDayExercises(exlog, exercises, 'B', { hoy: HOY });
+    expect(r.find(x => x.name === 'Sentadilla').motivo).toMatch(/días sin hacerlo/);
+  });
+
+  test('sin historial no rompe y se marca como tal', () => {
+    const r = recommendDayExercises({}, exercises, 'B', { hoy: HOY });
+    expect(r).toHaveLength(5);
+    expect(r.every(x => ['recomendado', 'rotar', 'nuevo', 'variante'].includes(x.rol))).toBe(true);
+    expect(r.find(x => x.name === 'Vuelos laterales').rol).toBe('nuevo');
+    expect(recommendDayExercises(null, null, 'B')).toEqual([]);
+  });
+
+  test('el compuesto ancla el grupo por encima del aislamiento', () => {
+    const exlog = {
+      'Sentadilla': sesionesDe([100, 102, 104]),
+      'Extensión cuádriceps': sesionesDe([40, 45, 50, 55, 60, 65]),
+    };
+    const r = recommendDayExercises(exlog, exercises, 'B', { hoy: HOY });
+    const sent = r.find(x => x.name === 'Sentadilla');
+    expect(sent.rol).not.toBe('variante');
+    expect(sent.compuesto).toBe(true);
+  });
+});
+
+describe('el estado "rotar" no se contradice con "recomendado"', () => {
+  const { recommendDayExercises } = require('./app.js');
+  const HOY = new Date(2026, 2, 20, 12, 0);
+  const dia = (n) => { const d = new Date(HOY); d.setDate(d.getDate() - n); return d.toISOString(); };
+
+  test('un ejercicio que entra pero está estancado se marca ROTAR, no RECOMENDADO', () => {
+    // Grupo con solo 2 ejercicios: los dos entran, pero uno está agotado
+    const exercises = { A: [
+      { name: 'Curl martillo', musculos: ['Bíceps'] },
+      { name: 'Curl inclinado', musculos: ['Bíceps'] },
+    ]};
+    const exlog = {
+      'Curl martillo': [16, 16, 16, 16].map((w, i) => ({ date: dia((3 - i) * 4 + 1), w, reps: 8, type: 'work' })),
+      'Curl inclinado': [12, 14, 16, 18].map((w, i) => ({ date: dia((3 - i) * 4 + 1), w, reps: 8, type: 'work' })),
+    };
+    const r = recommendDayExercises(exlog, exercises, 'A', { hoy: HOY });
+    const martillo = r.find(x => x.name === 'Curl martillo');
+    expect(martillo.rol).toBe('rotar');
+    expect(martillo.motivo).toMatch(/estancado/);
+    expect(r.find(x => x.name === 'Curl inclinado').rol).toBe('recomendado');
+  });
+
+  test('los grupos salen en el orden del día, no alfabético', () => {
+    const exercises = { B: [
+      { name: 'Sentadilla', musculos: ['Cuádriceps'] },
+      { name: 'Vuelos laterales', musculos: ['Deltoides'] },
+    ]};
+    const r = recommendDayExercises({}, exercises, 'B', { hoy: HOY });
+    expect(r.map(x => x.grupo)).toEqual(['Cuádriceps', 'Deltoides']);
+  });
+
+  test('ningún recomendado lleva un motivo negativo', () => {
+    const exercises = { A: [
+      { name: 'Press banca', musculos: ['Pectoral'] },
+      { name: 'Aperturas', musculos: ['Pectoral'] },
+    ]};
+    const exlog = {
+      'Press banca': [90, 90, 90, 90].map((w, i) => ({ date: dia((3 - i) * 4 + 1), w, reps: 8, type: 'work' })),
+      'Aperturas': [{ date: dia(80), w: 20, reps: 12, type: 'work' }],
+    };
+    const r = recommendDayExercises(exlog, exercises, 'A', { hoy: HOY });
+    r.filter(x => x.rol === 'recomendado').forEach(x => {
+      expect(x.motivo).not.toMatch(/estancado|bajando|sin hacerlo/);
+    });
+  });
+});
+
+describe('sin datos no es lo mismo que agotado', () => {
+  const { recommendDayExercises } = require('./app.js');
+  const HOY = new Date(2026, 2, 20, 12, 0);
+
+  test('un ejercicio nunca hecho se marca NUEVO, no ROTAR', () => {
+    const exercises = { A: [{ name: 'Aperturas', musculos: ['Pectoral'] }] };
+    const r = recommendDayExercises({}, exercises, 'A', { hoy: HOY });
+    expect(r[0].rol).toBe('nuevo');
+    expect(r[0].motivo).toMatch(/carga se estimará/);
+    expect(r[0].motivo).not.toMatch(/estancado|agotado/);
+  });
+});

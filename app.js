@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W59";
+const APP_VERSION = "v2026.07.29-W60";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -2527,6 +2527,106 @@ function buildComboSets(nombres, filas, fechaISO) {
   });
   // Una combinación con una sola parte registrada no es una combinación
   return salida.length >= 2 ? salida : [];
+}
+
+/* ===== QUÉ ENTRA HOY Y QUÉ ES VARIANTE ===== */
+// Una lista de 13 ejercicios con todo marcado no ayuda a decidir. Esto ordena
+// los del día por lo que dice su propio historial y separa los que conviene
+// hacer HOY de los que están ahí como alternativa para rotar.
+//
+// El criterio no es una opinión: sale de los datos. Un compuesto con carga
+// subiendo es mejor ancla que un aislamiento estancado tres sesiones, y un
+// ejercicio que lleva un mes sin tocarse no debería mandar en la sesión.
+const RECO_POR_GRUPO = 3;
+
+function recommendDayExercises(exlog, exercises, splitKey, opts = {}) {
+  const lista = ((exercises || {})[splitKey] || []).filter(e => e?.name);
+  const ahora = opts.hoy ? new Date(opts.hoy).getTime() : Date.now();
+  const porGrupo = {};
+
+  lista.forEach(ex => {
+    const grupo = canonMuscleName(musclesOfExercise(ex.name, exercises)[0] || "") || "Otros";
+
+    // Peso tope por sesión, de la más reciente a la más antigua
+    const porFecha = {};
+    ((exlog || {})[ex.name] || []).forEach(st => {
+      if (!st || st.type === "warmup") return;
+      const d = localDateKey(st.date), w = parseFloat(st.w);
+      if (!d || !(w > 0)) return;
+      porFecha[d] = Math.max(porFecha[d] || 0, w);
+    });
+    const fechas = Object.keys(porFecha).sort().reverse();
+    const sesiones = fechas.length;
+    const diasDesde = sesiones
+      ? Math.floor((ahora - new Date(fechas[0] + "T12:00:00").getTime()) / 86400000) : null;
+
+    const media = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+    const mUlt = media(fechas.slice(0, 3).map(d => porFecha[d]));
+    const mPrev = media(fechas.slice(3, 6).map(d => porFecha[d]));
+    let tendencia = "sin datos", delta = null;
+    if (mUlt != null && mPrev != null) {
+      delta = Math.round((mUlt - mPrev) * 10) / 10;
+      tendencia = delta > 1.5 ? "subiendo" : delta < -1.5 ? "bajando" : "meseta";
+    } else if (sesiones >= 3) {
+      const u = fechas.slice(0, 3).map(d => porFecha[d]);
+      tendencia = (Math.max(...u) - Math.min(...u)) <= 1 ? "meseta" : "subiendo";
+    } else if (sesiones >= 1) {
+      tendencia = "pocos datos";
+    }
+
+    const compuesto = isCompoundExercise(ex.name);
+    let score = 0;
+    const motivos = [];
+    if (compuesto) { score += 3; motivos.push("compuesto principal del grupo"); }
+    if (sesiones >= 4) score += 1.5;
+    if (tendencia === "subiendo") { score += 2.5; motivos.unshift(delta != null ? `carga subiendo (+${delta} kg)` : "carga subiendo"); }
+    if (tendencia === "meseta" && sesiones >= 3) { score -= 2; motivos.unshift("estancado: conviene rotarlo"); }
+    if (tendencia === "bajando") { score -= 1; motivos.unshift(`carga bajando (${delta} kg)`); }
+    if (!sesiones) { score -= 1.5; motivos.push("sin registros todavía"); }
+    if (diasDesde != null && diasDesde > 30) { score -= 1.5; motivos.unshift(`${diasDesde} días sin hacerlo`); }
+    else if (diasDesde != null && diasDesde <= 10) score += 0.5;
+
+    (porGrupo[grupo] = porGrupo[grupo] || []).push({
+      grupo, name: ex.name, score: Math.round(score * 10) / 10,
+      sesiones, tendencia, diasDesde, compuesto,
+      motivo: motivos[0] || `${sesiones} sesión${sesiones !== 1 ? "es" : ""} registrada${sesiones !== 1 ? "s" : ""}`,
+    });
+  });
+
+  const tope = opts.porGrupo || RECO_POR_GRUPO;
+  const salida = [];
+  // Los grupos salen en el orden en que aparecen en el día, no alfabético: es
+  // el orden con el que el usuario ya está familiarizado.
+  const ordenGrupos = [...new Set(lista.map(ex =>
+    canonMuscleName(musclesOfExercise(ex.name, exercises)[0] || "") || "Otros"))];
+  ordenGrupos.forEach(g => {
+    const exs = (porGrupo[g] || []).sort((a, b) =>
+      b.score - a.score || b.sesiones - a.sesiones || a.name.localeCompare(b.name));
+    const nRec = Math.min(tope, exs.length);
+    exs.forEach((e, i) => {
+      if (i >= nRec) {
+        // La variante entra en lugar del recomendado más flojo de su grupo,
+        // que es justamente el candidato a rotar
+        salida.push({ ...e, rol: "variante", sustituyeA: exs[nRec - 1].name });
+        return;
+      }
+      // Un ejercicio sin historial no está agotado: no tiene datos. Son cosas
+      // distintas y mezclarlas hacía que un ejercicio nunca hecho apareciera
+      // como "ROTAR", que no significa nada.
+      if (!e.sesiones) {
+        salida.push({ ...e, rol: "nuevo", sustituyeA: null, motivo: "sin registros: la carga se estimará" });
+        return;
+      }
+      // Entra en la sesión, pero su historial dice que está agotado. Llamarlo
+      // "recomendado" mientras el motivo dice "estancado" es contradecirse:
+      // es otro estado, no un recomendado con letra pequeña.
+      const agotado = (e.tendencia === "meseta" && e.sesiones >= 3)
+        || e.tendencia === "bajando"
+        || (e.diasDesde != null && e.diasDesde > 30);
+      salida.push({ ...e, rol: agotado ? "rotar" : "recomendado", sustituyeA: null });
+    });
+  });
+  return salida;
 }
 
 // Quita un ejercicio de UN día del split. No toca `exlog`: las series y los PRs
@@ -13255,6 +13355,13 @@ tr:last-child td{border-bottom:none}
       const el = exlog || {};
       const historyLines = [];
       const nombresDelDia = new Set(assignedExs.map(e => e.name));
+      // El mismo criterio que se le enseñó al usuario en la hoja de selección.
+      // Sin esto la IA reordenaba por su cuenta y contradecía lo que la app
+      // acababa de recomendar.
+      const lectura = recommendDayExercises(exlog, exercises, splitKey)
+        .filter(r => nombresDelDia.has(r.name))
+        .map(r => `- ${r.name}: ${r.rol.toUpperCase()} (${r.motivo})`)
+        .join("\n");
       for (const bp of targetBPs) {
         // Solo los ejercicios DEL DÍA (o los elegidos). Antes se barría todo el
         // historial y entraban ejercicios de otros días del split.
@@ -13348,6 +13455,12 @@ REGLAS DE SELECCIÓN (ESTRICTAS):
   bíceps o tríceps como secundario, NO crees un grupo para ellos.
 - Usa ÚNICAMENTE ejercicios de la lista de abajo. No inventes ni traigas otros.
 - Elige EXACTAMENTE 3 ejercicios por grupo muscular del historial
+- Respeta esta lectura del historial, que es la que ya vio el usuario:
+${lectura || "(sin lectura previa)"}
+  · RECOMENDADO → ponlo primero en su grupo y busca progresión
+  · ROTAR → está estancado: cambia el rango de repeticiones o la técnica en vez
+    de subir carga a ciegas, y dilo en coachRationale
+  · NUEVO → sin historial: arranca conservador y explica cómo calibrarlo
 - Prioriza ejercicios con más sesiones totales (más datos = mejor análisis)
 - Incluye al menos 1 compuesto pesado (mayor 1RM) por grupo
 - Ordena: compuesto multi-articular → compuesto secundario → aislamiento
@@ -14906,7 +15019,10 @@ tr:last-child td{border-bottom:none}
         })}
         <div style={{marginLeft:"auto", display:"flex", gap:6}}>
           <button
-            onClick={() => setRutinaSel(new Set((dayExs || []).map(e => e.name)))}
+            onClick={() => setRutinaSel(new Set(
+              recommendDayExercises(exlog, exercises, sel)
+                .filter(r => r.rol !== "variante").map(r => r.name)
+            ))}
             disabled={pdfBusy}
             title="Generar plan de sesión con IA"
             style={{
@@ -16122,13 +16238,10 @@ tr:last-child td{border-bottom:none}
       {/* Elegir qué entra en la rutina ANTES de generarla. Es la forma directa
           de que el plan sea del día y no de lo que el modelo crea conveniente. */}
       {rutinaSel !== null && (() => {
-        const lista = dayExs || [];
+        const reco = recommendDayExercises(exlog, exercises, sel);
         const porGrupo = {};
-        lista.forEach(e => {
-          const g = canonMuscleName((e.musculos || [])[0] || "") || "Otros";
-          (porGrupo[g] = porGrupo[g] || []).push(e);
-        });
-        const elegidos = lista.filter(e => rutinaSel.has(e.name));
+        reco.forEach(r => { (porGrupo[r.grupo] = porGrupo[r.grupo] || []).push(r); });
+        const elegidos = reco.filter(r => rutinaSel.has(r.name));
         const alternar = (n) => setRutinaSel(prev => {
           const s2 = new Set(prev);
           if (s2.has(n)) s2.delete(n); else s2.add(n);
@@ -16143,8 +16256,11 @@ tr:last-child td{border-bottom:none}
               display:"flex", flexDirection:"column", gap:10}}>
               <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Rutina con IA</div>
               <div style={{fontSize:11.5, color:C.muted, textAlign:"center", lineHeight:1.5}}>
-                Elige qué entra en el plan de <strong style={{color:C.ink}}>{dayObj.name}</strong>.
-                La IA trabajará solo con lo marcado.
+                Plan de <strong style={{color:C.ink}}>{dayObj.name}</strong>, según tu historial.
+                <strong style={{color:C.lime}}> Recomendado</strong> = entra hoy ·
+                <strong style={{color:C.amber}}> Rotar</strong> = entra pero está agotado ·
+                <strong style={{color:C.cyan}}> Variante</strong> = alternativa para cambiarlo ·
+                <strong style={{color:C.muted}}> Nuevo</strong> = sin datos aún.
               </div>
 
               {Object.entries(porGrupo).map(([grupo, exs]) => (
@@ -16154,19 +16270,36 @@ tr:last-child td{border-bottom:none}
                   <div style={{display:"flex", flexDirection:"column", gap:5}}>
                     {exs.map(e => {
                       const on = rutinaSel.has(e.name);
+                      const ETIQ = {
+                        recomendado: { txt: "RECOMENDADO", col: C.lime, bg: "rgba(77,124,15,0.14)" },
+                        rotar:       { txt: "ROTAR",       col: C.amber, bg: "rgba(180,83,9,0.14)" },
+                        nuevo:       { txt: "NUEVO",       col: C.muted, bg: "rgba(95,107,87,0.12)" },
+                        variante:    { txt: "VARIANTE",    col: C.cyan,  bg: "rgba(14,116,144,0.12)" },
+                      }[e.rol] || { txt: "", col: C.muted, bg: "transparent" };
                       return (
                         <button key={e.name} onClick={() => alternar(e.name)}
-                          style={{display:"flex", alignItems:"center", gap:9, textAlign:"left",
+                          style={{display:"flex", alignItems:"flex-start", gap:9, textAlign:"left",
                             background: on ? "rgba(77,124,15,0.10)" : C.panel2,
                             border:`1px solid ${on ? C.lime : C.line}`, borderRadius:10,
                             padding:"8px 10px", cursor:"pointer"}}>
                           <span style={{width:18, height:18, borderRadius:5, flexShrink:0, display:"grid",
-                            placeItems:"center", background: on ? C.lime : "transparent",
+                            placeItems:"center", marginTop:1, background: on ? C.lime : "transparent",
                             border:`1px solid ${on ? C.lime : C.line}`, color:C.onAccent, fontSize:11, fontWeight:900}}>
                             {on ? "✓" : ""}
                           </span>
-                          <span style={{fontSize:12.5, fontWeight:600, color: on ? C.ink : C.muted, flex:1,
-                            minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{e.name}</span>
+                          <span style={{flex:1, minWidth:0}}>
+                            <span style={{display:"flex", alignItems:"center", gap:5, flexWrap:"wrap"}}>
+                              <span style={{fontSize:12.5, fontWeight:600, color: on ? C.ink : C.muted}}>{e.name}</span>
+                              <span style={{fontSize:8.5, fontWeight:800, letterSpacing:".04em", padding:"1px 5px",
+                                borderRadius:4, whiteSpace:"nowrap", background: ETIQ.bg, color: ETIQ.col}}>
+                                {ETIQ.txt}
+                              </span>
+                            </span>
+                            {/* El porqué, sacado de su propio historial */}
+                            <span style={{display:"block", fontSize:9.5, color:C.muted, marginTop:2, lineHeight:1.4}}>
+                              {e.rol === "variante" ? `Cambia por ${e.sustituyeA} · ${e.motivo}` : e.motivo}
+                            </span>
+                          </span>
                         </button>
                       );
                     })}
@@ -19927,6 +20060,7 @@ if (typeof module !== 'undefined' && module.exports) {
     repairTruncatedJSON, cleanAndParseJSON,
     inferMusclesFromName, musclesOfExercise, listUncountedExercises,
     splitOfExercise, moveExerciseBetweenSplits, removeExerciseFromSplitPure,
+    recommendDayExercises,
     makeComboExercise, buildComboSets,
     default: App
   };
