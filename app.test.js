@@ -2102,3 +2102,42 @@ describe('revisión de la lectura del informe corporal', () => {
     expect(validateBodyMetrics(null, 180).entry).toEqual({});
   });
 });
+
+describe('serie de evolución: qué es dato y qué es relleno', () => {
+  const { buildRecompositionSeries } = require('./app.js');
+
+  const log = {
+    '2026-03-01': { weight: 92.1, grasaPct: 25.1, masaGrasa: 23.1, pesoSinGrasa: 69, fuente: 'inbody' },
+    '2026-03-02': { weight: 91.8, fuente: 'bascula' },
+    '2026-03-03': { weight: 91.6, fuente: 'bascula' },
+  };
+
+  test('usa la composición MEDIDA, no la derivada del peso suavizado', () => {
+    // El fallo real: 93.8 × 74.9% = 70.3 cuando el informe medía 69
+    const p = buildRecompositionSeries(log).points[0];
+    expect(p.magra).toBe(69);
+    expect(p.grasaKg).toBe(23.1);
+    expect(p.composicionMedida).toBe(true);
+    expect(p.fuente).toBe('inbody');
+  });
+
+  test('distingue día pesado de día con composición medida', () => {
+    const pts = buildRecompositionSeries(log).points;
+    expect(pts.every(p => p.pesado)).toBe(true);              // se pesó los 3 días
+    expect(pts.filter(p => p.composicionMedida)).toHaveLength(1); // el InBody, solo uno
+  });
+
+  test('en los días sin composición arrastra el último % conocido', () => {
+    const pts = buildRecompositionSeries(log).points;
+    expect(pts[1].grasaPct).toBe(25.1);
+    expect(pts[1].composicionMedida).toBe(false);
+    // Y ahí sí se deriva, porque no hay medición de ese día
+    expect(pts[1].magra).toBeCloseTo(91.8 * 0.749, 0);
+  });
+
+  test('el peso de un día pesado es el de ese día, no el suavizado', () => {
+    const pts = buildRecompositionSeries(log).points;
+    expect(pts[0].peso).toBe(92.1);
+    expect(typeof pts[0].pesoTendencia).toBe('number');   // el suavizado sigue disponible aparte
+  });
+});

@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W57";
+const APP_VERSION = "v2026.07.29-W58";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1818,18 +1818,28 @@ function buildRecompositionSeries(metricslog) {
     const c = parseFloat(e.cintura);
     if (!isNaN(c) && c > 0) lastCintura = c;
 
-    // Si ese día HAY una medición real de masa grasa o magra, se usa esa. Antes
-    // se derivaba siempre del peso suavizado (93.8 × 74.9% = 70.3 kg) y no
-    // cuadraba con los 69 kg que el propio informe había medido: el gráfico y
-    // el registro decían cosas distintas del mismo día.
+    // Dos cosas distintas, que conviene no mezclar:
+    //   pesado             → ese día hubo una pesada
+    //   composicionMedida  → ese día se midió grasa/masa magra (InBody)
+    // Si HAY medición real de composición se usa esa. Antes se derivaba siempre
+    // del peso suavizado (93.8 × 74.9% = 70.3 kg) y no cuadraba con los 69 kg
+    // que el propio informe había medido: el gráfico y el registro decían cosas
+    // distintas del mismo día.
     const magraMedida = parseFloat(e.pesoSinGrasa);
     const grasaMedida = parseFloat(e.masaGrasa);
-    const medido = (magraMedida > 0 || grasaMedida > 0) && pesoReal > 0;
+    const pesado = pesoReal > 0;
+    // Cuenta como medición de composición cualquier dato de ESE día: los kg de
+    // grasa o magra del InBody, pero también un % de grasa o unos kg de músculo
+    // apuntados a mano. Lo que no cuenta es el valor arrastrado de días atrás.
+    const composicionMedida = pesado && (
+      magraMedida > 0 || grasaMedida > 0 ||
+      parseFloat(e.grasaPct) > 0 || parseFloat(e.musculo) > 0
+    );
 
-    const magra = magraMedida > 0 ? r1(magraMedida)
+    const magra = composicionMedida && magraMedida > 0 ? r1(magraMedida)
       : (grasaMedida > 0 && pesoReal > 0) ? r1(pesoReal - grasaMedida)
       : lastGrasa != null ? r1(peso * (1 - lastGrasa / 100)) : null;
-    const grasaKg = grasaMedida > 0 ? r1(grasaMedida)
+    const grasaKg = composicionMedida && grasaMedida > 0 ? r1(grasaMedida)
       : (magraMedida > 0 && pesoReal > 0) ? r1(pesoReal - magraMedida)
       : lastGrasa != null ? r1(peso * (lastGrasa / 100)) : null;
 
@@ -1837,9 +1847,13 @@ function buildRecompositionSeries(metricslog) {
       date: d,
       // En los días con medición se muestra el peso de ese día; el suavizado
       // solo rellena los días sin pesada
-      peso: r1(medido ? pesoReal : peso),
+      peso: r1(pesado ? pesoReal : peso),
       pesoTendencia: r1(peso),
-      medido,
+      pesado,
+      // Sin distinguirlo, una línea plana de tres semanas parece un dato y es
+      // solo el último valor conocido repetido.
+      composicionMedida,
+      fuente: e.fuente || null,
       grasaPct: lastGrasa,
       magra, grasaKg,
       cintura: lastCintura,
@@ -10892,8 +10906,10 @@ function Perfil({
                       Sesión activa: <b style={{ color: "var(--accent-lime)" }}>{supabaseUser.email}</b>
                     </div>
                     <div style={{ display: "flex", gap: 6 }}>
-                      <button 
-                        onClick={syncLocalToSupabase}
+                      {/* Sin la lambda, el evento del clic llegaba como
+                          `silent` y silenciaba los errores de sincronización */}
+                      <button
+                        onClick={() => syncLocalToSupabase()}
                         disabled={sbSyncing}
                         className="btn-active-scale"
                         style={{ flex: 1, padding: "10px", background: "var(--accent-lime)", color: C.onAccent, fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
@@ -17502,11 +17518,14 @@ function Registro({
   const fatBarPct = ((parseFloat(fatWeight) / totalBar) * 100).toFixed(1);
   const remPct = (100 - parseFloat(muscPct) - parseFloat(fatBarPct)).toFixed(1);
 
-  const analyze = async(customWeights = null, customMetrics = null) => { 
-    setBusy(true); 
-    setTrend(""); 
-    const weightsToUse = customWeights || weights;
-    const metricsToUse = customMetrics || activeMetrics;
+  const analyze = async(customWeights = null, customMetrics = null) => {
+    setBusy(true);
+    setTrend("");
+    // Defensivo a propósito: si se usa como manejador de evento llega el evento
+    // del clic en vez de la lista, y antes eso tumbaba la app entera
+    const weightsToUse = Array.isArray(customWeights) ? customWeights : weights;
+    const metricsToUse = (customMetrics && typeof customMetrics === "object" && !customMetrics.nativeEvent)
+      ? customMetrics : activeMetrics;
     const series = weightsToUse.map(w => `${fdate(w.date)}: ${w.weight}kg`).join(" -> ") || "Sin datos";
     
     // Calculate 7-day nutritional average
@@ -18283,6 +18302,19 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                       <path key={s.key} d={infos[s.key].d} fill="none" stroke={s.color} strokeWidth={1.7}
                         strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"/>
                     ))}
+                    {/* Marca los días con medición real. Sin esto no se
+                        distingue un dato de un tramo rellenado, que es
+                        exactamente de donde salía la sensación de que el
+                        gráfico y el registro no coincidían. */}
+                    {activas.map(s => {
+                      // El peso se marca los días que hubo pesada; la
+                      // composición, solo los días que se midió de verdad
+                      const esReal = (p) => s.key === "peso" ? p.pesado : p.composicionMedida;
+                      return pts.map((p, i) => (esReal(p) && p[s.key] != null) ? (
+                        <circle key={s.key + i} cx={xAt(i)} cy={infos[s.key].yAt(p[s.key])} r={1.9}
+                          fill={s.color} opacity={0.85}/>
+                      ) : null);
+                    })}
                     {idx != null && (
                       <>
                         <line x1={xAt(idx)} y1={0} x2={xAt(idx)} y2={H} stroke={C.muted} strokeWidth={1}
@@ -18294,14 +18326,30 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                       </>
                     )}
                   </svg>
+                  {/* El gráfico no tenía ninguna referencia temporal */}
+                  <div style={{display:"flex", justifyContent:"space-between", fontSize:9, color:C.muted, marginTop:2}}>
+                    <span>{fdate(pts[0].date + "T12:00:00Z")}</span>
+                    <span>{fdate(pts[pts.length - 1].date + "T12:00:00Z")}</span>
+                  </div>
                 </div>
 
                 {/* Lectura: fecha inspeccionada o resumen del rango */}
                 <div style={{marginTop:8, background:C.bg, borderRadius:10, padding:"9px 11px"}}>
-                  <div style={{fontSize:9.5, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em", marginBottom:6}}>
-                    {punto
-                      ? fdate(punto.date + "T12:00:00Z")
-                      : `Cambio en ${evoRango ? `los últimos ${evoRango} días` : "todo el histórico"}`}
+                  <div style={{display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:8, marginBottom:6}}>
+                    <span style={{fontSize:9.5, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em"}}>
+                      {punto
+                        ? fdate(punto.date + "T12:00:00Z")
+                        : `Cambio en ${evoRango ? `los últimos ${evoRango} días` : "todo el histórico"}`}
+                    </span>
+                    {/* Decir de dónde sale cada número evita comparar un dato
+                        medido con uno arrastrado y pensar que hay un error */}
+                    {punto && (
+                      <span style={{fontSize:9, fontWeight:700, color: punto.composicionMedida ? C.lime : C.muted, whiteSpace:"nowrap"}}>
+                        {punto.composicionMedida
+                          ? `● medido${punto.fuente === "inbody" ? " · InBody" : punto.fuente === "bascula" ? " · báscula" : ""}`
+                          : punto.pesado ? "● solo peso ese día" : "○ sin medición ese día"}
+                      </span>
+                    )}
                   </div>
                   <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
                     {activas.map(s => {
@@ -18334,8 +18382,10 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
                     <b style={{color:C.lime}}>Vas bien.</b> Estás perdiendo grasa manteniendo (o ganando) masa magra.
                   </div>
                 )}
-                <div style={{fontSize:9.5, color:C.muted, marginTop:7}}>
-                  {pts.length} mediciones · cada métrica usa su propia escala para que se vea su tendencia
+                <div style={{fontSize:9.5, color:C.muted, marginTop:7, lineHeight:1.45}}>
+                  {pts.filter(p => p.pesado).length} pesadas y {pts.filter(p => p.composicionMedida).length} mediciones
+                  de composición en {pts.length} días. Los puntos marcan los días con dato real; entre ellos se
+                  arrastra el último conocido. Cada métrica usa su propia escala para que se vea su tendencia.
                 </div>
               </>
             )}
@@ -18827,10 +18877,12 @@ Analiza la tendencia de peso y composición corporal, identifica si está progre
 
       {weights.length > 0 && (
         <>
-          <button 
-            onClick={analyze} 
-            disabled={busy} 
-            style={{width:"100%", padding:"11px", borderRadius:12, border:`1px solid ${C.line}`, cursor:"pointer", background:C.panel, color:C.lime, fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyTarget:"center", justifyContent:"center", gap:8, marginBottom:4}}
+          {/* onClick={analyze} a secas le pasaba el EVENTO del clic como lista
+              de pesos, y reventaba con "map is not a function" */}
+          <button
+            onClick={() => analyze()}
+            disabled={busy}
+            style={{width:"100%", padding:"11px", borderRadius:12, border:`1px solid ${C.line}`, cursor:"pointer", background:C.panel, color:C.lime, fontWeight:800, fontSize:13.5, display:"flex", alignItems:"center", justifyContent:"center", gap:8, marginBottom:4}}
           >
             {busy ? <><Loader2 size={15} style={{animation:"spin 1s linear infinite"}}/>Analizando…</> : <><LineChart size={16}/>Analizar peso y composición corporal (IA)</>}
           </button>
