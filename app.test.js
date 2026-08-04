@@ -1850,3 +1850,65 @@ describe('análisis: progreso y reparto muscular en %', () => {
     expect(r.muscles[0].sharePct).toBeGreaterThan(0);
   });
 });
+
+describe('porción muscular en vez de grupo entero', () => {
+  const { muscleDetail, calcSessionMuscleDetail, buildDaySummary } = require('./app.js');
+
+  test('afina el grupo grueso a partir del ejercicio', () => {
+    const casos = [
+      ['Espalda', 'Jalón al pecho', 'Dorsal ancho'],
+      ['Espalda', 'Encogimiento con mancuernas', 'Trapecio'],
+      ['Espalda', 'Peso muerto', 'Erector espinal'],
+      ['Pectoral', 'Press inclinado mancuerna', 'Pectoral superior'],
+      ['Pectoral', 'Press banca', 'Pectoral medio'],
+      ['Deltoides', 'Vuelos laterales', 'Deltoides lateral'],
+      ['Deltoides', 'Press militar', 'Deltoides anterior'],
+      ['Deltoides', 'Vuelos posteriores polea', 'Deltoides posterior'],
+      ['Pantorrillas', 'Elevación de gemelos sentado', 'Sóleo'],
+      ['Tríceps', 'Extensión sobre cabeza', 'Tríceps cabeza larga'],
+    ];
+    const fallos = casos.filter(([m, ex, esp]) => muscleDetail(m, ex) !== esp)
+      .map(([m, ex, esp]) => `${m} en "${ex}": ${muscleDetail(m, ex)} ≠ ${esp}`);
+    expect(fallos).toEqual([]);
+  });
+
+  test('"unilateral" no es "lateral"', () => {
+    // El fallo real: /lateral/ sin \b dispara con "unilateral"
+    expect(muscleDetail('Deltoides', 'Prensa de piernas unilateral')).not.toBe('Deltoides lateral');
+    expect(muscleDetail('Glúteos', 'Prensa de piernas 45 grados unilateral')).toBe('Glúteo mayor');
+    expect(muscleDetail('Deltoides', 'Elevación lateral')).toBe('Deltoides lateral');
+  });
+
+  test('respeta el detalle que ya trae el músculo', () => {
+    expect(muscleDetail('Deltoides posterior', 'Press banca')).toBe('Deltoides posterior');
+    expect(muscleDetail('Dorsal ancho', 'Sentadilla')).toBe('Dorsal ancho');
+    expect(muscleDetail('Vasto medial', 'Sentadilla')).toBe('Vasto medial');
+    // Mayúsculas y acentos siguen sin crear porciones nuevas
+    expect(muscleDetail('DELTOIDES POSTERIOR', 'x')).toBe(muscleDetail('deltoides posterior', 'x'));
+  });
+
+  test('no se inventa una porción del cuádriceps: ningún ejercicio las separa', () => {
+    expect(muscleDetail('Cuádriceps', 'Sentadilla')).toBe('Cuádriceps');
+    expect(muscleDetail('Cuádriceps', 'Prensa 45°')).toBe('Cuádriceps');
+  });
+
+  test('el reparto por porción suma ~100 y marca principales', () => {
+    const t = (h) => new Date(2026, 2, 10, h, 0).toISOString();
+    const exlog = {
+      'Jalón al pecho': [{ date: t(19), w: 60, reps: 10, type: 'work' }, { date: t(19), w: 60, reps: 10, type: 'work' }],
+      'Vuelos laterales': [{ date: t(20), w: 10, reps: 15, type: 'work' }],
+    };
+    const ejercicios = { C: [
+      { name: 'Jalón al pecho', musculos: ['Espalda', 'Bíceps'] },
+      { name: 'Vuelos laterales', musculos: ['Deltoides', 'Trapecio superior'] },
+    ]};
+    const d = calcSessionMuscleDetail(exlog, ejercicios, '2026-03-10');
+    const nombres = d.map(x => x.muscle);
+    expect(nombres).toContain('Dorsal ancho');       // no "Espalda"
+    expect(nombres).toContain('Deltoides lateral');  // no "Deltoides"
+    expect(Math.abs(d.reduce((a, x) => a + x.sharePct, 0) - 100)).toBeLessThanOrEqual(3);
+    expect(d.find(x => x.muscle === 'Dorsal ancho').principal).toBe(true);
+    // El resumen del día lo expone para la IA
+    expect(buildDaySummary(exlog, ejercicios, '2026-03-10').detail.length).toBe(d.length);
+  });
+});

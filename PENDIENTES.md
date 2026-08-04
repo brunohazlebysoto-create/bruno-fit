@@ -428,3 +428,40 @@ un comentario genérico: **>45% en un grupo** es un día desequilibrado, **<10%*
 es un músculo que apenas se tocó. Y en la recomendación por ejercicio se avisa
 de cuánto se lleva ya su músculo principal, porque subir carga en el tercer
 ejercicio de un grupo no es lo mismo que subirla en el primero.
+
+---
+
+## Porción muscular en vez de grupo entero (W54)
+
+"Espalda 41%" no sirve para decidir nada: no dice si faltó dorsal, trapecio o
+lumbar. Los 11 grupos canónicos siguen valiendo para el mapa de calor y el
+balance semanal, pero el reparto de la sesión baja ahora un nivel.
+
+Dos fuentes, en este orden:
+
+1. **Lo que ya diga el músculo** — "Deltoides posterior", "Vasto medial". Es lo
+   que genera la IA al dar de alta un ejercicio, y lo estábamos aplastando.
+2. **El nombre del ejercicio**, cuando el músculo viene en grueso — que es todo
+   el catálogo por defecto, donde solo pone "Espalda". Un jalón y un
+   encogimiento son los dos "Espalda" y no tocan lo mismo.
+
+Se separan además las porciones que el ejercicio trabaja **de verdad**
+(posición primaria o secundaria) de las que solo asisten, que van resumidas en
+una línea: en una barra son ruido.
+
+### Dónde NO se afina
+
+Sólo se refina donde la porción **depende del ejercicio**. El cuádriceps no:
+ninguna sentadilla ni prensa separa el vasto lateral del medial, así que se
+queda como grupo en vez de inventar una etiqueta que suene precisa y no lo sea.
+
+### Dos fallos que salieron al probarlo
+
+- `/lateral/` sin `\b` disparaba con **"unilateral"**: "Prensa de piernas 45
+  grados unilateral" se clasificaba como *Glúteo medio* y *Deltoides lateral*
+- la regla genérica de la tabla de músculos cortocircuitaba antes de mirar el
+  ejercicio, así que un músculo escrito en grueso devolvía el grupo y **no se
+  afinaba nunca** — justo el caso de todo el catálogo por defecto
+
+Los dos prompts de IA reciben ahora el reparto por porción y se les pide
+explícitamente usarlo en vez del grupo.

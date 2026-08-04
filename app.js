@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W53";
+const APP_VERSION = "v2026.07.29-W54";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -2335,6 +2335,131 @@ function moveExerciseBetweenSplits(exercises, splits, name, toKey) {
   return { exercises: nextExercises, splits: nextSplits };
 }
 
+/* ===== PORCIÓN MUSCULAR (detalle dentro del grupo) =====
+ * Los 11 grupos canónicos valen para el mapa de calor y el balance semanal,
+ * pero "Espalda 41%" no dice si el día fue de dorsal o de trapecio. Aquí se
+ * baja un nivel: a la porción concreta que se trabaja.
+ *
+ * Dos fuentes, en este orden:
+ *   1. Lo que ya diga el músculo ("Deltoides posterior", "Vasto medial"), que
+ *      es lo que genera la IA al dar de alta un ejercicio.
+ *   2. El NOMBRE del ejercicio, cuando el músculo viene en grueso — que es el
+ *      caso de todo el catálogo por defecto, donde solo pone "Espalda".
+ */
+const DETALLE_MUSCULO = [
+  // El orden importa: lo específico antes que lo genérico
+  [/dorsal|latisim|latissimus/, "Dorsal ancho"],
+  [/romboide/, "Romboides"],
+  [/redondo mayor/, "Redondo mayor"],
+  [/erector|lumbar|espinal|multifido/, "Erector espinal"],
+  [/trapecio|elevador de la esc/, "Trapecio"],
+  [/manguito|rotador|supraespinoso|infraespinoso|redondo menor/, "Manguito rotador"],
+  [/deltoid.*(poster|dorsal)|poster.*deltoid/, "Deltoides posterior"],
+  [/deltoid.*(later|medio)|later.*deltoid/, "Deltoides lateral"],
+  [/deltoid.*(anter|front|clavicular)|anter.*deltoid|deltoide ant/, "Deltoides anterior"],
+  [/deltoid/, "Deltoides"],
+  [/pectoral.*(clavicular|superior|inclinad)/, "Pectoral superior"],
+  [/pectoral.*(inferior|abdominal|declinad)/, "Pectoral inferior"],
+  [/serrato/, "Serrato anterior"],
+  [/pectoral|pecho/, "Pectoral medio"],
+  [/tricep.*(larga|long)/, "Tríceps cabeza larga"],
+  [/tricep/, "Tríceps"],
+  [/braquiorradial|antebrazo|flexor|extensor|muneca|supinador|pronador/, "Antebrazo"],
+  [/braquial anterior|\bbraquial\b/, "Braquial"],
+  [/bicep.*femoral|femoral.*bicep/, "Bíceps femoral"],
+  [/semitendinoso|semimembranoso/, "Isquios mediales"],
+  [/bicep/, "Bíceps braquial"],
+  [/recto femoral/, "Recto femoral"],
+  [/vasto later/, "Vasto lateral"],
+  [/vasto medial|vasto interno/, "Vasto medial"],
+  [/vasto|cuadricep/, "Cuádriceps"],
+  [/isquio|femoral/, "Isquios"],
+  [/gluteo mayor/, "Glúteo mayor"],
+  [/gluteo (medio|menor)|abductor/, "Glúteo medio"],
+  [/gluteo/, "Glúteos"],
+  [/aductor/, "Aductores"],
+  [/soleo/, "Sóleo"],
+  [/gemelo|pantorrilla|triceps sural/, "Gemelos"],
+  [/oblicuo/, "Oblicuos"],
+  [/transverso/, "Transverso abdominal"],
+  [/abdominal|core|recto del abdomen/, "Recto abdominal"],
+];
+
+// Cuando el músculo viene en grueso, el nombre del ejercicio sí sabe qué porción
+// se trabaja: un jalón y un encogimiento son los dos "Espalda", pero no tocan
+// lo mismo.
+const DETALLE_POR_EJERCICIO = {
+  // Ojo con "lateral": sin \b, "unilateral" dispara la regla. Y solo se afina
+  // donde la porción DEPENDE del ejercicio de verdad; el cuádriceps, por
+  // ejemplo, no se separa por ejercicio, así que se queda como grupo.
+  Espalda: [
+    [/encogimiento|shrug|trapecio/, "Trapecio"],
+    [/face pull|pajaro|reverse fly/, "Trapecio"],
+    [/peso muerto|hiperextension|buenos dias|good morning|lumbar/, "Erector espinal"],
+    [/remo/, "Dorsal ancho y romboides"],
+    [/.*/, "Dorsal ancho"],
+  ],
+  Pectoral: [
+    [/inclinad/, "Pectoral superior"],
+    [/declinad|fondo/, "Pectoral inferior"],
+    [/.*/, "Pectoral medio"],
+  ],
+  Deltoides: [
+    [/\blateral|\bmedio\b/, "Deltoides lateral"],
+    [/posterior|pajaro|face pull|reverse/, "Deltoides posterior"],
+    [/press|militar|arnold|frontal/, "Deltoides anterior"],
+  ],
+  Isquios: [
+    [/rumano|peso muerto|buenos dias/, "Isquios proximales"],
+    [/.*/, "Bíceps femoral"],
+  ],
+  Glúteos: [
+    [/abduccion|gluteo medio|banda/, "Glúteo medio"],
+    [/.*/, "Glúteo mayor"],
+  ],
+  Pantorrillas: [
+    [/sentad/, "Sóleo"],
+    [/.*/, "Gemelos"],
+  ],
+  Tríceps: [
+    [/sobre cabeza|frances|copa|overhead|rompecraneo/, "Tríceps cabeza larga"],
+    [/.*/, "Tríceps lateral y medial"],
+  ],
+  Bíceps: [
+    [/martillo|hammer/, "Braquial"],
+    [/inclinad|incline/, "Bíceps cabeza larga"],
+    [/predicador|scott|concentrado/, "Bíceps cabeza corta"],
+  ],
+  Core: [
+    [/oblicuo|giro|lenador|russian|\blateral/, "Oblicuos"],
+    [/.*/, "Recto abdominal"],
+  ],
+};
+
+const _sinAcentos = (t) => String(t || "").toLowerCase()
+  .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  .replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+
+// Porción muscular de un nombre de músculo. Si no reconoce el detalle, cae al
+// grupo canónico: es preferible decir "Espalda" que inventarse una porción.
+function muscleDetail(raw, exName) {
+  const s = _sinAcentos(raw);
+  const grueso = normalizeMuscle(raw);
+  // Si el músculo viene escrito TAL CUAL el grupo ("Espalda", "Cuádriceps"), no
+  // hay detalle que extraer del nombre: hay que sacarlo del ejercicio. Mirar
+  // primero la tabla de músculos devolvería el grupo otra vez y no se afinaría
+  // nunca — que es justo lo que pasa con todo el catálogo por defecto.
+  const esGrueso = grueso && s === _sinAcentos(grueso);
+  if (esGrueso && exName) {
+    const ex = _sinAcentos(exName);
+    for (const [re, nombre] of (DETALLE_POR_EJERCICIO[grueso] || [])) if (re.test(ex)) return nombre;
+  }
+  if (!esGrueso) {
+    for (const [re, nombre] of DETALLE_MUSCULO) if (re.test(s)) return nombre;
+  }
+  return grueso || canonMuscleName(raw);
+}
+
 function calcMuscleVolumeBalance(exlog, exercises, days = 28) {
   const primaryMuscles = ["Pectoral","Espalda","Cuádriceps","Isquios","Deltoides","Bíceps","Tríceps","Glúteos","Antebrazo","Core","Pantorrillas"];
   const counts = {};
@@ -2505,18 +2630,36 @@ function analyzeSession(exlog, exercises, dateStr) {
     // contaban como dos músculos distintos y la fatiga no se acumulaba entre
     // ejercicios que trabajan lo mismo. Si un nombre no se reconoce se conserva
     // tal cual, para no perder trabajo por no saber clasificarlo.
+    const crudos = musclesOfExercise(exName, exercises);
     const musculos = [];
-    musclesOfExercise(exName, exercises).forEach(raw => {
+    crudos.forEach(raw => {
       const m = canonMuscleName(raw);
       if (!musculos.includes(m)) musculos.push(m); // se queda la posición más primaria
     });
     if (!musculos.length) return;
-    dayExercises.push({ exName, sets, musculos });
+    dayExercises.push({ exName, sets, musculos, crudos });
   });
 
   const muscleMap = {};   // músculo → { sets, weightedSets, freshSets, exNames }
   const accumulated = {}; // músculo → carga efectiva ya realizada antes (proxy de fatiga)
   const sequence = [];
+  const detailMap = {};   // porción muscular → { weightedSets, exNames, principal }
+
+  dayExercises.forEach(({ exName, sets, musculos, crudos }) => {
+    // El reparto fino se calcula sobre los nombres SIN agrupar: es ahí donde
+    // está el detalle ("Deltoides posterior") que el grupo canónico borra.
+    const vistos = new Set();
+    (crudos || musculos).forEach((raw, idx) => {
+      const d = muscleDetail(raw, exName);
+      if (!d || vistos.has(d)) return;   // dentro de un ejercicio, una vez
+      vistos.add(d);
+      const w = MUSCLE_ACTIVATION_WEIGHTS[idx] ?? 0.1;
+      if (!detailMap[d]) detailMap[d] = { weightedSets: 0, exNames: [], principal: false };
+      detailMap[d].weightedSets += sets * w;
+      if (!detailMap[d].exNames.includes(exName)) detailMap[d].exNames.push(exName);
+      if (idx <= 1) detailMap[d].principal = true;   // primario o secundario directo
+    });
+  });
 
   dayExercises.forEach(({ exName, sets, musculos }, pos) => {
     const prefatiga = [];
@@ -2553,11 +2696,32 @@ function analyzeSession(exlog, exercises, dateStr) {
     })
     .sort((a, b) => b.weightedSets - a.weightedSets); // mayor participación primero
 
-  return { muscles, sequence };
+  // Reparto por porción muscular, en % del trabajo efectivo del día
+  const totalDetalle = Object.values(detailMap).reduce((a, d) => a + d.weightedSets, 0);
+  const detail = Object.entries(detailMap)
+    .map(([muscle, d]) => ({
+      muscle,
+      weightedSets: Math.round(d.weightedSets * 10) / 10,
+      sharePct: totalDetalle > 0 ? Math.round((d.weightedSets / totalDetalle) * 100) : 0,
+      exCount: d.exNames.length,
+      exNames: d.exNames,
+      principal: d.principal,
+    }))
+    .filter(d => d.sharePct > 0 || d.principal)
+    .sort((a, b) => b.weightedSets - a.weightedSets);
+
+  return { muscles, sequence, detail };
 }
 
 function calcSessionMuscleSets(exlog, exercises, dateStr) {
   return analyzeSession(exlog, exercises, dateStr).muscles;
+}
+
+// Reparto por porción muscular (Dorsal ancho, Deltoides posterior…) en vez
+// de por grupo. `principal` distingue lo que el ejercicio trabaja de verdad
+// de lo que solo asiste.
+function calcSessionMuscleDetail(exlog, exercises, dateStr) {
+  return analyzeSession(exlog, exercises, dateStr).detail;
 }
 
 // Secuencia de la sesión: 1º, 2º, 3º… con la pre-fatiga de cada músculo al
@@ -2659,7 +2823,7 @@ function buildDaySummary(exlog, exercises, dateStr, opts = {}) {
   exList.sort((a, b) => a.earliest - b.earliest || a.name.localeCompare(b.name)); // orden de ejecución
   exList.forEach((e, i) => { e.pos = i + 1; });                                   // 1º, 2º, 3º…
 
-  const { muscles, sequence } = analyzeSession(exlog, exercises, dateStr);
+  const { muscles, sequence, detail } = analyzeSession(exlog, exercises, dateStr);
 
   // Media histórica de volumen (hasta 8 sesiones previas) para comparar
   const sessionVolByDay = {};
@@ -2724,6 +2888,7 @@ function buildDaySummary(exlog, exercises, dateStr, opts = {}) {
     dateStr,
     exercises: exList,
     muscles,
+    detail,
     sequence,
     totals: { exercises: exList.length, workSets: totalWorkSets, warmupSets: totalWarmup, volume: roundVol, prCount },
     avgHistVol, volDiffPct,
@@ -4989,7 +5154,12 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         .map(({ muscle, sharePct, weightedSets, exCount, fatiguePct }) =>
           `${muscle} ${sharePct}% (${Math.round(weightedSets * 10) / 10} ser. efect. en ${exCount} ejerc.${fatiguePct >= 25 ? `, pre-fatiga ${fatiguePct}%` : ""})`)
         .join(', ');
-      summary.push(`\nReparto del trabajo por músculo hoy: ${muscleText}`);
+      summary.push(`\nReparto del trabajo por grupo hoy: ${muscleText}`);
+    }
+    // Por PORCIÓN, que es lo que permite decir "dorsal" en vez de "espalda"
+    const detalleHoy = calcSessionMuscleDetail(exlog, exercises, todayStr).filter(d => d.principal);
+    if (detalleHoy.length) {
+      summary.push(`Porción muscular concreta: ${detalleHoy.map(d => `${d.muscle} ${d.sharePct}% (${d.exCount} ejerc.)`).join(', ')}`);
     }
 
     // Progreso de cada ejercicio contra sus sesiones anteriores. Sin esto el
@@ -5399,7 +5569,7 @@ Analiza este entrenamiento usando mi historial completo que ya tenés. Responde 
 
 **Progresión** — usá los pesos por sesión que te paso arriba: para cada ejercicio decí si subí, mantuve o bajé, y si hay estancamiento. Nombrá los kilos concretos.
 
-**Reparto muscular** — comentá los porcentajes de trabajo por músculo: si un grupo se lleva más del 45% el día quedó desequilibrado; si alguno baja del 10% apenas se tocó. Decí qué porcentaje debería subir o bajar la próxima vez.
+**Reparto muscular** — usá la PORCIÓN concreta (dorsal ancho, deltoides posterior, glúteo mayor…), no el grupo entero: decir "espalda" no sirve para decidir nada. Comentá los porcentajes: si una porción se lleva más del 45% el día quedó desequilibrado; si alguna baja del 10% apenas se tocó. Decí qué porción falta cubrir y con qué ejercicio.
 
 **Lo que salió bien** — 2-3 puntos concretos positivos de la sesión de hoy.
 
@@ -12352,13 +12522,17 @@ tr:last-child td{border-bottom:none}
       const muscLine = summary.muscles.map(m =>
         `${m.muscle} ${m.sharePct}% del trabajo del día (${m.weightedSets} series efectivas en ${m.exCount} ejercicio${m.exCount !== 1 ? "s" : ""}${m.fatiguePct >= 25 ? `, pre-fatiga ${m.fatiguePct}%` : ""})`
       ).join("; ");
+      // Por porción: "espalda 40%" no dice si faltó dorsal o trapecio
+      const detLine = (summary.detail || []).filter(d => d.principal)
+        .map(d => `${d.muscle} ${d.sharePct}% en ${d.exCount} ejercicio${d.exCount !== 1 ? "s" : ""}`).join("; ");
       const volCtx = summary.volDiffPct !== null ? ` (${summary.volDiffPct >= 0 ? "+" : ""}${summary.volDiffPct}% vs media reciente de ${summary.avgHistVol}kg)` : "";
       const userMsg = `Analiza esta sesión de entrenamiento de Bruno.\n` +
         `Fecha: ${dateLong}.\n` +
         `Volumen total: ${summary.totals.volume}kg${volCtx}. Series de trabajo: ${summary.totals.workSets}. ${durationMin > 0 ? `Duración: ${durationMin} min.` : ""} ${sensation ? `Sensación reportada: ${sensation}.` : ""}\n` +
         `Ejercicios en el orden en que se hicieron:\n${exLines}\n` +
-        `Reparto del trabajo por músculo: ${muscLine}.`;
-      const sys = `Eres el coach de fuerza e hipertrofia de Bruno. Analiza su sesión con tono cercano, técnico y motivador. Responde en español, en TEXTO PLANO (sin markdown, sin viñetas, sin títulos), en EXACTAMENTE 2 párrafos separados por un salto de línea: (1) PROGRESO — compara cada ejercicio con sus sesiones anteriores usando los pesos que te doy (¿sube, se mantiene o baja?, ¿hay estancamiento?) y valora el REPARTO del trabajo por músculo en porcentajes: si un grupo se lleva más del 45% el día está desequilibrado, y si uno queda por debajo del 10% apenas se tocó; menciona también si el orden fue el adecuado según la pre-fatiga con la que llegó cada ejercicio; (2) PRÓXIMA SESIÓN — qué carga concreta intentar en cada ejercicio, qué porcentaje debería subir o bajar cada músculo, qué adelantar o retrasar en el orden y qué rotar si hay estancamiento. Máximo 150 palabras en total. Cita porcentajes y kilos reales; no inventes datos que no estén en el contexto.`;
+        `Reparto por grupo muscular: ${muscLine}.\n` +
+        (detLine ? `Reparto por PORCIÓN concreta: ${detLine}.` : "");
+      const sys = `Eres el coach de fuerza e hipertrofia de Bruno. Analiza su sesión con tono cercano, técnico y motivador. Responde en español, en TEXTO PLANO (sin markdown, sin viñetas, sin títulos), en EXACTAMENTE 2 párrafos separados por un salto de línea: (1) PROGRESO — compara cada ejercicio con sus sesiones anteriores usando los pesos que te doy (¿sube, se mantiene o baja?, ¿hay estancamiento?) y valora el REPARTO del trabajo usando la PORCIÓN concreta (dorsal ancho, deltoides posterior, glúteo mayor…) y no el grupo entero, que no sirve para decidir nada: si una porción se lleva más del 45% el día está desequilibrado, y si alguna queda por debajo del 10% apenas se tocó; menciona también si el orden fue el adecuado según la pre-fatiga con la que llegó cada ejercicio; (2) PRÓXIMA SESIÓN — qué carga concreta intentar en cada ejercicio, qué porción concreta debería subir o bajar y con qué ejercicio, qué adelantar o retrasar en el orden y qué rotar si hay estancamiento. Máximo 150 palabras en total. Cita porcentajes y kilos reales; no inventes datos que no estén en el contexto.`;
       const raw = await callGemini([{ role: "user", content: userMsg }], sys);
       const aiText = (typeof raw === "string" ? raw : (raw?.text || "")).trim();
       if (aiText) write(aiText);
@@ -13874,6 +14048,9 @@ tr:last-child td{border-bottom:none}
               {selectedDayWorkouts && (() => {
                 const muscleSets = calcSessionMuscleSets(exlog, exercises, selectedDateStr);
                 if (!muscleSets.length) return null;
+                const detalle = calcSessionMuscleDetail(exlog, exercises, selectedDateStr);
+                const principales = detalle.filter(d => d.principal);
+                const secundarias = detalle.filter(d => !d.principal && d.sharePct >= 1).slice(0, 6);
                 const secuencia = buildSessionSequence(exlog, exercises, selectedDateStr);
                 return (
                   <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"10px 12px", marginBottom:10}}>
@@ -13902,33 +14079,35 @@ tr:last-child td{border-bottom:none}
                       </div>
                     )}
                     <div style={{fontSize:10, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".07em", marginBottom:3}}>
-                      Músculos trabajados hoy
+                      Porción muscular trabajada hoy
                     </div>
                     <div style={{fontSize:9, color:C.muted, marginBottom:8, opacity:.8}}>
-                      % del trabajo total del día. 💤 = pre-fatiga acumulada por ejercicios previos.
+                      % del trabajo efectivo del día, por porción y no por grupo entero.
                     </div>
                     <div style={{display:"flex", flexDirection:"column", gap:5}}>
-                      {muscleSets.map(({ muscle, weightedSets, sets, fatiguePct, sharePct, exCount }, i) => {
-                        const maxW = muscleSets[0]?.weightedSets || 1;
+                      {/* Solo las porciones que el ejercicio trabaja de verdad
+                          (posición primaria o secundaria). Las que solo asisten
+                          van resumidas debajo: son ruido en una barra. */}
+                      {principales.map(({ muscle, weightedSets, sharePct, exCount }, i) => {
+                        const maxW = principales[0]?.weightedSets || 1;
                         const pct = Math.round((weightedSets / maxW) * 100);
                         const color = i === 0 ? C.lime : i === 1 ? C.cyan : i <= 3 ? C.amber : C.muted;
+                        const grupo = normalizeMuscle(muscle);
+                        const fat = (muscleSets.find(m => m.muscle === grupo) || {}).fatiguePct || 0;
                         return (
                           <div key={muscle}>
-                            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3}}>
-                              <span style={{fontSize:11.5, fontWeight:700, color: i < 3 ? C.ink : C.muted, display:"flex", alignItems:"center", gap:5}}>
-                                {muscle}
-                                {fatiguePct >= 25 && (
-                                  <span title={`${fatiguePct}% de fatiga acumulada de ejercicios previos`} style={{fontSize:9, color:C.amber, background:"rgba(180,83,9,0.16)", padding:"1px 5px", borderRadius:4, fontWeight:700}}>
-                                    💤 {fatiguePct}%
+                            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3, gap:6}}>
+                              <span style={{fontSize:11.5, fontWeight:700, color: i < 3 ? C.ink : C.muted, display:"flex", alignItems:"center", gap:5, minWidth:0}}>
+                                <span style={{overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{muscle}</span>
+                                {fat >= 25 && (
+                                  <span title={`${fat}% de fatiga acumulada de ejercicios previos sobre ${grupo}`} style={{fontSize:9, color:C.amber, background:"rgba(180,83,9,0.16)", padding:"1px 5px", borderRadius:4, fontWeight:700, flexShrink:0}}>
+                                    💤 {fat}%
                                   </span>
                                 )}
                               </span>
-                              {/* El % es lo que dice si el día fue de pecho o de
-                                  brazos; el número de series suelto, con 2-3
-                                  ejercicios por grupo, no lo dice */}
-                              <span style={{fontSize:10, color:C.muted}}>
+                              <span style={{fontSize:10, color:C.muted, whiteSpace:"nowrap", flexShrink:0}}>
                                 <b style={{color: i < 3 ? C.ink : C.muted, fontSize:12}}>{sharePct}%</b>
-                                {" · "}{weightedSets} ser. efect. en {exCount} ejerc.
+                                {" · "}{weightedSets} ser. en {exCount} ejerc.
                               </span>
                             </div>
                             <div style={{height:4, borderRadius:4, background:"rgba(27,31,22,0.09)", overflow:"hidden"}}>
@@ -13938,6 +14117,12 @@ tr:last-child td{border-bottom:none}
                         );
                       })}
                     </div>
+                    {secundarias.length > 0 && (
+                      <div style={{marginTop:8, paddingTop:7, borderTop:`1px solid ${C.line}`, fontSize:10, color:C.muted, lineHeight:1.5}}>
+                        <span style={{fontWeight:700}}>También asistieron: </span>
+                        {secundarias.map(d => `${d.muscle} ${d.sharePct}%`).join(" · ")}
+                      </div>
+                    )}
                   </div>
                 );
               })()}
@@ -19316,7 +19501,8 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     loadKey, buildPRHistory, buildDaySummary, loadRecommendation, localDateKey,
     isCompoundExercise, estimate1RM,
-    calcSessionMuscleSets, buildSessionSequence, getSessionOrder, getDaySets,
+    calcSessionMuscleSets, calcSessionMuscleDetail, muscleDetail,
+    buildSessionSequence, getSessionOrder, getDaySets,
     applySessionOrder, moveExerciseInSession, moveSetInSession,
     calcLeanMass, calcBMRMifflin, calcBMRKatch, calcBMR, calcNutritionTargets,
     calcWaterGoalGlasses, calcWeightEMASeries, getTrendWeight,
