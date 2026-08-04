@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W52";
+const APP_VERSION = "v2026.07.29-W53";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -2536,12 +2536,20 @@ function analyzeSession(exlog, exercises, dateStr) {
     sequence.push({ pos: pos + 1, exName, sets, musculos, prefatiga });
   });
 
+  // Con 2 o 3 ejercicios por grupo muscular, "5.2 series efectivas" no dice si
+  // el día fue de pecho o de brazos. El reparto en % sí: es lo que permite
+  // juzgar si el foco del día fue el que se buscaba.
+  const totalPonderado = Object.values(muscleMap).reduce((a, d) => a + d.weightedSets, 0);
   const muscles = Object.entries(muscleMap)
     .map(([muscle, d]) => {
       const weightedSets = Math.round(d.weightedSets * 10) / 10;
       const freshSets = Math.round(d.freshSets * 10) / 10;
       const fatiguePct = weightedSets > 0 ? Math.max(0, Math.round((1 - freshSets / weightedSets) * 100)) : 0;
-      return { muscle, sets: d.sets, weightedSets, freshSets, fatiguePct, exNames: d.exNames };
+      return {
+        muscle, sets: d.sets, weightedSets, freshSets, fatiguePct, exNames: d.exNames,
+        sharePct: totalPonderado > 0 ? Math.round((d.weightedSets / totalPonderado) * 100) : 0,
+        exCount: d.exNames.length,
+      };
     })
     .sort((a, b) => b.weightedSets - a.weightedSets); // mayor participación primero
 
@@ -2611,6 +2619,13 @@ function buildDaySummary(exlog, exercises, dateStr, opts = {}) {
     const prevMaxW = prevDate ? byDatePrev[prevDate] : null;
     const deltaVsPrev = prevMaxW != null ? Math.round((topW - prevMaxW) * 10) / 10 : null;
 
+    // Las 3 sesiones anteriores con su peso tope. Una sola comparación no
+    // distingue "venía subiendo y hoy bajé" de "llevo tres semanas plano".
+    const recentSessions = sessionDates
+      .filter(d => d < dateStr)
+      .slice(0, 3)
+      .map(d => ({ date: d, maxW: byDatePrev[d] }));
+
     // Estancamiento: mismo peso máximo en las últimas 3+ sesiones (incluida hoy)
     let plateau = false, plateauCount = 0;
     if (sessionDates.length >= 3) {
@@ -2635,7 +2650,7 @@ function buildDaySummary(exlog, exercises, dateStr, opts = {}) {
       volume: Math.round(volume),
       topW, topReps, e1rm,
       histMax, isPR,
-      prevMaxW, deltaVsPrev, plateau,
+      prevMaxW, deltaVsPrev, plateau, recentSessions,
       recommendation,
       earliest: Math.min(...daySets.map(s => { try { return new Date(s.date).getTime(); } catch (e) { return 0; } })),
     });
@@ -4966,14 +4981,29 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       }
     });
     if (summary.length === 0) return "Ninguno registrado hoy.";
-    // Agrega activación muscular total del día (suma across variantes)
+    // Reparto muscular en PORCENTAJE. Con 2-3 ejercicios por grupo, "5.2 series
+    // efectivas" no dice si el día fue de pecho o de brazos; el % sí.
     const muscleSets = calcSessionMuscleSets(exlog, exercises, todayStr);
     if (muscleSets.length > 0) {
       const muscleText = muscleSets.slice(0, 8)
-        .map(({ muscle, weightedSets }) => `${muscle} ~${Math.round(weightedSets * 10) / 10}ser`)
+        .map(({ muscle, sharePct, weightedSets, exCount, fatiguePct }) =>
+          `${muscle} ${sharePct}% (${Math.round(weightedSets * 10) / 10} ser. efect. en ${exCount} ejerc.${fatiguePct >= 25 ? `, pre-fatiga ${fatiguePct}%` : ""})`)
         .join(', ');
-      summary.push(`\nActivación muscular acumulada hoy: ${muscleText}`);
+      summary.push(`\nReparto del trabajo por músculo hoy: ${muscleText}`);
     }
+
+    // Progreso de cada ejercicio contra sus sesiones anteriores. Sin esto el
+    // coach solo podía describir el día de hoy, no decir si hubo progreso.
+    const resumenDia = buildDaySummary(exlog, exercises, todayStr, { phase: caloricPhase });
+    const progreso = (resumenDia.exercises || [])
+      .map(e => {
+        const hist = (e.recentSessions || []).map(x => `${x.maxW}kg`).join(" → ");
+        const delta = e.deltaVsPrev == null ? "1ª vez"
+          : e.deltaVsPrev > 0 ? `+${e.deltaVsPrev}kg` : e.deltaVsPrev < 0 ? `${e.deltaVsPrev}kg` : "igual";
+        return `- ${e.name}: ${hist ? hist + " → " : ""}hoy ${e.topW}kg (${delta}${e.plateau ? ", estancado 3 sesiones" : ""}${e.isPR ? ", PR" : ""})`;
+      });
+    if (progreso.length) summary.push(`\nProgreso vs sesiones anteriores (peso tope por sesión):\n${progreso.join("\n")}`);
+
     return summary.join("\n");
   };
 
@@ -5367,7 +5397,9 @@ Sensaciones/notas del día: ${todaySensations}
 
 Analiza este entrenamiento usando mi historial completo que ya tenés. Responde con EXACTAMENTE esta estructura, en este orden:
 
-**Progresión** — compará cada ejercicio con las 2-4 semanas anteriores: ¿subí peso, mantuve o bajé? ¿más o menos series/reps?
+**Progresión** — usá los pesos por sesión que te paso arriba: para cada ejercicio decí si subí, mantuve o bajé, y si hay estancamiento. Nombrá los kilos concretos.
+
+**Reparto muscular** — comentá los porcentajes de trabajo por músculo: si un grupo se lleva más del 45% el día quedó desequilibrado; si alguno baja del 10% apenas se tocó. Decí qué porcentaje debería subir o bajar la próxima vez.
 
 **Lo que salió bien** — 2-3 puntos concretos positivos de la sesión de hoy.
 
@@ -12164,7 +12196,7 @@ function Entreno({
       return `<div class="mrow">
         <span class="mn">${esc(m.muscle)}</span>
         <span class="mbar"><span class="mfill" style="width:${pct}%"></span></span>
-        <span class="mv">${m.weightedSets} ser${m.fatiguePct >= 25 ? ` · 💤${m.fatiguePct}%` : ""}</span>
+        <span class="mv"><strong>${m.sharePct}%</strong> · ${m.weightedSets} ser en ${m.exCount}ej${m.fatiguePct >= 25 ? ` · 💤${m.fatiguePct}%` : ""}</span>
       </div>`;
     }).join("");
 
@@ -12240,7 +12272,7 @@ tr:last-child td{border-bottom:none}
 .mn{font-size:9pt;font-weight:700;width:88px;flex-shrink:0}
 .mbar{flex:1;height:8px;background:#f0f1f3;border-radius:20px;overflow:hidden}
 .mfill{display:block;height:100%;background:#16a34a;border-radius:20px}
-.mv{font-size:8pt;color:#6b7280;width:96px;text-align:right;flex-shrink:0}
+.mv{font-size:8pt;color:#6b7280;width:150px;text-align:right;flex-shrink:0}
 .ft{margin-top:18px;padding-top:9px;border-top:1.5px solid #e5e7eb;display:flex;justify-content:space-between;font-size:7.5pt;color:#9ca3af}
 .pbtn{position:fixed;top:14px;right:14px;background:#16a34a;color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:11pt;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(24,28,19,.2)}
 @media print{.pbtn{display:none}@page{size:A4;margin:11mm 11mm 15mm 11mm}}
@@ -12298,17 +12330,35 @@ tr:last-child td{border-bottom:none}
         const pf = (summary.sequence.find(s => s.exName === name)?.prefatiga || []).filter(p => p.pct >= 10);
         return pf.length ? `, empezado con ${pf.map(p => `${p.muscle} al ${p.pct}% de pre-fatiga`).join(" y ")}` : ", con el músculo fresco";
       };
+      // El progreso solo se puede juzgar contra las sesiones anteriores, así que
+      // van explícitas: sin ellas el coach solo podía describir el día de hoy.
+      const progresoDe = (e) => {
+        const hist = (e.recentSessions || []).map(x => `${x.maxW}kg`).join(" → ");
+        const partes = [];
+        if (hist) partes.push(`sesiones previas ${hist} → hoy ${e.topW}kg`);
+        if (e.deltaVsPrev != null) {
+          partes.push(e.deltaVsPrev > 0 ? `+${e.deltaVsPrev}kg vs la anterior`
+                    : e.deltaVsPrev < 0 ? `${e.deltaVsPrev}kg vs la anterior` : "igual que la anterior");
+        } else partes.push("primera sesión registrada");
+        if (e.plateau) partes.push("mismo peso 3 sesiones seguidas");
+        if (e.histMax > 0 && !e.isPR) partes.push(`récord histórico ${e.histMax}kg`);
+        return partes.join(", ");
+      };
       const exLines = summary.exercises.map(e =>
-        `- ${e.pos}º ${e.name} [${e.muscle || "?"}]: ${e.workSetsCount} series de trabajo, tope ${e.topW}kg×${e.topReps} reps, volumen ${e.volume}kg, 1RM~${e.e1rm}kg${e.isPR ? " (PR de peso)" : ""}${preDe(e.name)}`
+        `- ${e.pos}º ${e.name} [${e.muscle || "?"}]: ${e.workSetsCount} series de trabajo, tope ${e.topW}kg×${e.topReps} reps, volumen ${e.volume}kg, 1RM~${e.e1rm}kg${e.isPR ? " (PR de peso)" : ""}${preDe(e.name)}. Progreso: ${progresoDe(e)}`
       ).join("\n");
-      const muscLine = summary.muscles.map(m => `${m.muscle} ${m.weightedSets} series${m.fatiguePct >= 25 ? ` (pre-fatiga ${m.fatiguePct}%)` : ""}`).join(", ");
+      // En porcentajes: con 2-3 ejercicios por grupo, el número de series suelto
+      // no dice dónde fue de verdad el trabajo del día
+      const muscLine = summary.muscles.map(m =>
+        `${m.muscle} ${m.sharePct}% del trabajo del día (${m.weightedSets} series efectivas en ${m.exCount} ejercicio${m.exCount !== 1 ? "s" : ""}${m.fatiguePct >= 25 ? `, pre-fatiga ${m.fatiguePct}%` : ""})`
+      ).join("; ");
       const volCtx = summary.volDiffPct !== null ? ` (${summary.volDiffPct >= 0 ? "+" : ""}${summary.volDiffPct}% vs media reciente de ${summary.avgHistVol}kg)` : "";
       const userMsg = `Analiza esta sesión de entrenamiento de Bruno.\n` +
         `Fecha: ${dateLong}.\n` +
         `Volumen total: ${summary.totals.volume}kg${volCtx}. Series de trabajo: ${summary.totals.workSets}. ${durationMin > 0 ? `Duración: ${durationMin} min.` : ""} ${sensation ? `Sensación reportada: ${sensation}.` : ""}\n` +
         `Ejercicios en el orden en que se hicieron:\n${exLines}\n` +
-        `Trabajo muscular: ${muscLine}.`;
-      const sys = `Eres el coach de fuerza e hipertrofia de Bruno. Analiza su sesión con tono cercano, técnico y motivador. Responde en español, en TEXTO PLANO (sin markdown, sin viñetas, sin títulos), en EXACTAMENTE 2 párrafos separados por un salto de línea: (1) evaluación de la sesión — volumen e intensidad, foco muscular, PRs y, sobre todo, si el ORDEN de los ejercicios fue el adecuado según la pre-fatiga con la que llegó cada uno; (2) recomendaciones concretas para la próxima sesión de estos músculos (qué carga intentar, qué priorizar, qué adelantar o retrasar en el orden, qué rotar si hay estancamiento). Máximo 130 palabras en total. No inventes datos que no estén en el contexto.`;
+        `Reparto del trabajo por músculo: ${muscLine}.`;
+      const sys = `Eres el coach de fuerza e hipertrofia de Bruno. Analiza su sesión con tono cercano, técnico y motivador. Responde en español, en TEXTO PLANO (sin markdown, sin viñetas, sin títulos), en EXACTAMENTE 2 párrafos separados por un salto de línea: (1) PROGRESO — compara cada ejercicio con sus sesiones anteriores usando los pesos que te doy (¿sube, se mantiene o baja?, ¿hay estancamiento?) y valora el REPARTO del trabajo por músculo en porcentajes: si un grupo se lleva más del 45% el día está desequilibrado, y si uno queda por debajo del 10% apenas se tocó; menciona también si el orden fue el adecuado según la pre-fatiga con la que llegó cada ejercicio; (2) PRÓXIMA SESIÓN — qué carga concreta intentar en cada ejercicio, qué porcentaje debería subir o bajar cada músculo, qué adelantar o retrasar en el orden y qué rotar si hay estancamiento. Máximo 150 palabras en total. Cita porcentajes y kilos reales; no inventes datos que no estén en el contexto.`;
       const raw = await callGemini([{ role: "user", content: userMsg }], sys);
       const aiText = (typeof raw === "string" ? raw : (raw?.text || "")).trim();
       if (aiText) write(aiText);
@@ -13324,10 +13374,19 @@ tr:last-child td{border-bottom:none}
       ? `\n\nCONTEXTO DE FATIGA ACUMULADA HOY (ejercicios previos en esta sesión que comparten músculos):\n${priorFatigue.join("\n")}\nESTO ES CLAVE: si el peso de hoy es menor al histórico, puede deberse al orden del ejercicio y la fatiga acumulada — NO necesariamente a una pérdida de fuerza real. Considerar esto al interpretar el rendimiento.`
       : "";
 
+    // Cuánto del día se lleva ya el músculo principal de este ejercicio: con
+    // 2-3 ejercicios por grupo, subir carga aquí puede sobrecargarlo
+    const repartoHoy = calcSessionMuscleSets(exlog, exercises, selectedDateStr);
+    const principal = canonMuscleName(exMusculos[0] || "");
+    const suyo = repartoHoy.find(m => m.muscle === principal);
+    const repartoCtx = suyo
+      ? `\n\nREPARTO DEL DÍA: ${suyo.muscle} ya se lleva el ${suyo.sharePct}% del trabajo de hoy, repartido en ${suyo.exCount} ejercicio${suyo.exCount !== 1 ? "s" : ""} (${suyo.weightedSets} series efectivas). Tenlo en cuenta al recomendar volumen o carga.`
+      : "";
+
     try{
       const sensations = getRecentSensationsText();
       const sys = `Eres el entrenador personal de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral, bodyProfile)} Entrega recomendaciones concretas de sobrecarga progresiva y técnica de ejecución. Corto y directo. Si Bruno reporta cansancio, dolor, molestias o fatiga, ajusta proactivamente.`;
-      const out = await callGemini([{role:"user", content:`Ejercicio: ${ex.name}. Músculos: ${exMusculos.join(", ") || "?"}.\nHistorial reciente (nuevo a viejo, con 1RM estimado): ${hist}.\nSensaciones recientes: ${sensations}.${fatigueCtx}\nAnaliza el rendimiento considerando el contexto de fatiga y da pautas de carga para el próximo entrenamiento.`}], sys);
+      const out = await callGemini([{role:"user", content:`Ejercicio: ${ex.name}. Músculos: ${exMusculos.join(", ") || "?"}.\nHistorial reciente (nuevo a viejo, con 1RM estimado): ${hist}.\nSensaciones recientes: ${sensations}.${fatigueCtx}${repartoCtx}\nAnaliza el rendimiento comparándolo con las sesiones anteriores del historial y da pautas de carga concretas para el próximo entrenamiento.`}], sys);
       setProg(p => ({...p, [ex.name]: out}));
     } catch(e){
       setProg(p => ({...p, [ex.name]: aiErr(e)}));
@@ -13846,10 +13905,10 @@ tr:last-child td{border-bottom:none}
                       Músculos trabajados hoy
                     </div>
                     <div style={{fontSize:9, color:C.muted, marginBottom:8, opacity:.8}}>
-                      Ordenado por trabajo efectivo (% de participación). 💤 = pre-fatiga acumulada por ejercicios previos.
+                      % del trabajo total del día. 💤 = pre-fatiga acumulada por ejercicios previos.
                     </div>
                     <div style={{display:"flex", flexDirection:"column", gap:5}}>
-                      {muscleSets.map(({ muscle, weightedSets, sets, fatiguePct }, i) => {
+                      {muscleSets.map(({ muscle, weightedSets, sets, fatiguePct, sharePct, exCount }, i) => {
                         const maxW = muscleSets[0]?.weightedSets || 1;
                         const pct = Math.round((weightedSets / maxW) * 100);
                         const color = i === 0 ? C.lime : i === 1 ? C.cyan : i <= 3 ? C.amber : C.muted;
@@ -13864,8 +13923,12 @@ tr:last-child td{border-bottom:none}
                                   </span>
                                 )}
                               </span>
+                              {/* El % es lo que dice si el día fue de pecho o de
+                                  brazos; el número de series suelto, con 2-3
+                                  ejercicios por grupo, no lo dice */}
                               <span style={{fontSize:10, color:C.muted}}>
-                                <b style={{color: i < 3 ? C.ink : C.muted}}>{weightedSets}</b> ser. efect. · {sets} reales
+                                <b style={{color: i < 3 ? C.ink : C.muted, fontSize:12}}>{sharePct}%</b>
+                                {" · "}{weightedSets} ser. efect. en {exCount} ejerc.
                               </span>
                             </div>
                             <div style={{height:4, borderRadius:4, background:"rgba(27,31,22,0.09)", overflow:"hidden"}}>

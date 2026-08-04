@@ -389,3 +389,42 @@ Comprobado en el navegador: registrar una vuelta suma 1 serie a *Press banca* y
 1 a *Aperturas*, con el mismo `comboId`, y **nada** queda guardado bajo
 "Press banca + Aperturas". Al quitar un ejercicio del día, sus 12 series siguen
 donde estaban.
+
+---
+
+## Lo que la IA no estaba viendo (W53)
+
+Al analizar el entrenamiento, el coach recibía **el día de hoy y nada más**.
+Podía describir la sesión, pero no juzgar si hubo progreso: los datos de las
+sesiones anteriores se calculaban en `buildDaySummary` (`prevMaxW`,
+`deltaVsPrev`, `plateau`) y **no se le pasaban**. Y el reparto muscular le
+llegaba como "Espalda ~5.2ser", que con 2-3 ejercicios por grupo no dice si el
+día fue de espalda o de brazos.
+
+### Progreso contra sesiones anteriores
+
+Cada ejercicio lleva ahora `recentSessions`: las 3 sesiones previas con su peso
+tope. Una sola comparación no distingue *"venía subiendo y hoy bajé"* de *"llevo
+tres semanas plano"*.
+
+Los tres caminos de IA lo reciben:
+
+| Camino | Qué se añadió |
+|--------|---------------|
+| PDF con IA | `sesiones previas 82.5 → 85 → hoy 90kg, +5kg vs la anterior`, récord histórico y estancamiento |
+| Analizar entrenamiento (Coach) | Bloque *Progreso vs sesiones anteriores* con el peso tope por sesión |
+| Recomendación de carga (por ejercicio) | Se le pide comparar con el historial, no solo describir |
+
+### Gasto muscular en porcentajes
+
+`calcSessionMuscleSets` devuelve `sharePct` (cuánto del trabajo efectivo del día
+se lleva ese músculo) y `exCount` (en cuántos ejercicios). Los porcentajes suman
+~100 y se ven en la app, en el PDF y en los prompts:
+
+> Cuádriceps **41%** · 6 ser. efect. en 2 ejerc.
+
+Al coach se le dan además los umbrales para que la evaluación sea concreta y no
+un comentario genérico: **>45% en un grupo** es un día desequilibrado, **<10%**
+es un músculo que apenas se tocó. Y en la recomendación por ejercicio se avisa
+de cuánto se lleva ya su músculo principal, porque subir carga en el tercer
+ejercicio de un grupo no es lo mismo que subirla en el primero.

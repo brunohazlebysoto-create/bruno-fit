@@ -1789,3 +1789,64 @@ describe('quitar de un día y ejercicios combinados', () => {
     expect(r[0].set.type).toBe('work');
   });
 });
+
+describe('análisis: progreso y reparto muscular en %', () => {
+  const { calcSessionMuscleSets, buildDaySummary } = require('./app.js');
+
+  const t = (dia, h) => new Date(2026, 2, dia, h, 0).toISOString();
+  // Día con 2 ejercicios de pecho y 1 de bíceps: el reparto en % es lo que
+  // distingue "día de pecho" de "día de brazos"
+  const EJ = { A: [
+    { name: 'Press banca', musculos: ['Pectoral', 'Tríceps'] },
+    { name: 'Aperturas', musculos: ['Pectoral'] },
+    { name: 'Curl martillo', musculos: ['Bíceps'] },
+  ]};
+  const log = () => ({
+    'Press banca': [
+      { date: t(10, 19), w: 90, reps: 8, type: 'work' },
+      { date: t(10, 19), w: 90, reps: 7, type: 'work' },
+      { date: t(3, 19), w: 85, reps: 8, type: 'work' },
+      { date: t(1, 19), w: 82.5, reps: 8, type: 'work' },
+    ],
+    'Aperturas': [
+      { date: t(10, 20), w: 22, reps: 12, type: 'work' },
+      { date: t(10, 20), w: 22, reps: 12, type: 'work' },
+    ],
+    'Curl martillo': [{ date: t(10, 21), w: 16, reps: 10, type: 'work' }],
+  });
+
+  test('los porcentajes reparten el trabajo y suman ~100', () => {
+    const m = calcSessionMuscleSets(log(), EJ, '2026-03-10');
+    const total = m.reduce((a, x) => a + x.sharePct, 0);
+    expect(Math.abs(total - 100)).toBeLessThanOrEqual(2);   // redondeo
+    const pecho = m.find(x => x.muscle === 'Pectoral');
+    const biceps = m.find(x => x.muscle === 'Bíceps');
+    expect(pecho.sharePct).toBeGreaterThan(biceps.sharePct);
+    expect(pecho.exCount).toBe(2);                          // dos ejercicios de pecho
+    expect(biceps.exCount).toBe(1);
+  });
+
+  test('un día de un solo músculo se lleva el 100%', () => {
+    const solo = { 'Curl martillo': [{ date: t(10, 21), w: 16, reps: 10, type: 'work' }] };
+    const m = calcSessionMuscleSets(solo, EJ, '2026-03-10');
+    expect(m[0].muscle).toBe('Bíceps');
+    expect(m[0].sharePct).toBe(100);
+  });
+
+  test('cada ejercicio trae sus sesiones previas para juzgar el progreso', () => {
+    const r = buildDaySummary(log(), EJ, '2026-03-10');
+    const press = r.exercises.find(e => e.name === 'Press banca');
+    // De la más reciente a la más antigua, sin incluir hoy
+    expect(press.recentSessions.map(x => x.maxW)).toEqual([85, 82.5]);
+    expect(press.deltaVsPrev).toBe(5);        // 90 hoy vs 85 la anterior
+    expect(press.topW).toBe(90);
+    // Un ejercicio sin historial no inventa sesiones previas
+    expect(r.exercises.find(e => e.name === 'Aperturas').recentSessions).toEqual([]);
+  });
+
+  test('el resumen del día expone el reparto en porcentaje', () => {
+    const r = buildDaySummary(log(), EJ, '2026-03-10');
+    expect(r.muscles.every(m => typeof m.sharePct === 'number')).toBe(true);
+    expect(r.muscles[0].sharePct).toBeGreaterThan(0);
+  });
+});
