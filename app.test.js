@@ -1068,6 +1068,66 @@ describe('datos de recuperación', () => {
   });
 });
 
+describe('cambios desde la última medición', () => {
+  const { buildMetricChanges } = require('./app.js');
+
+  test('sin dos mediciones no hay nada que comparar', () => {
+    expect(buildMetricChanges({})).toEqual([]);
+    expect(buildMetricChanges({ '2026-07-01': { weight: 90 } })).toEqual([]);
+  });
+
+  test('cada métrica se compara con la última vez que se midió ESA métrica', () => {
+    // La cintura solo aparece en abril y en junio; el peso, en los tres días.
+    // Comparar sin más contra "el día anterior" dejaría la cintura sin dato.
+    const log = {
+      '2026-04-15': { weight: 99, cintura: 99 },
+      '2026-05-31': { weight: 95 },
+      '2026-06-20': { weight: 93.5, cintura: 93.5 },
+    };
+    const filas = buildMetricChanges(log);
+    const cintura = filas.find(f => f.k === 'cintura');
+    expect(cintura.delta).toBe(-5.5);
+    expect(cintura.desde).toBe('2026-04-15');
+    expect(cintura.dias).toBe(66);
+
+    const peso = filas.find(f => f.k === 'weight');
+    expect(peso.delta).toBe(-1.5);
+    expect(peso.desde).toBe('2026-05-31');
+  });
+
+  test('la dirección buena depende de la métrica, no del signo', () => {
+    const log = {
+      '2026-06-01': { weight: 95, cintura: 95, brazoDer: 35, musculo: 64 },
+      '2026-07-01': { weight: 93, cintura: 93, brazoDer: 36, musculo: 64 },
+    };
+    const por = Object.fromEntries(buildMetricChanges(log).map(f => [f.k, f]));
+    expect(por.cintura.bien).toBe(true);   // bajar cintura es progreso
+    expect(por.brazoDer.bien).toBe(true);  // subir brazo también
+    expect(por.musculo.bien).toBe(null);   // sin cambio no es ni bueno ni malo
+  });
+
+  test('el cambio relativo permite comparar kg con cm', () => {
+    const log = {
+      '2026-06-01': { weight: 100, cintura: 100 },
+      '2026-07-01': { weight: 99, cintura: 95 },
+    };
+    const por = Object.fromEntries(buildMetricChanges(log).map(f => [f.k, f]));
+    expect(por.weight.pct).toBe(-1);
+    expect(por.cintura.pct).toBe(-5);
+  });
+
+  test('ignora ceros y valores no numéricos en lugar de contarlos como medición', () => {
+    const log = {
+      '2026-06-01': { weight: 95, cintura: 0 },
+      '2026-06-15': { weight: 94, cintura: '' },
+      '2026-07-01': { weight: 93, cintura: 92 },
+    };
+    const filas = buildMetricChanges(log);
+    expect(filas.find(f => f.k === 'cintura')).toBeUndefined(); // una sola medida real
+    expect(filas.find(f => f.k === 'weight').delta).toBe(-1);
+  });
+});
+
 describe('serie de recomposición', () => {
   const { buildRecompositionSeries, getWeeklyStats } = require('./app.js');
 

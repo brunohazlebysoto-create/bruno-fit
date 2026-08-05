@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W66";
+const APP_VERSION = "v2026.07.29-W67";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1836,6 +1836,54 @@ function getWeeklyStats(foodlog, exlog, metricslog, notes) {
     : null;
   const fatigueCount = detectFatigueFromNotes(notes);
   return { trainDays: trainDays.length, avgProtein: Math.round(avgProtein), avgKcal: Math.round(avgKcal), weightChange, fatigueCount };
+}
+
+// Métricas corporales que tiene sentido seguir día a día, con la dirección en
+// la que un cambio es una buena noticia. Sin esa dirección un número suelto no
+// dice nada: −1 cm de cintura es progreso y −1 cm de brazo es lo contrario.
+const METRICAS_SEGUIDAS = [
+  { k: "weight",         lbl: "Peso",         u: "kg", mejorBaja: true },
+  { k: "cintura",        lbl: "Cintura",      u: "cm", mejorBaja: true },
+  { k: "grasaPct",       lbl: "Grasa",        u: "%",  mejorBaja: true },
+  { k: "musculo",        lbl: "Músculo",      u: "kg", mejorBaja: false },
+  { k: "brazoDer",       lbl: "Brazo der.",   u: "cm", mejorBaja: false },
+  { k: "brazoIzq",       lbl: "Brazo izq.",   u: "cm", mejorBaja: false },
+  { k: "musloDer",       lbl: "Muslo der.",   u: "cm", mejorBaja: false },
+  { k: "musloIzq",       lbl: "Muslo izq.",   u: "cm", mejorBaja: false },
+  { k: "pantorrillaDer", lbl: "Pantor. der.", u: "cm", mejorBaja: false },
+  { k: "pantorrillaIzq", lbl: "Pantor. izq.", u: "cm", mejorBaja: false },
+  { k: "pecho",          lbl: "Pecho",        u: "cm", mejorBaja: false },
+];
+
+/**
+ * Cambio de cada métrica corporal respecto a la última vez que se midió ESA
+ * métrica, no respecto al día anterior: cada medición trae campos distintos
+ * (la báscula da peso y grasa, la cinta métrica da perímetros) y comparar con
+ * el día previo dejaría casi todo vacío o mediría contra un hueco.
+ *
+ * `pct` es el cambio relativo, y es lo que debe gobernar cualquier barra: 0.6
+ * kg de peso y 0.6 cm de cintura no son la misma noticia, y mezclar magnitudes
+ * de unidades distintas era justo el defecto del radar al que esto sustituye.
+ */
+function buildMetricChanges(metricslog) {
+  const fechas = Object.keys(metricslog || {}).sort();
+  if (fechas.length < 2) return [];
+  return METRICAS_SEGUIDAS.map(m => {
+    const serie = fechas
+      .map(d => ({ d, v: parseFloat(normalizeBodyEntry(metricslog[d])[m.k]) }))
+      .filter(x => isFinite(x.v) && x.v > 0);
+    if (serie.length < 2) return null;
+    const ult = serie[serie.length - 1], prev = serie[serie.length - 2];
+    const delta = Math.round((ult.v - prev.v) * 10) / 10;
+    const pct = prev.v > 0 ? Math.round(((ult.v - prev.v) / prev.v) * 1000) / 10 : 0;
+    const dias = Math.round(
+      (new Date(ult.d + "T12:00:00") - new Date(prev.d + "T12:00:00")) / 86400000
+    );
+    // `bien` es null cuando no hubo cambio: ni bueno ni malo, y pintarlo de
+    // verde o ámbar sería inventar una lectura que el dato no tiene.
+    const bien = delta === 0 ? null : (m.mejorBaja ? delta < 0 : delta > 0);
+    return { ...m, valor: ult.v, previo: prev.v, delta, pct, dias, bien, fecha: ult.d, desde: prev.d };
+  }).filter(Boolean);
 }
 
 /**
@@ -19191,169 +19239,56 @@ ${alertas || "ninguna"}`;
 
       {/* El histórico de masa magra vs grasa vive ahora en "Evolución corporal" */}
 
-      {/* Radar chart de medidas corporales */}
+      {/* ===== CAMBIOS DESDE LA ÚLTIMA MEDICIÓN =====
+          Aquí había un "Radar Corporal", duplicado además dos veces. Un radar
+          compara perfiles en ejes comparables, y estos no lo son: mezclaba kg
+          de peso con cm de perímetro normalizados contra un máximo arbitrario,
+          así que la forma no significaba nada. Y peor: en cintura MENOS es
+          mejor y en brazo MÁS es mejor, con lo que el mismo lado del polígono
+          juntaba lo bueno y lo malo. Con solo 2 de 6 ejes medidos, además,
+          degeneraba en una raya.
+          Esto muestra el mismo dato respondiendo a la pregunta real: qué cambió
+          desde la medición anterior y si ese cambio va en la buena dirección. */}
       {(() => {
-        const entry = metricslog[selectedDateStr] || {};
-        const prevDates = Object.keys(metricslog).filter(d => d < selectedDateStr).sort().slice(-1);
-        const prevEntry = prevDates.length > 0 ? (metricslog[prevDates[0]] || {}) : null;
-
-        const fields = [
-          { label:"Brazo", cur: entry.brazoDer ? (((+entry.brazoDer||0)+(+entry.brazoIzq||0))/2) : null, max:50 },
-          { label:"Muslo", cur: entry.musloDer ? (((+entry.musloDer||0)+(+entry.musloIzq||0))/2) : null, max:80 },
-          { label:"Pantorrilla", cur: entry.pantorrillaDer ? (((+entry.pantorrillaDer||0)+(+entry.pantorrillaIzq||0))/2) : null, max:50 },
-          { label:"Cintura", cur: entry.cintura ? (+entry.cintura||0) : null, max:120, invert:true },
-          { label:"Pecho", cur: entry.pecho ? (+entry.pecho||0) : null, max:130 },
-          { label:"Peso", cur: entry.weight ? (+entry.weight||0) : null, max:130 },
-        ];
-        const hasData = fields.some(f => f.cur !== null && f.cur > 0);
-        if (!hasData) return null;
-
-        const prevFields = prevEntry ? [
-          { cur: prevEntry.brazoDer ? (((+prevEntry.brazoDer||0)+(+prevEntry.brazoIzq||0))/2) : null, max:50 },
-          { cur: prevEntry.musloDer ? (((+prevEntry.musloDer||0)+(+prevEntry.musloIzq||0))/2) : null, max:80 },
-          { cur: prevEntry.pantorrillaDer ? (((+prevEntry.pantorrillaDer||0)+(+prevEntry.pantorrillaIzq||0))/2) : null, max:50 },
-          { cur: prevEntry.cintura ? (+prevEntry.cintura||0) : null, max:120, invert:true },
-          { cur: prevEntry.pecho ? (+prevEntry.pecho||0) : null, max:130 },
-          { cur: prevEntry.weight ? (+prevEntry.weight||0) : null, max:130 },
-        ] : null;
-
-        const N = fields.length;
-        const R = 75, cx = 95, cy = 90;
-        const angles = fields.map((_, i) => (2 * Math.PI * i / N) - Math.PI / 2);
-
-        const toXY = (r, angle) => [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
-
-        const polygon = (vals, fillColor, opacity) => {
-          const pts = vals.map((v, i) => {
-            const norm = v !== null ? Math.min(1, Math.max(0, v / (fields[i].max || 1))) : 0;
-            const r2 = norm * R;
-            return toXY(r2, angles[i]).map(x => x.toFixed(1)).join(",");
-          });
-          return <polygon points={pts.join(" ")} fill={fillColor} fillOpacity={opacity} stroke={fillColor} strokeWidth="1.5" strokeLinejoin="round"/>;
-        };
-
-        const curVals = fields.map(f => f.cur);
-        const prevVals = prevFields ? prevFields.map(f => f.cur) : null;
+        const filas = buildMetricChanges(metricslog);
+        if (!filas.length) return null;
+        const maxPct = Math.max(...filas.map(f => Math.abs(f.pct)), 0.1);
 
         return (
           <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
-            <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", gap:6}}>
-              <Activity size={15} color={C.cyan}/> Radar Corporal
-              {prevDates.length > 0 && <span style={{fontSize:10, color:C.muted, fontWeight:500}}>vs {prevDates[0]}</span>}
+            <div style={{fontSize:12.5, fontWeight:800, marginBottom:3, display:"flex", alignItems:"center", gap:6}}>
+              <Activity size={15} color={C.cyan}/> Cambios desde la medición anterior
             </div>
-            <svg width="100%" viewBox={`0 0 190 180`} style={{display:"block", maxWidth:260, margin:"0 auto"}}>
-              {[0.25, 0.5, 0.75, 1].map(scale => (
-                <polygon key={scale}
-                  points={angles.map(a => toXY(R*scale, a).map(x => x.toFixed(1)).join(",")).join(" ")}
-                  fill="none" stroke={C.line} strokeWidth="0.8"/>
-              ))}
-              {angles.map((a, i) => {
-                const [x1, y1] = toXY(0, a);
-                const [x2, y2] = toXY(R, a);
-                const [lx, ly] = toXY(R + 12, a);
+            <div style={{fontSize:10, color:C.muted, marginBottom:10, lineHeight:1.45}}>
+              Cada métrica se compara con la última vez que la mediste, no con el día anterior.
+              Verde = va en la dirección que buscas.
+            </div>
+            <div style={{display:"flex", flexDirection:"column", gap:7}}>
+              {filas.map(f => {
+                const col = f.bien === null ? C.muted : f.bien ? C.lime : C.amber;
+                const ancho = Math.round((Math.abs(f.pct) / maxPct) * 100);
                 return (
-                  <g key={i}>
-                    <line x1={x1.toFixed(1)} y1={y1.toFixed(1)} x2={x2.toFixed(1)} y2={y2.toFixed(1)} stroke={C.line} strokeWidth="0.8"/>
-                    <text x={lx.toFixed(1)} y={ly.toFixed(1)} textAnchor="middle" dominantBaseline="middle" fill={C.muted} fontSize="8">{fields[i].label}</text>
-                  </g>
+                  <div key={f.k}>
+                    <div style={{display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:8, marginBottom:2}}>
+                      <span style={{fontSize:11.5, fontWeight:700, color:C.ink}}>
+                        {f.lbl}
+                        <span style={{fontSize:10, fontWeight:500, color:C.muted}}> {f.valor} {f.u}</span>
+                      </span>
+                      <span style={{fontSize:11.5, fontWeight:800, color:col, whiteSpace:"nowrap"}}>
+                        {f.delta > 0 ? "+" : ""}{f.delta} {f.u}
+                        <span style={{fontSize:9.5, fontWeight:500, color:C.muted}}> en {f.dias} d</span>
+                      </span>
+                    </div>
+                    {/* Barra desde el centro: a la izquierda baja, a la derecha sube */}
+                    <div style={{height:5, borderRadius:4, background:C.track, position:"relative", overflow:"hidden"}}>
+                      <div style={{position:"absolute", top:0, bottom:0, left:"50%", width:1, background:alfa(C.ink, 18)}}/>
+                      <div style={{position:"absolute", top:0, bottom:0, borderRadius:4, background:col,
+                        width:`${ancho / 2}%`,
+                        ...(f.delta < 0 ? { right:"50%" } : { left:"50%" })}}/>
+                    </div>
+                  </div>
                 );
               })}
-              {prevVals && polygon(prevVals, C.amber, 0.15)}
-              {polygon(curVals, C.cyan, 0.25)}
-              {curVals.map((v, i) => {
-                if (v === null) return null;
-                const norm = Math.min(1, Math.max(0, v / (fields[i].max || 1)));
-                const [px, py] = toXY(norm * R, angles[i]);
-                return <circle key={i} cx={px.toFixed(1)} cy={py.toFixed(1)} r="3" fill={C.cyan} stroke={C.panel} strokeWidth="1.2"/>;
-              })}
-            </svg>
-            <div style={{display:"flex", gap:12, justifyContent:"center", fontSize:10, color:C.muted, marginTop:4}}>
-              <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:8, height:8, borderRadius:"50%", background:C.cyan}}/> Hoy</span>
-              {prevVals && <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:8, height:8, borderRadius:"50%", background:C.amber}}/> Anterior</span>}
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Radar chart de medidas corporales */}
-      {(() => {
-        const entry = metricslog[selectedDateStr] || {};
-        const prevDates = Object.keys(metricslog).filter(d => d < selectedDateStr).sort().slice(-1);
-        const prevEntry = prevDates.length > 0 ? (metricslog[prevDates[0]] || {}) : null;
-
-        const fields = [
-          { label:"Brazo", cur: entry.brazoDer ? (((+entry.brazoDer||0)+(+entry.brazoIzq||0))/2) : null, max:50 },
-          { label:"Muslo", cur: entry.musloDer ? (((+entry.musloDer||0)+(+entry.musloIzq||0))/2) : null, max:80 },
-          { label:"Pantorrilla", cur: entry.pantorrillaDer ? (((+entry.pantorrillaDer||0)+(+entry.pantorrillaIzq||0))/2) : null, max:50 },
-          { label:"Cintura", cur: entry.cintura ? (+entry.cintura||0) : null, max:120, invert:true },
-          { label:"Pecho", cur: entry.pecho ? (+entry.pecho||0) : null, max:130 },
-          { label:"Peso", cur: entry.weight ? (+entry.weight||0) : null, max:130 },
-        ];
-        const hasData = fields.some(f => f.cur !== null && f.cur > 0);
-        if (!hasData) return null;
-
-        const prevFields = prevEntry ? [
-          { cur: prevEntry.brazoDer ? (((+prevEntry.brazoDer||0)+(+prevEntry.brazoIzq||0))/2) : null, max:50 },
-          { cur: prevEntry.musloDer ? (((+prevEntry.musloDer||0)+(+prevEntry.musloIzq||0))/2) : null, max:80 },
-          { cur: prevEntry.pantorrillaDer ? (((+prevEntry.pantorrillaDer||0)+(+prevEntry.pantorrillaIzq||0))/2) : null, max:50 },
-          { cur: prevEntry.cintura ? (+prevEntry.cintura||0) : null, max:120, invert:true },
-          { cur: prevEntry.pecho ? (+prevEntry.pecho||0) : null, max:130 },
-          { cur: prevEntry.weight ? (+prevEntry.weight||0) : null, max:130 },
-        ] : null;
-
-        const N = fields.length;
-        const R = 75, cx = 95, cy = 90;
-        const angles = fields.map((_, i) => (2 * Math.PI * i / N) - Math.PI / 2);
-
-        const toXY = (r, angle) => [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
-
-        const polygon = (vals, fillColor, opacity) => {
-          const pts = vals.map((v, i) => {
-            const norm = v !== null ? Math.min(1, Math.max(0, v / (fields[i].max || 1))) : 0;
-            const r2 = norm * R;
-            return toXY(r2, angles[i]).map(x => x.toFixed(1)).join(",");
-          });
-          return <polygon points={pts.join(" ")} fill={fillColor} fillOpacity={opacity} stroke={fillColor} strokeWidth="1.5" strokeLinejoin="round"/>;
-        };
-
-        const curVals = fields.map(f => f.cur);
-        const prevVals = prevFields ? prevFields.map(f => f.cur) : null;
-
-        return (
-          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
-            <div style={{fontSize:12.5, fontWeight:800, marginBottom:8, display:"flex", alignItems:"center", gap:6}}>
-              <Activity size={15} color={C.cyan}/> Radar Corporal
-              {prevDates.length > 0 && <span style={{fontSize:10, color:C.muted, fontWeight:500}}>vs {prevDates[0]}</span>}
-            </div>
-            <svg width="100%" viewBox={`0 0 190 180`} style={{display:"block", maxWidth:260, margin:"0 auto"}}>
-              {[0.25, 0.5, 0.75, 1].map(scale => (
-                <polygon key={scale}
-                  points={angles.map(a => toXY(R*scale, a).map(x => x.toFixed(1)).join(",")).join(" ")}
-                  fill="none" stroke={C.line} strokeWidth="0.8"/>
-              ))}
-              {angles.map((a, i) => {
-                const [x1, y1] = toXY(0, a);
-                const [x2, y2] = toXY(R, a);
-                const [lx, ly] = toXY(R + 12, a);
-                return (
-                  <g key={i}>
-                    <line x1={x1.toFixed(1)} y1={y1.toFixed(1)} x2={x2.toFixed(1)} y2={y2.toFixed(1)} stroke={C.line} strokeWidth="0.8"/>
-                    <text x={lx.toFixed(1)} y={ly.toFixed(1)} textAnchor="middle" dominantBaseline="middle" fill={C.muted} fontSize="8">{fields[i].label}</text>
-                  </g>
-                );
-              })}
-              {prevVals && polygon(prevVals, C.amber, 0.15)}
-              {polygon(curVals, C.cyan, 0.25)}
-              {curVals.map((v, i) => {
-                if (v === null) return null;
-                const norm = Math.min(1, Math.max(0, v / (fields[i].max || 1)));
-                const [px, py] = toXY(norm * R, angles[i]);
-                return <circle key={i} cx={px.toFixed(1)} cy={py.toFixed(1)} r="3" fill={C.cyan} stroke={C.panel} strokeWidth="1.2"/>;
-              })}
-            </svg>
-            <div style={{display:"flex", gap:12, justifyContent:"center", fontSize:10, color:C.muted, marginTop:4}}>
-              <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:8, height:8, borderRadius:"50%", background:C.cyan}}/> Hoy</span>
-              {prevVals && <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:8, height:8, borderRadius:"50%", background:C.amber}}/> Anterior</span>}
             </div>
           </div>
         );
@@ -20498,7 +20433,7 @@ if (typeof module !== 'undefined' && module.exports) {
     detectStrengthLossUnderDeficit, detectRefeedNeed, detectDeloadNeed,
     calcMetabolicAdaptation, calcWaistMetrics, detectRecomposition,
     detectWeightOutlier, calcBodyProjection, fatFractionOfLoss, leanFractionOfGain,
-    evaluateRecovery, calcRestingHRBaseline, buildRecompositionSeries, getWeeklyStats,
+    evaluateRecovery, calcRestingHRBaseline, buildRecompositionSeries, buildMetricChanges, getWeeklyStats,
     RECOVERY_FIELDS, getLocalDateStr,
     normalizeMuscle, canonMuscleName, dedupeMuscles, calcMuscleVolumeBalance, SLUG_MUSCLE,
     normalizeBodyEntry, mergeMetricsUpTo, validateBodyMetrics, RANGOS_BIO,

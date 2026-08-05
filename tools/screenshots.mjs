@@ -144,6 +144,9 @@ const ESCENAS = [
   { id: "registro-03-composicion", tab: "Registro", scroll: 1900 },
   // El selector de rango del gráfico: es donde se veía que "30 d" no cambiaba nada
   { id: "registro-05-evolucion-corporal", tab: "Registro", scrollHasta: "Evolución corporal" },
+  // Sustituye al "Radar Corporal": ninguna escena caía sobre esa zona, por eso
+  // el radar pudo estar duplicado sin que las capturas lo delataran
+  { id: "registro-09-cambios-medicion", tab: "Registro", scrollHasta: "Cambios desde la medición anterior" },
   { id: "registro-04-final", tab: "Registro", scroll: 6000 },
   { id: "perfil-01", tab: "Perfil", scroll: 0 },
   { id: "coach-01", tab: "Coach", scroll: 0 },

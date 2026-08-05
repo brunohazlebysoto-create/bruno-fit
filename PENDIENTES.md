@@ -839,3 +839,53 @@ Lo cazó un test. Ahora cada métrica compara **su** primer valor con **su**
 Comprobado con las cuatro medidas reales (99 → 95 → 93.5 → 92 en días sin
 pesada): el gráfico dibuja la línea y dice −7 cm en "Todo" y −3 cm en 90 días,
 que es lo correcto porque esa ventana deja fuera la primera.
+
+## El "Radar Corporal": duplicado y, sobre todo, ilegible (W67)
+
+> *"estos gráficos no los entiendo y no dicen mucho se pueden mejorar o mejor
+> eliminar?"*
+
+Salían **dos radares idénticos** seguidos. Ese era el problema visible, pero el
+duplicado no era lo peor.
+
+### Por qué no se podía arreglar el radar, solo sustituirlo
+
+Un radar sirve para comparar un perfil contra otro sobre **ejes comparables**.
+Estos no lo eran:
+
+- Mezclaba **kg de peso con cm de perímetro** normalizados contra un máximo
+  inventado, así que la forma del polígono no medía nada real.
+- En **cintura menos es mejor**; en **brazo, más**. El mismo lado de la figura
+  juntaba una buena noticia y una mala.
+- De 6 ejes solo había datos en 2 (peso y cintura), así que el polígono
+  degeneraba en **una raya**.
+
+Un gráfico que no se puede leer mal porque no se puede leer.
+
+### Lo que hay ahora: "Cambios desde la medición anterior"
+
+Responde a la pregunta que el radar fingía responder: **qué cambió y si va en la
+dirección buena**. Por cada métrica medida, su último valor, la diferencia, los
+días transcurridos y una barra desde el centro, verde si el cambio es el que
+buscas y ámbar si no.
+
+Dos decisiones que importan:
+
+1. **Cada métrica se compara con la última vez que la mediste**, no con el día
+   anterior del calendario. La báscula da peso y grasa; la cinta métrica, los
+   perímetros: son días distintos. Comparar contra "el día previo" habría dejado
+   casi todo vacío.
+2. **La barra se escala con el cambio relativo (%)**, no con los kg o cm
+   sueltos. Si escalara con la magnitud absoluta estaría repitiendo el defecto
+   del radar: 0.6 kg y 0.6 cm no son la misma noticia.
+
+La lógica salió del JSX a `buildMetricChanges(metricslog)`, con tests: métricas
+medidas en días distintos, dirección buena por métrica, cambio relativo, y
+ceros y cadenas vacías que no cuentan como medición.
+
+### El motivo por el que un panel duplicado sobrevivió tanto
+
+**Ninguna escena de captura caía sobre esa zona.** `registro-04-final` va a
+scroll 6000, que en esa página es el fondo, y las demás quedaban por encima.
+Añadida `registro-09-cambios-medicion`, anclada al título, para que esa franja
+deje de ser un punto ciego.
