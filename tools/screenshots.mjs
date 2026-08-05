@@ -133,6 +133,13 @@ const ESCENAS = [
   // Registro de cintura: la métrica que mejor distingue perder grasa de perder peso
   { id: "registro-06-cintura", tab: "Registro", scroll: 0,
     accion: async (page) => { await page.getByRole("button", { name: "Cintura", exact: true }).first().click({ timeout: 5000 }); } },
+  // Perímetros por lados: la pestaña que no existía y hacía imposible la
+  // detección de asimetrías que ya estaba escrita
+  { id: "registro-07-perimetros", tab: "Registro", scroll: 0,
+    accion: async (page) => { await page.getByRole("button", { name: "Perímetros", exact: true }).first().click({ timeout: 5000 }); } },
+  // Historial de mediciones: corregir o borrar una medición equivocada
+  { id: "registro-08-historial-mediciones", tab: "Registro", scrollHasta: "Historial de mediciones",
+    accion: async (page) => { await page.getByRole("button", { name: /Historial de mediciones/ }).click({ timeout: 5000 }); } },
   { id: "registro-02-objetivos", tab: "Registro", scroll: 1150 },
   { id: "registro-03-composicion", tab: "Registro", scroll: 1900 },
   // El selector de rango del gráfico: es donde se veía que "30 d" no cambiaba nada

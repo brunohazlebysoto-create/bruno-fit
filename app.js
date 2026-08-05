@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W63";
+const APP_VERSION = "v2026.07.29-W64";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1093,6 +1093,35 @@ function normalizeBodyEntry(raw) {
     if (musculo != null) e.musculo = musculo;
   }
   return e;
+}
+
+// Qué contiene una medición, en una línea. Sirve para listarlas y para poder
+// decir qué se pierde antes de borrar una.
+function describeMeasurement(entry) {
+  const e = normalizeBodyEntry(entry);
+  const n = (k) => { const v = parseFloat(e[k]); return isFinite(v) ? v : null; };
+  const partes = [];
+  if (n("weight") != null) partes.push(`${n("weight")} kg`);
+  if (n("grasaPct") != null) partes.push(`${n("grasaPct")}% grasa`);
+  if (n("musculo") != null) partes.push(`${n("musculo")} kg músculo`);
+  if (n("cintura") != null) partes.push(`cintura ${n("cintura")} cm`);
+  if (n("visceral") != null) partes.push(`visceral ${n("visceral")}`);
+  const perims = ["brazoDer", "brazoIzq", "musloDer", "musloIzq", "pantorrillaDer", "pantorrillaIzq", "pecho"]
+    .filter(k => n(k) != null).length;
+  if (perims) partes.push(`${perims} perímetro${perims !== 1 ? "s" : ""}`);
+  const recup = ["suenoHoras", "pasos", "fcReposo"].filter(k => n(k) != null).length;
+  if (recup) partes.push(`${recup} dato${recup !== 1 ? "s" : ""} de recuperación`);
+  return { texto: partes.join(" · ") || "sin datos", campos: partes.length, fuente: e.fuente || null };
+}
+
+// Borra una medición completa. Una medición equivocada no se puede "ignorar":
+// entra en la tendencia, en el TDEE, en la proyección y en el plan. Sin esto,
+// un peso mal tecleado quedaba envenenando los cálculos para siempre.
+function deleteMeasurement(metricslog, date) {
+  if (!metricslog || !date || !(date in metricslog)) return metricslog || {};
+  const next = { ...metricslog };
+  delete next[date];
+  return next;
 }
 
 // Rangos plausibles en un adulto. Fuera de esto no es una medición: es un error
@@ -17139,7 +17168,7 @@ Analiza la evolución y da retroalimentación concreta. Formato: párrafos corto
 /* ===== TAB REGISTRO / PESO / COMPOSICIÓN CORPORAL ===== */
 function Registro({
   notes, setNotes, target, bodyComp, setBodyComp, geminiKey,
-  metricslog, setMetricslog, selectedDateStr, saveWeight, activeMetrics,
+  metricslog, setMetricslog, selectedDateStr, setSelectedDateStr, saveWeight, activeMetrics,
   foodlog, waterlog, exlog,
   projections, tdeeEstimate, analyzeAndReconfigure, experiments, setExperiments,
   dietGuidelines, setDietGuidelines, trainingGuidelines, setTrainingGuidelines, onSaveGuidelines,
@@ -17482,12 +17511,18 @@ function Registro({
     // La cintura es la métrica que mejor distingue perder grasa de perder peso,
     // y no había forma de registrarla: solo entraba con un informe de InBody.
     cintura: ["Cintura", C.amber],
+    // `savePerimetros` existía desde siempre pero ninguna pestaña lo alcanzaba:
+    // la detección de asimetrías estaba escrita y no podía dispararse nunca
+    // porque los datos no había forma de meterlos.
+    perimetros: ["Perímetros", C.cyan],
   };
 
   // Fecha propia: casi siempre la cintura se mide en días sueltos y hay que
   // poder cargar las medidas antiguas sin cambiar el día de toda la app.
   // Y estado propio: compartir `cintura` con el formulario de perímetros hacía
   // que su efecto repoblara el campo con el valor de OTRO día tras guardar.
+  const [verMediciones, setVerMediciones] = useState(false);
+  const [confirmBorrarMed, setConfirmBorrarMed] = useState(null);
   const [cinturaVal, setCinturaVal] = useState("");
   const [cinturaFecha, setCinturaFecha] = useState(selectedDateStr);
   const [cinturaAyunas, setCinturaAyunas] = useState(true);
@@ -18093,6 +18128,7 @@ ${alertas || "ninguna"}`;
     peso: "Guardar Peso",
     composicion: "Guardar Composición",
     cintura: "Guardar Cintura",
+    perimetros: "Guardar Perímetros",
   };
 
   return (
@@ -18162,6 +18198,56 @@ ${alertas || "ninguna"}`;
             </button>
           ))}
         </div>
+
+        {type === "perimetros" && (() => {
+          const par = (lbl, vD, sD, vI, sI) => {
+            const d = parseFloat(vD), i = parseFloat(vI);
+            const dif = (d > 0 && i > 0) ? Math.round(Math.abs(d - i) * 10) / 10 : null;
+            return (
+              <div key={lbl} style={{marginBottom:9}}>
+                <div style={{display:"flex", alignItems:"baseline", gap:6, marginBottom:3}}>
+                  <span style={{fontSize:11, fontWeight:700, color:C.muted}}>{lbl}</span>
+                  {/* La asimetría es el dato accionable de medir por lados */}
+                  {dif != null && dif > 0.5 && (
+                    <span style={{fontSize:9.5, fontWeight:800, color:C.amber, background:"rgba(180,83,9,0.12)",
+                      borderRadius:4, padding:"1px 5px"}}>
+                      asimetría {dif} cm · más {d > i ? "derecho" : "izquierdo"}
+                    </span>
+                  )}
+                  {dif != null && dif <= 0.5 && (
+                    <span style={{fontSize:9.5, fontWeight:700, color:C.lime}}>simétrico</span>
+                  )}
+                </div>
+                <div style={{display:"flex", gap:6}}>
+                  <input value={vD} onChange={e => sD(e.target.value)} type="number" inputMode="decimal" step="0.1" placeholder="derecho"
+                    style={{flex:1, minWidth:0, background:C.panel, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 10px", color:C.ink, fontSize:13.5}}/>
+                  <input value={vI} onChange={e => sI(e.target.value)} type="number" inputMode="decimal" step="0.1" placeholder="izquierdo"
+                    style={{flex:1, minWidth:0, background:C.panel, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 10px", color:C.ink, fontSize:13.5}}/>
+                </div>
+              </div>
+            );
+          };
+          return (
+            <div>
+              <div style={{fontSize:11, color:C.muted, lineHeight:1.5, marginBottom:10}}>
+                Mide ambos lados relajado y a la misma altura. Una diferencia de más de
+                0.5 cm mantenida en el tiempo es un desequilibrio que conviene corregir con
+                trabajo unilateral, y solo se ve midiendo por separado.
+              </div>
+              {par("Brazos (cm)", brazoDer, setBrazoDer, brazoIzq, setBrazoIzq)}
+              {par("Muslos (cm)", musloDer, setMusloDer, musloIzq, setMusloIzq)}
+              {par("Pantorrillas (cm)", pantorrillaDer, setPantorrillaDer, pantorrillaIzq, setPantorrillaIzq)}
+              <div style={{marginBottom:4}}>
+                <div style={{fontSize:11, fontWeight:700, color:C.muted, marginBottom:3}}>Pecho (cm)</div>
+                <input value={pecho} onChange={e => setPecho(e.target.value)} type="number" inputMode="decimal" step="0.1" placeholder="cm"
+                  style={{width:"100%", boxSizing:"border-box", background:C.panel, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 10px", color:C.ink, fontSize:13.5}}/>
+              </div>
+              <div style={{fontSize:10, color:C.muted, marginTop:6}}>
+                Se guardan en el día seleccionado ({fdate(selectedDateStr + "T12:00:00Z")}).
+              </div>
+            </div>
+          );
+        })()}
 
         {type === "cintura" && (() => {
           const ult = cinturaHist[0], prev = cinturaHist[1];
@@ -18355,7 +18441,7 @@ ${alertas || "ninguna"}`;
           </div>
         )}
 
-        <button onClick={() => { if(type === "peso") savePeso(); else if(type === "composicion") saveComposicion(); else if(type === "cintura") saveCintura(); }} style={{width:"100%", marginTop:8, padding:"10px", borderRadius:10, border:"none", cursor:"pointer", background:C.lime, color:C.onAccent, fontWeight:800, fontSize:14}}>
+        <button onClick={() => { if(type === "peso") savePeso(); else if(type === "composicion") saveComposicion(); else if(type === "cintura") saveCintura(); else if(type === "perimetros") savePerimetros(); }} style={{width:"100%", marginTop:8, padding:"10px", borderRadius:10, border:"none", cursor:"pointer", background:C.lime, color:C.onAccent, fontWeight:800, fontSize:14}}>
           {buttonLabels[type] || "Guardar"}
         </button>
       </div>
@@ -19346,6 +19432,103 @@ ${alertas || "ninguna"}`;
 
 
 
+      {/* ===== HISTORIAL DE MEDICIONES =====
+          Una medición equivocada no se puede "ignorar": entra en la tendencia,
+          en el TDEE, en la proyección y en el plan. Sin poder borrarla ni
+          corregirla, un peso mal tecleado envenenaba los cálculos para siempre. */}
+      {(() => {
+        const fechas = Object.keys(metricslog || {}).sort().reverse();
+        if (!fechas.length) return null;
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, marginBottom:12, overflow:"hidden"}}>
+            <button onClick={() => setVerMediciones(v => !v)}
+              style={{width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between",
+                background:"none", border:"none", padding:"12px 14px", cursor:"pointer", color:C.ink}}>
+              <span style={{display:"flex", alignItems:"center", gap:7, fontSize:12.5, fontWeight:800}}>
+                <Scale size={14} color={C.muted}/> Historial de mediciones
+                <span style={{fontSize:11, fontWeight:600, color:C.muted}}>{fechas.length}</span>
+              </span>
+              <span style={{color:C.muted, fontSize:13}}>{verMediciones ? "▴" : "▾"}</span>
+            </button>
+            {verMediciones && (
+              <div style={{padding:"0 12px 12px"}}>
+                <div style={{fontSize:10, color:C.muted, marginBottom:8, lineHeight:1.45}}>
+                  Corrige o borra cualquier medición. Un valor mal tecleado altera la tendencia,
+                  el gasto estimado y el plan entero.
+                </div>
+                <div style={{display:"flex", flexDirection:"column", gap:6, maxHeight:340, overflowY:"auto"}}>
+                  {fechas.slice(0, 60).map(d => {
+                    const info = describeMeasurement(metricslog[d]);
+                    const hoy = d === selectedDateStr;
+                    return (
+                      <div key={d} style={{display:"flex", alignItems:"center", gap:8,
+                        background: hoy ? "rgba(77,124,15,0.08)" : C.panel2,
+                        border:`1px solid ${hoy ? C.lime : C.line}`, borderRadius:10, padding:"7px 9px"}}>
+                        <div style={{flex:1, minWidth:0}}>
+                          <div style={{fontSize:11.5, fontWeight:700, color:C.ink}}>
+                            {fdate(d + "T12:00:00Z")}
+                            {info.fuente && <span style={{fontSize:9, fontWeight:600, color:C.muted}}> · {info.fuente === "inbody" ? "InBody" : info.fuente === "bascula" ? "báscula" : info.fuente}</span>}
+                          </div>
+                          <div style={{fontSize:10, color:C.muted, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+                            {info.texto}
+                          </div>
+                        </div>
+                        <button onClick={() => { setSelectedDateStr && setSelectedDateStr(d); setCinturaFecha(d); }}
+                          title="Cargar esta fecha en el formulario"
+                          style={{background:"none", border:`1px solid ${C.line}`, borderRadius:7, padding:"4px 8px",
+                            color:C.cyan, fontSize:10, fontWeight:700, cursor:"pointer", flexShrink:0}}>
+                          Editar
+                        </button>
+                        <button onClick={() => setConfirmBorrarMed(d)}
+                          title="Borrar esta medición"
+                          style={{background:"none", border:"none", cursor:"pointer", color:C.muted, display:"grid",
+                            placeItems:"center", flexShrink:0, padding:2}}>
+                          <Trash2 size={14}/>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                {fechas.length > 60 && (
+                  <div style={{fontSize:9.5, color:C.muted, marginTop:6}}>
+                    Mostrando las 60 más recientes de {fechas.length}.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Borrar una medición no se recupera: se confirma diciendo qué se pierde */}
+      {confirmBorrarMed && (() => {
+        const info = describeMeasurement(metricslog[confirmBorrarMed]);
+        return (
+          <div style={{position:"fixed", top:0, left:0, right:0, bottom:0, background:C.overlay,
+            backdropFilter:"blur(4px)", display:"grid", placeItems:"center", zIndex:9999, padding:20}}
+            onClick={() => setConfirmBorrarMed(null)}>
+            <div onClick={e => e.stopPropagation()} style={{background:C.panel, border:`1px solid ${C.line}`,
+              borderRadius:16, padding:20, width:"100%", maxWidth:340, display:"flex", flexDirection:"column", gap:12}}>
+              <div style={{fontSize:15, fontWeight:800, color:C.ink, textAlign:"center"}}>Borrar medición</div>
+              <div style={{fontSize:12, color:C.muted, textAlign:"center", lineHeight:1.5}}>
+                <strong style={{color:C.ink}}>{fdate(confirmBorrarMed + "T12:00:00Z")}</strong><br/>
+                {info.texto}<br/>
+                <span style={{fontSize:11}}>No se puede deshacer.</span>
+              </div>
+              <button onClick={() => { setMetricslog(deleteMeasurement(metricslog, confirmBorrarMed)); setConfirmBorrarMed(null); }}
+                style={{background:"rgba(190,18,60,0.12)", border:`1px solid ${C.rose}`, color:C.rose,
+                  fontWeight:800, padding:11, borderRadius:11, cursor:"pointer"}}>
+                Borrar
+              </button>
+              <button onClick={() => setConfirmBorrarMed(null)}
+                style={{background:"none", border:"none", color:C.muted, fontWeight:700, padding:6, cursor:"pointer"}}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ===== BITÁCORA (colapsable) =====
           Antes cada entrada ocupaba una tarjeta suelta al final de la pestaña:
           con meses de uso son cientos de tarjetas empujando todo lo demás.
@@ -20277,6 +20460,7 @@ if (typeof module !== 'undefined' && module.exports) {
     RECOVERY_FIELDS, getLocalDateStr,
     normalizeMuscle, canonMuscleName, dedupeMuscles, calcMuscleVolumeBalance, SLUG_MUSCLE,
     normalizeBodyEntry, mergeMetricsUpTo, validateBodyMetrics, RANGOS_BIO,
+    describeMeasurement, deleteMeasurement,
     repairTruncatedJSON, cleanAndParseJSON,
     inferMusclesFromName, musclesOfExercise, listUncountedExercises,
     splitOfExercise, moveExerciseBetweenSplits, removeExerciseFromSplitPure,

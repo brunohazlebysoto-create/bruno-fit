@@ -725,3 +725,46 @@ se ve en serie.
 - Ese mismo efecto se disparaba con cada cambio de `metricslog`, así que el
   propio guardado borraba lo tecleado. Ahora el formulario tiene su estado y su
   fecha, y solo recarga cuando la fecha cambia de verdad
+
+---
+
+## Auditoría del ítem Registro (W64)
+
+Repaso del flujo completo: qué se puede registrar, qué se guarda, qué se lee y
+qué se analiza. Se cruzaron los campos escritos contra los leídos.
+
+### Lo que estaba roto
+
+| Hallazgo | Por qué importaba |
+|---|---|
+| **El formulario de perímetros era inalcanzable** | `savePerimetros` existía desde siempre y **ninguna pestaña lo llamaba**. La detección de asimetrías de brazos y muslos estaba escrita y **no podía dispararse nunca**, porque los datos no había forma de meterlos |
+| **No se podía corregir ni borrar una medición** | El aviso de outlier informa pero no bloquea — a propósito, porque un dato raro puede ser legítimo. Pero entonces un peso mal tecleado quedaba **envenenando la tendencia, el TDEE, la proyección y el plan para siempre**, sin forma de sacarlo |
+
+### Lo que se hizo
+
+- **Pestaña Perímetros**, con los dos lados y la asimetría calculada en vivo:
+  *"asimetría 1.2 cm · más derecho"* frente a *"simétrico"*. Más de 0.5 cm
+  mantenido es un desequilibrio que se corrige con trabajo unilateral, y solo se
+  ve midiendo por separado
+- **Historial de mediciones**: lista de todas, con lo que contiene cada una y su
+  fuente, botón para cargarla en el formulario y borrado con confirmación que
+  dice qué se pierde
+
+### Ideas pendientes, por valor
+
+1. **Panel segmental del InBody.** Se guardan los kg de grasa y músculo de
+   tronco, brazos y piernas por separado, y **solo se usan en un texto para la
+   IA**: no hay ninguna visualización. Es de lo más accionable que da un InBody.
+   Además `grasaBrazoIzq`, `grasaPiernaIzq` y `musculoTronco` no se usan en
+   absoluto — la asimetría de grasa se calcula solo con el lado derecho.
+2. **Más series en el gráfico**: visceral, IMC y agua se registran y no se pueden
+   dibujar. Son tres líneas gratis.
+3. **Marcar la condición en el gráfico.** Ya se guarda `fuente` y `ayunas`; un
+   punto medido en ayunas y otro por la tarde no son comparables y ahora se
+   pintan igual.
+4. **Media móvil de 7 días como línea de fondo**, para separar la señal del ruido
+   diario sin tener que elegir entre peso crudo y peso de tendencia.
+5. **Exportar el registro a CSV.** Hay copia de seguridad en JSON, pero no una
+   forma de llevarse los datos a una hoja de cálculo o al médico.
+6. **Recordatorio de medición.** La frecuencia de registro es lo que alimenta
+   todo lo demás, y hoy depende de acordarse.

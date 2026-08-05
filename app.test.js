@@ -2279,3 +2279,58 @@ describe('sin datos no es lo mismo que agotado', () => {
     expect(r[0].motivo).not.toMatch(/estancado|agotado/);
   });
 });
+
+describe('historial de mediciones: describir y borrar', () => {
+  const { describeMeasurement, deleteMeasurement } = require('./app.js');
+
+  test('resume qué contiene una medición', () => {
+    const d = describeMeasurement({ weight: 92.3, grasaPct: 24.5, musculo: 64.7, cintura: 96, fuente: 'inbody' });
+    expect(d.texto).toContain('92.3 kg');
+    expect(d.texto).toContain('24.5% grasa');
+    expect(d.texto).toContain('cintura 96 cm');
+    expect(d.fuente).toBe('inbody');
+    expect(d.campos).toBeGreaterThan(3);
+  });
+
+  test('cuenta perímetros y datos de recuperación en bloque', () => {
+    const d = describeMeasurement({ weight: 92, brazoDer: 38, brazoIzq: 37.5, pasos: 9000, suenoHoras: 7 });
+    expect(d.texto).toContain('2 perímetros');
+    expect(d.texto).toContain('2 datos de recuperación');
+  });
+
+  test('traduce el vocabulario del informe al describir', () => {
+    // masaMuscular → musculo, igual que en el resto de la app
+    expect(describeMeasurement({ peso: 92, masaMuscular: 64.7 }).texto).toContain('64.7 kg músculo');
+  });
+
+  test('una medición vacía se dice, no se finge', () => {
+    expect(describeMeasurement({}).texto).toBe('sin datos');
+    expect(describeMeasurement(null).texto).toBe('sin datos');
+  });
+
+  test('borrar quita solo esa fecha y no muta el original', () => {
+    const log = { '2026-03-10': { weight: 92 }, '2026-03-11': { weight: 91.8 } };
+    const r = deleteMeasurement(log, '2026-03-10');
+    expect(Object.keys(r)).toEqual(['2026-03-11']);
+    expect(Object.keys(log)).toHaveLength(2);
+  });
+
+  test('borrar una fecha que no existe no rompe nada', () => {
+    const log = { '2026-03-10': { weight: 92 } };
+    expect(deleteMeasurement(log, '2026-01-01')).toBe(log);
+    expect(deleteMeasurement(null, '2026-01-01')).toEqual({});
+    expect(deleteMeasurement(log, null)).toBe(log);
+  });
+
+  test('tras borrar, la composición vigente deja de verlo', () => {
+    const { mergeMetricsUpTo } = require('./app.js');
+    const log = {
+      '2026-03-10': { weight: 92, grasaPct: 25 },
+      '2026-03-11': { weight: 129 },      // el typo que envenena la tendencia
+    };
+    expect(mergeMetricsUpTo(log, '2026-03-11').weight).toBe(129);
+    const limpio = deleteMeasurement(log, '2026-03-11');
+    expect(mergeMetricsUpTo(limpio, '2026-03-11').weight).toBe(92);
+    expect(mergeMetricsUpTo(limpio, '2026-03-11').grasaPct).toBe(25);
+  });
+});
