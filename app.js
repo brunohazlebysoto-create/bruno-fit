@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W62";
+const APP_VERSION = "v2026.07.29-W63";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -17479,6 +17479,51 @@ function Registro({
   const TYPES = {
     peso: ["Peso", C.cyan],
     composicion: ["Composición", C.lime],
+    // La cintura es la métrica que mejor distingue perder grasa de perder peso,
+    // y no había forma de registrarla: solo entraba con un informe de InBody.
+    cintura: ["Cintura", C.amber],
+  };
+
+  // Fecha propia: casi siempre la cintura se mide en días sueltos y hay que
+  // poder cargar las medidas antiguas sin cambiar el día de toda la app.
+  // Y estado propio: compartir `cintura` con el formulario de perímetros hacía
+  // que su efecto repoblara el campo con el valor de OTRO día tras guardar.
+  const [cinturaVal, setCinturaVal] = useState("");
+  const [cinturaFecha, setCinturaFecha] = useState(selectedDateStr);
+  const [cinturaAyunas, setCinturaAyunas] = useState(true);
+
+  // Se sincroniza con SU fecha: elegir un día muestra lo medido ese día. La
+  // guarda evita que un cambio en metricslog —el propio guardado, por ejemplo—
+  // vuelva a cargar el campo y borre lo que se estaba escribiendo.
+  const cinturaCargadaDe = useRef(null);
+  useEffect(() => {
+    if (cinturaCargadaDe.current === cinturaFecha) return;
+    cinturaCargadaDe.current = cinturaFecha;
+    const e = (metricslog || {})[cinturaFecha] || {};
+    setCinturaVal(e.cintura !== undefined ? String(e.cintura) : "");
+    setCinturaAyunas(e.cinturaAyunas !== undefined ? !!e.cinturaAyunas : true);
+  }, [cinturaFecha, metricslog]);
+
+  // Histórico de cintura, de la más reciente a la más antigua
+  const cinturaHist = useMemo(() => Object.entries(metricslog || {})
+    .map(([d, m]) => ({ date: d, cm: parseFloat(m?.cintura), ayunas: !!m?.cinturaAyunas }))
+    .filter(x => x.cm > 0)
+    .sort((a, b) => a.date < b.date ? 1 : -1), [metricslog]);
+
+  const saveCintura = () => {
+    const cm = parseFloat(cinturaVal);
+    if (!(cm > 0) || !cinturaFecha) return;
+    const prev = metricslog[cinturaFecha] || {};
+    const next = { ...metricslog, [cinturaFecha]: { ...prev, cintura: cm, cinturaAyunas } };
+    setMetricslog(next);
+    const e = {
+      id: uid(), type: "nota",
+      date: new Date(cinturaFecha + "T12:00:00").toISOString(),
+      text: `Cintura: ${cm} cm${cinturaAyunas ? " (en ayunas)" : ""}`,
+    };
+    setNotes([e, ...notes]);
+    // No se limpia: el campo pasa a mostrar lo guardado para esa fecha, que es
+    // lo que el efecto de arriba refleja
   };
 
   const savePeso = () => {
@@ -17858,6 +17903,9 @@ function Registro({
       recompAlert ? `Recomposición detectada: ${recompAlert.message}` : null,
       strengthLossAlert ? `Pérdida de fuerza en déficit: ${strengthLossAlert.message}` : null,
       waistMetrics?.available ? `Cintura ${waistMetrics.cintura}cm · cintura/altura ${waistMetrics.whtr} (${waistMetrics.riesgo?.label || "?"}) · ${waistMetrics.deltaTotal} cm desde el inicio` : null,
+      // El histórico completo, no solo el último valor: la cintura bajando con
+      // el peso estable es la señal de recomposición, y eso solo se ve en serie
+      cinturaHist.length ? `Serie de cintura (reciente → antigua): ${cinturaHist.slice(0, 10).map(h => `${h.date} ${h.cm}cm${h.ayunas ? " (ayunas)" : ""}`).join(" | ")}` : null,
     ].filter(Boolean).join("\n");
 
     try{
@@ -17873,6 +17921,8 @@ Responde en español, con MARKDOWN y estas cinco secciones, en este orden y con 
 **Nutrición: qué ajustar** — calorías y macros concretos, con el número exacto y el porqué. Si el TDEE medido difiere del estimado, explica cuál usar.
 
 **Entrenamiento: qué ajustar** — frecuencia, volumen y qué priorizar según los PRs y los días entrenados.
+
+**Cintura** — si hay serie de cintura, analízala aparte del peso: cuántos cm en cuánto tiempo, si el ritmo se mantiene o se frenó, y qué dice el ratio cintura/altura. Si la cintura baja más rápido que el peso, dilo: eso es recomposición y es mejor noticia que la báscula. Compara solo medidas tomadas en la misma condición (en ayunas con en ayunas).
 
 **Qué vigilar** — 2-3 riesgos concretos de sus propios datos (estancamiento, pérdida de fuerza, adaptación metabólica, adherencia baja) y la señal que indicaría que hay que corregir.
 
@@ -18042,6 +18092,7 @@ ${alertas || "ninguna"}`;
   const buttonLabels = {
     peso: "Guardar Peso",
     composicion: "Guardar Composición",
+    cintura: "Guardar Cintura",
   };
 
   return (
@@ -18111,6 +18162,75 @@ ${alertas || "ninguna"}`;
             </button>
           ))}
         </div>
+
+        {type === "cintura" && (() => {
+          const ult = cinturaHist[0], prev = cinturaHist[1];
+          const w = waistMetrics?.available ? waistMetrics : null;
+          return (
+            <div>
+              <div style={{fontSize:11, color:C.muted, lineHeight:1.5, marginBottom:9}}>
+                Mídela a la altura del ombligo, de pie y relajado. Es la métrica que mejor
+                distingue perder grasa de perder peso: la báscula sola no lo hace.
+              </div>
+              <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:8}}>
+                <input
+                  value={cinturaVal} onChange={e => setCinturaVal(e.target.value)}
+                  type="number" inputMode="decimal" step="0.1" placeholder="cm"
+                  style={{flex:1, minWidth:0, background:C.panel, border:`1px solid ${C.line}`, borderRadius:10,
+                    padding:"10px 12px", color:C.ink, fontSize:16, outline:"none"}}
+                />
+                <span style={{fontSize:12, color:C.muted}}>cm</span>
+                <input
+                  value={cinturaFecha} onChange={e => setCinturaFecha(e.target.value)}
+                  type="date"
+                  style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:10,
+                    padding:"9px 10px", color:C.ink, fontSize:12, outline:"none"}}
+                />
+              </div>
+              {/* La condición cambia la medida varios cm: sin anotarla, dos
+                  medidas no son comparables entre sí */}
+              <button onClick={() => setCinturaAyunas(v => !v)}
+                style={{display:"inline-flex", alignItems:"center", gap:6, marginBottom:10,
+                  background: cinturaAyunas ? "rgba(77,124,15,0.10)" : "transparent",
+                  border:`1px solid ${cinturaAyunas ? C.lime : C.line}`, borderRadius:20,
+                  padding:"5px 12px", color: cinturaAyunas ? C.lime : C.muted, fontSize:11.5, fontWeight:700, cursor:"pointer"}}>
+                {cinturaAyunas ? "✓" : "○"} En ayunas
+              </button>
+
+              {ult && (
+                <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"9px 11px", marginBottom:4}}>
+                  <div style={{display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:8, flexWrap:"wrap"}}>
+                    <span style={{fontSize:12.5, fontWeight:800, color:C.ink}}>
+                      {ult.cm} cm
+                      <span style={{fontSize:10, fontWeight:600, color:C.muted}}> · {fdate(ult.date + "T12:00:00Z")}{ult.ayunas ? " · en ayunas" : ""}</span>
+                    </span>
+                    {prev && (
+                      <span style={{fontSize:11.5, fontWeight:800, color: ult.cm < prev.cm ? C.lime : ult.cm > prev.cm ? C.amber : C.muted}}>
+                        {ult.cm - prev.cm > 0 ? "+" : ""}{Math.round((ult.cm - prev.cm) * 10) / 10} cm vs anterior
+                      </span>
+                    )}
+                  </div>
+                  {w && (
+                    <div style={{fontSize:10.5, color:C.muted, marginTop:4, lineHeight:1.45}}>
+                      Cintura/altura <b style={{color: w.riesgo?.ok ? C.lime : C.amber}}>{w.whtr}</b> ({w.riesgo?.label || "?"})
+                      {w.deltaTotal != null && <> · {w.deltaTotal > 0 ? "+" : ""}{w.deltaTotal} cm desde la primera medición</>}
+                      <br/>Por debajo de 0.50 se considera saludable.
+                    </div>
+                  )}
+                  {cinturaHist.length > 1 && (
+                    <div style={{fontSize:10, color:C.muted, marginTop:6, display:"flex", gap:6, flexWrap:"wrap"}}>
+                      {cinturaHist.slice(0, 6).map(h => (
+                        <span key={h.date} style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:6, padding:"2px 6px"}}>
+                          {fdate(h.date + "T12:00:00Z")}: <b style={{color:C.ink}}>{h.cm}</b>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {type === "peso" && (
           <div style={{display:"flex", alignItems:"center", gap:8}}>
@@ -18235,7 +18355,7 @@ ${alertas || "ninguna"}`;
           </div>
         )}
 
-        <button onClick={() => { if(type === "peso") savePeso(); else if(type === "composicion") saveComposicion(); }} style={{width:"100%", marginTop:8, padding:"10px", borderRadius:10, border:"none", cursor:"pointer", background:C.lime, color:C.onAccent, fontWeight:800, fontSize:14}}>
+        <button onClick={() => { if(type === "peso") savePeso(); else if(type === "composicion") saveComposicion(); else if(type === "cintura") saveCintura(); }} style={{width:"100%", marginTop:8, padding:"10px", borderRadius:10, border:"none", cursor:"pointer", background:C.lime, color:C.onAccent, fontWeight:800, fontSize:14}}>
           {buttonLabels[type] || "Guardar"}
         </button>
       </div>

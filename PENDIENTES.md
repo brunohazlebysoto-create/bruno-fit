@@ -695,3 +695,33 @@ línea tenga sentido"*.
 - Al tocar un día, cada métrica muestra el cambio **desde el inicio** y también
   **respecto a la medición anterior**, que es la comparación que uno hace de
   cabeza
+
+---
+
+## Registro de cintura (W63)
+
+`savePerimetros` existía en el código pero **ninguna pestaña lo alcanzaba**: la
+cintura solo entraba si venía dentro de un informe de InBody. Y es la métrica
+que mejor distingue perder grasa de perder peso.
+
+Nueva pestaña **Cintura** junto a Peso y Composición, con:
+
+- valor en cm y **fecha propia**, para cargar medidas antiguas sin cambiar el
+  día seleccionado en el resto de la app
+- interruptor **en ayunas**: la condición cambia la medida varios centímetros, y
+  sin anotarla dos medidas no son comparables
+- lectura inmediata: último valor, cambio vs la medición anterior, ratio
+  cintura/altura con su clasificación y las últimas seis medidas
+
+El gráfico ya tenía la serie; ahora tiene datos que mostrar. Y el análisis con
+IA recibe la **serie completa** —no solo el último valor— con una sección propia:
+la cintura bajando con el peso estable es la señal de recomposición, y eso solo
+se ve en serie.
+
+### Dos trampas del formulario
+
+- El campo compartía estado con el formulario de perímetros, cuyo efecto lo
+  repoblaba desde **otro día** al guardar: escribías 92 y aparecía 96.3
+- Ese mismo efecto se disparaba con cada cambio de `metricslog`, así que el
+  propio guardado borraba lo tecleado. Ahora el formulario tiene su estado y su
+  fecha, y solo recarga cuando la fecha cambia de verdad

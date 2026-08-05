@@ -130,6 +130,9 @@ const ESCENAS = [
   // que crece algo por encima, y con scroll fijo la captura acabaría en otro sitio
   { id: "entreno-10-volumen-semanal", tab: "Entreno", scrollHasta: "Volumen Semanal" },
   { id: "registro-01-peso-y-tendencia", tab: "Registro", scroll: 0 },
+  // Registro de cintura: la métrica que mejor distingue perder grasa de perder peso
+  { id: "registro-06-cintura", tab: "Registro", scroll: 0,
+    accion: async (page) => { await page.getByRole("button", { name: "Cintura", exact: true }).first().click({ timeout: 5000 }); } },
   { id: "registro-02-objetivos", tab: "Registro", scroll: 1150 },
   { id: "registro-03-composicion", tab: "Registro", scroll: 1900 },
   // El selector de rango del gráfico: es donde se veía que "30 d" no cambiaba nada
