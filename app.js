@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W65";
+const APP_VERSION = "v2026.07.29-W66";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1855,7 +1855,15 @@ function buildRecompositionSeries(metricslog) {
     const e = normalizeBodyEntry(metricslog[d]);
     const pesoReal = parseFloat(e.weight);
     const peso = ema[d] ?? pesoReal;
-    if (!(peso > 0)) return;
+    // Antes se exigía peso para incluir el día: un día con SOLO cintura —que es
+    // lo normal, la cintura se mide suelta— se descartaba entero y su medición
+    // nunca entraba en la serie. El gráfico dibujaba el último valor arrastrado
+    // y decía "0 cm desde el inicio" con 7 cm perdidos en el registro.
+    const cinturaDelDia = parseFloat(e.cintura);
+    const grasaDelDia = parseFloat(e.grasaPct);
+    const musculoDelDia = parseFloat(e.musculo);
+    const tieneDato = peso > 0 || cinturaDelDia > 0 || grasaDelDia > 0 || musculoDelDia > 0;
+    if (!tieneDato) return;
     const g = parseFloat(e.grasaPct);
     if (!isNaN(g) && g > 0) lastGrasa = g;
     const c = parseFloat(e.cintura);
@@ -1871,6 +1879,7 @@ function buildRecompositionSeries(metricslog) {
     const magraMedida = parseFloat(e.pesoSinGrasa);
     const grasaMedida = parseFloat(e.masaGrasa);
     const pesado = pesoReal > 0;
+    const pesoPunto = pesado ? pesoReal : (peso > 0 ? peso : null);
     // Cuenta como medición de composición cualquier dato de ESE día: los kg de
     // grasa o magra del InBody, pero también un % de grasa o unos kg de músculo
     // apuntados a mano. Lo que no cuenta es el valor arrastrado de días atrás.
@@ -1881,17 +1890,18 @@ function buildRecompositionSeries(metricslog) {
 
     const magra = composicionMedida && magraMedida > 0 ? r1(magraMedida)
       : (grasaMedida > 0 && pesoReal > 0) ? r1(pesoReal - grasaMedida)
-      : lastGrasa != null ? r1(peso * (1 - lastGrasa / 100)) : null;
+      : (lastGrasa != null && peso > 0) ? r1(peso * (1 - lastGrasa / 100)) : null;
     const grasaKg = composicionMedida && grasaMedida > 0 ? r1(grasaMedida)
       : (magraMedida > 0 && pesoReal > 0) ? r1(pesoReal - magraMedida)
-      : lastGrasa != null ? r1(peso * (lastGrasa / 100)) : null;
+      : (lastGrasa != null && peso > 0) ? r1(peso * (lastGrasa / 100)) : null;
 
     points.push({
       date: d,
       // En los días con medición se muestra el peso de ese día; el suavizado
       // solo rellena los días sin pesada
-      peso: r1(pesado ? pesoReal : peso),
-      pesoTendencia: r1(peso),
+      // Sin pesada ese día no se inventa un punto de peso: la línea salta
+      peso: pesoPunto != null ? r1(pesoPunto) : null,
+      pesoTendencia: peso > 0 ? r1(peso) : null,
       pesado,
       // Sin distinguirlo, una línea plana de tres semanas parece un dato y es
       // solo el último valor conocido repetido.
@@ -1906,13 +1916,19 @@ function buildRecompositionSeries(metricslog) {
   if (points.length < 2) return { available: false, points };
 
   const first = points[0], last = points[points.length - 1];
-  const delta = (a, b) => (a != null && b != null) ? Math.round((b - a) * 10) / 10 : null;
+  // Por MÉTRICA, no por punto: si el primer día es de solo cintura, el peso de
+  // ese punto es null y el cambio de peso salía nulo aunque hubiera pesadas de
+  // sobra. Cada métrica compara su primer valor con su último.
+  const delta = (clave) => {
+    const vals = points.map(p => p[clave]).filter(v => v != null);
+    return vals.length >= 2 ? Math.round((vals[vals.length - 1] - vals[0]) * 10) / 10 : null;
+  };
   const deltas = {
-    peso: delta(first.peso, last.peso),
-    magra: delta(first.magra, last.magra),
-    grasaKg: delta(first.grasaKg, last.grasaKg),
-    grasaPct: delta(first.grasaPct, last.grasaPct),
-    cintura: delta(first.cintura, last.cintura),
+    peso: delta("peso"),
+    magra: delta("magra"),
+    grasaKg: delta("grasaKg"),
+    grasaPct: delta("grasaPct"),
+    cintura: delta("cintura"),
   };
   // Recomposición "de libro": pierde grasa y mantiene o gana masa magra
   const recomposing = deltas.grasaKg != null && deltas.magra != null

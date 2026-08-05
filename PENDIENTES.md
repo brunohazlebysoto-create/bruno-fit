@@ -802,3 +802,40 @@ Vuelve a pedirla para obtener el resto."* Callar el corte era peor que el corte.
 El primer intento de esto último —*quitar el `**` del final de la línea*— **rompía
 el markdown bien cerrado**: `"**Día:** normal"` quedaba en `"**Día: normal"`. Lo
 cazó un test. La regla correcta es contar pares y quitar solo el que sobra.
+
+---
+
+## La cintura no llegaba al gráfico (W66)
+
+El panel de arriba decía **92 cm · −7 cm** y el gráfico, tres centímetros más
+abajo, decía **93.5 cm · 0 cm desde el inicio**. Los dos leían el mismo
+registro.
+
+### La causa
+
+```js
+const peso = ema[d] ?? pesoReal;
+if (!(peso > 0)) return;      // ← descarta el día entero
+```
+
+`buildRecompositionSeries` **exigía peso** para incluir un día. Y la cintura se
+mide suelta, en días en los que no te pesas: esas mediciones nunca entraban en
+la serie. La línea que se veía era el último valor arrastrado desde un día que
+sí tenía pesada.
+
+Ahora entra cualquier día con **algún** dato — peso, cintura, grasa o músculo — y
+el peso solo se dibuja si existe ese día: sin pesada, la línea salta en vez de
+inventarse un punto.
+
+### Un fallo que iba a introducir yo
+
+Al incluir días de solo cintura, el **primer punto** de la serie pasó a no tener
+peso… y los deltas se calculaban con `points[0]` y `points[último]`. Resultado:
+el cambio de peso salía **nulo** aunque hubiera pesadas de sobra.
+
+Lo cazó un test. Ahora cada métrica compara **su** primer valor con **su**
+último, ignorando los puntos donde no existe.
+
+Comprobado con las cuatro medidas reales (99 → 95 → 93.5 → 92 en días sin
+pesada): el gráfico dibuja la línea y dice −7 cm en "Todo" y −3 cm en 90 días,
+que es lo correcto porque esa ventana deja fuera la primera.

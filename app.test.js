@@ -2366,3 +2366,58 @@ describe('respuestas de texto cortadas', () => {
     expect(esSeparador("-")).toBe(false);
   });
 });
+
+describe('la cintura entra en el gráfico aunque ese día no haya pesada', () => {
+  const { buildRecompositionSeries } = require('./app.js');
+
+  // Las cuatro medidas reales, en días sin pesada: es como se mide la cintura
+  const soloCintura = {
+    '2026-04-15': { cintura: 99, cinturaAyunas: true },
+    '2026-05-31': { cintura: 95, cinturaAyunas: true },
+    '2026-06-20': { cintura: 93.5, cinturaAyunas: true },
+    '2026-08-05': { cintura: 92, cinturaAyunas: true },
+  };
+
+  test('un día con solo cintura ya no se descarta', () => {
+    // El fallo: se exigía peso para incluir el día, así que estas cuatro
+    // mediciones nunca entraban en la serie
+    const r = buildRecompositionSeries(soloCintura);
+    expect(r.points).toHaveLength(4);
+    expect(r.points.map(p => p.cintura)).toEqual([99, 95, 93.5, 92]);
+  });
+
+  test('el cambio de cintura es el real, no cero', () => {
+    const r = buildRecompositionSeries(soloCintura);
+    expect(r.deltas.cintura).toBe(-7);   // 99 → 92, lo que decía el otro panel
+  });
+
+  test('sin pesada ese día no se inventa un punto de peso', () => {
+    const r = buildRecompositionSeries(soloCintura);
+    expect(r.points.every(p => p.peso == null)).toBe(true);
+    expect(r.points.every(p => p.pesado === false)).toBe(true);
+  });
+
+  test('mezclando pesadas y medidas de cintura, cada serie usa lo suyo', () => {
+    const mixto = {
+      '2026-04-15': { cintura: 99 },
+      '2026-04-16': { weight: 95.8 },
+      '2026-08-05': { cintura: 92, weight: 92.1 },
+    };
+    const r = buildRecompositionSeries(mixto);
+    expect(r.points).toHaveLength(3);
+    expect(r.points[0].peso).toBeNull();          // día de solo cintura
+    expect(r.points[1].peso).toBe(95.8);
+    expect(r.points[1].cintura).toBe(99);         // se arrastra el último conocido
+    expect(r.deltas.cintura).toBe(-7);
+    expect(r.deltas.peso).toBeCloseTo(-3.7, 1);
+  });
+
+  test('un día sin ningún dato sigue fuera', () => {
+    const r = buildRecompositionSeries({
+      '2026-04-15': { cintura: 99 },
+      '2026-04-16': { notas: "nada medible" },
+      '2026-08-05': { cintura: 92 },
+    });
+    expect(r.points).toHaveLength(2);
+  });
+});
