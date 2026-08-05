@@ -6,7 +6,7 @@
 // bundle son autosuficientes, y la app arranca aunque no haya conexión.
 //
 // La versión la sella tools/build.mjs en cada `npm run build`.
-const VERSION = "v2026.07.29-W64";
+const VERSION = "v2026.07.29-W65";
 const CACHE = "brunofit-" + VERSION;
 
 self.addEventListener("install", () => self.skipWaiting());

@@ -768,3 +768,37 @@ qué se analiza. Se cruzaron los campos escritos contra los leídos.
    forma de llevarse los datos a una hoja de cálculo o al médico.
 6. **Recordatorio de medición.** La frecuencia de registro es lo que alimenta
    todo lo demás, y hoy depende de acordarse.
+
+---
+
+## Las respuestas de texto del coach llegaban cortadas (W65)
+
+"Rutina sugerida para hoy" terminaba a media palabra, dejando incluso un `**`
+sin cerrar que se imprimía crudo: *"**Día del Split B:"*.
+
+### La causa
+
+```js
+if (responseSchema) {
+  ...
+  generationConfig.thinkingConfig = { thinkingBudget: 0 };
+}
+```
+
+El presupuesto de razonamiento **solo se limitaba cuando había esquema JSON**. En
+texto libre no se tocaba nunca — y ese presupuesto sale del **mismo**
+`maxOutputTokens`. El modelo se lo gastaba pensando y la respuesta visible
+llegaba truncada, por muy alto que se pusiera el tope.
+
+Ahora en texto se pone a 0 (ahí es seguro; en JSON no, porque 2.5-flash devuelve
+vacío). Y si aun así se corta, **se dice**: *"La respuesta se cortó por longitud.
+Vuelve a pedirla para obtener el resto."* Callar el corte era peor que el corte.
+
+### Y el markdown
+
+- una línea de guiones es un separador, no el texto `--`
+- una marca `**` sin cerrar se quita antes de renderizar
+
+El primer intento de esto último —*quitar el `**` del final de la línea*— **rompía
+el markdown bien cerrado**: `"**Día:** normal"` quedaba en `"**Día: normal"`. Lo
+cazó un test. La regla correcta es contar pares y quitar solo el que sobra.

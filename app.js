@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W64";
+const APP_VERSION = "v2026.07.29-W65";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -787,6 +787,13 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
           if (!nativeModel.includes("2.5") && !nativeModel.includes("2.0-flash-thinking")) {
             generationConfig.thinkingConfig = { thinkingBudget: 0 };
           }
+        } else if (nativeModel.includes("2.5-flash")) {
+          // EL FALLO: esto solo se ponía cuando había esquema JSON. En texto
+          // libre el razonamiento nunca se limitaba, y sale del MISMO
+          // maxOutputTokens — así que se lo comía antes de escribir y las
+          // respuestas llegaban cortadas a media frase, dejando incluso un
+          // "**" sin cerrar. Aquí no hay esquema, así que 0 es seguro.
+          generationConfig.thinkingConfig = { thinkingBudget: 0 };
         }
 
         const body = {
@@ -828,6 +835,11 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
           // Se devuelve igualmente: cleanAndParseJSON sabe reparar un JSON
           // cortado y suele salvarse casi todo el contenido.
           console.warn("[Gemini] respuesta cortada por límite de tokens; se intentará reparar");
+          // En texto no hay nada que reparar, pero callar el corte es peor:
+          // el usuario ve una frase a medias sin saber por qué
+          if (!responseSchema && textOut) {
+            return textOut.trim() + "\n\n*(La respuesta se cortó por longitud. Vuelve a pedirla para obtener el resto.)*";
+          }
         }
         if (!textOut && responseSchema) {
           throw new Error("El modelo devolvió una respuesta vacía. Intenta de nuevo o cambia el modelo en Perfil → Ajustes.");
@@ -7088,7 +7100,14 @@ function MarkdownText({ text, style = {} }) {
     });
   };
 
-  const lines = text.split('\n');
+  // Una respuesta cortada deja marcas de markdown sin cerrar ("**Día del Split B:")
+  // que el separador de abajo no reconoce y acaban impresas tal cual. Se quita
+  // SOLO la que queda suelta: contar pares evita romper "**Día:** normal", que
+  // es lo que hacía una limpieza a base de "quita el ** del final".
+  const lines = text.split('\n').map(l => {
+    const pares = (l.match(/\*\*/g) || []).length;
+    return pares % 2 === 1 ? l.replace(/\*\*(?!.*\*\*)/, "") : l;
+  });
   const out = [];
   let i = 0;
 
@@ -7096,6 +7115,13 @@ function MarkdownText({ text, style = {} }) {
     const tr = lines[i].trim();
 
     if (!tr) { i++; continue; }
+
+    // Una línea de guiones es un separador, no texto. Los modelos los usan
+    // mucho y salían impresos como "--".
+    if (/^-{2,}$|^\*{3,}$|^_{3,}$/.test(tr)) {
+      out.push(<hr key={`hr${i}`} style={{ border: "none", borderTop: `1px solid ${C.line}`, margin: "9px 0" }} />);
+      i++; continue;
+    }
 
     // # through ###### headers (strip all leading hashes)
     const hm = tr.match(/^(#{1,6})\s+(.*)/);

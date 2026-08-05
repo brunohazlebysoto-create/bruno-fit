@@ -2334,3 +2334,35 @@ describe('historial de mediciones: describir y borrar', () => {
     expect(mergeMetricsUpTo(limpio, '2026-03-11').grasaPct).toBe(25);
   });
 });
+
+describe('respuestas de texto cortadas', () => {
+  // Misma regla que aplica MarkdownText: quitar SOLO el ** que queda suelto
+  const limpiar = (t) => t.split("\n").map(l => {
+    const pares = (l.match(/\*\*/g) || []).length;
+    return pares % 2 === 1 ? l.replace(/\*\*(?!.*\*\*)/, "") : l;
+  }).join("\n");
+  const esSeparador = (t) => /^-{2,}$|^\*{3,}$|^_{3,}$/.test(t.trim());
+
+  test('quita el marcador sin cerrar de una respuesta truncada', () => {
+    expect(limpiar("**Día del Split B:")).toBe("Día del Split B:");
+  });
+
+  test('no rompe el markdown bien cerrado', () => {
+    // El primer intento sí lo rompía: dejaba "**Día: normal"
+    expect(limpiar("**Día:** normal")).toBe("**Día:** normal");
+    expect(limpiar("**a** y **b**")).toBe("**a** y **b**");
+    expect(limpiar("texto sin marcas")).toBe("texto sin marcas");
+  });
+
+  test('con varios pares y uno suelto, quita solo el suelto', () => {
+    expect(limpiar("**a** y **b** y **cortado")).toBe("**a** y **b** y cortado");
+  });
+
+  test('una línea de guiones es un separador, no texto', () => {
+    expect(esSeparador("--")).toBe(true);
+    expect(esSeparador("---")).toBe(true);
+    expect(esSeparador("***")).toBe(true);
+    expect(esSeparador("- item")).toBe(false);
+    expect(esSeparador("-")).toBe(false);
+  });
+});
