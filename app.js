@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W61";
+const APP_VERSION = "v2026.07.29-W62";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -18491,15 +18491,22 @@ ${alertas || "ninguna"}`;
 
         // Recorte por rango sobre la serie completa
         const todos = recTodo.points;
-        const corte = (() => {
-          if (!evoRango) return todos;
+        // Cuántas mediciones hay en cada ventana. Con esto se puede decir la
+        // verdad en vez de caer al histórico completo sin avisar: elegir "30 d"
+        // y ver un eje de 15 may a 04 ago es lo que hacía parecer que el
+        // selector no hacía nada.
+        const enRango = (dias) => {
+          if (!dias) return todos;
           const lim = new Date(selectedDateStr + "T12:00:00");
-          lim.setDate(lim.getDate() - evoRango);
+          lim.setDate(lim.getDate() - dias);
           const limStr = getLocalDateStr(lim);
-          const rec2 = todos.filter(p => p.date >= limStr);
-          return rec2.length >= 2 ? rec2 : todos;
-        })();
-        const pts = corte;
+          return todos.filter(p => p.date >= limStr);
+        };
+        const delRango = enRango(evoRango);
+        // Un gráfico vacío es peor que uno con más rango del pedido, así que se
+        // mantiene el respaldo — pero se avisa abajo de que se está mostrando otra cosa
+        const recortado = delRango.length < 2;
+        const pts = recortado ? todos : delRango;
 
         // Solo las métricas activas Y con datos suficientes en el rango
         const activas = SERIES.filter(s => evoMetricas[s.key] && pts.filter(p => p[s.key] != null).length >= 2);
@@ -18554,15 +18561,26 @@ ${alertas || "ninguna"}`;
 
             {/* Rango temporal */}
             <div style={{display:"flex", gap:5, marginBottom:8}}>
-              {RANGOS.map(r => (
-                <button key={r.d} className="btn-active-scale"
-                  onClick={() => { setEvoRango(r.d); setEvoIdx(null); }}
-                  style={{flex:1, background: evoRango===r.d ? "rgba(77,124,15,0.16)" : "transparent",
-                    border:`1px solid ${evoRango===r.d ? C.lime : C.line}`, borderRadius:8, padding:"5px 4px",
-                    color: evoRango===r.d ? C.lime : C.muted, fontSize:11, fontWeight:700}}>
-                  {r.l}
-                </button>
-              ))}
+              {RANGOS.map(r => {
+                const n = enRango(r.d).length;
+                const flojo = n < 2;   // no da ni para trazar una línea
+                return (
+                  <button key={r.d} className="btn-active-scale"
+                    onClick={() => { setEvoRango(r.d); setEvoIdx(null); }}
+                    style={{flex:1, background: evoRango===r.d ? "rgba(77,124,15,0.16)" : "transparent",
+                      border:`1px solid ${evoRango===r.d ? C.lime : C.line}`, borderRadius:8, padding:"4px 4px",
+                      color: evoRango===r.d ? C.lime : C.muted, fontSize:11, fontWeight:700,
+                      display:"flex", flexDirection:"column", alignItems:"center", gap:0, lineHeight:1.25,
+                      opacity: flojo ? .55 : 1}}>
+                    <span>{r.l}</span>
+                    {/* Saber cuántas mediciones hay en cada ventana evita elegir
+                        una que no tiene datos y creer que el gráfico está roto */}
+                    <span style={{fontSize:8.5, fontWeight:600, opacity:.8}}>
+                      {n} {n === 1 ? "medición" : "mediciones"}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
 
             {/* Métricas activables */}
@@ -18626,6 +18644,13 @@ ${alertas || "ninguna"}`;
                     <span>{fdate(pts[pts.length - 1].date + "T12:00:00Z")}</span>
                   </div>
                 </div>
+                {recortado && (
+                  <div style={{marginTop:6, fontSize:10, color:C.amber, background:"rgba(180,83,9,0.08)",
+                    border:`1px solid rgba(180,83,9,0.25)`, borderRadius:8, padding:"6px 9px", lineHeight:1.45}}>
+                    Solo {delRango.length} {delRango.length === 1 ? "medición" : "mediciones"} en
+                    los últimos {evoRango} días: se muestra el histórico completo para que la línea tenga sentido.
+                  </div>
+                )}
 
                 {/* Lectura: fecha inspeccionada o resumen del rango */}
                 <div style={{marginTop:8, background:C.bg, borderRadius:10, padding:"9px 11px"}}>
@@ -18651,6 +18676,14 @@ ${alertas || "ninguna"}`;
                       const valor = punto ? punto[s.key] : inf.ultimo;
                       if (valor == null) return null;
                       const delta = punto ? desdeIdx(s.key) : Math.round((inf.ultimo - inf.primero) * 10) / 10;
+                      // Cambio respecto a la medición ANTERIOR, que es la
+                      // comparación que uno hace de cabeza al mirar un día
+                      const previo = punto ? (() => {
+                        for (let k = idx - 1; k >= 0; k--) if (pts[k][s.key] != null) return pts[k];
+                        return null;
+                      })() : null;
+                      const vsPrevio = previo && previo[s.key] != null
+                        ? Math.round((punto[s.key] - previo[s.key]) * 10) / 10 : null;
                       const mejorSiBaja = s.key !== "magra";
                       const colDelta = delta === 0 || delta == null ? C.muted
                         : (mejorSiBaja ? delta < 0 : delta > 0) ? C.lime : C.amber;
@@ -18663,6 +18696,12 @@ ${alertas || "ninguna"}`;
                           {delta != null && (
                             <div style={{fontSize:9.5, fontWeight:700, color:colDelta}}>
                               {delta > 0 ? "+" : ""}{delta} {s.unidad}
+                              <span style={{fontWeight:500, color:C.muted}}> desde el inicio</span>
+                            </div>
+                          )}
+                          {vsPrevio != null && (
+                            <div style={{fontSize:9, color:C.muted, marginTop:1}}>
+                              {vsPrevio > 0 ? "+" : ""}{vsPrevio} vs anterior
                             </div>
                           )}
                         </div>

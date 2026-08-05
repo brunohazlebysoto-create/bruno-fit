@@ -668,3 +668,30 @@ Se capturó la llamada real en el navegador para leer lo que se enviaba:
 Los tres habrían entrado en el prompt como datos, no como huecos: el modelo
 habría razonado sobre ellos. Además la proyección mostraba cuatro semanas
 consecutivas que se diferencian en 200 g; ahora son hitos repartidos (0/4/8/12).
+
+---
+
+## El selector de rango no hacía nada (W62)
+
+Cambiar de **30 d** a **90 d** dejaba el gráfico y los números idénticos. La
+causa estaba en una línea:
+
+```js
+return rec2.length >= 2 ? rec2 : todos;
+```
+
+Si la ventana elegida tenía menos de dos mediciones, caía al histórico completo
+**sin decirlo**. Con mediciones espaciadas, elegir "30 días" mostraba un eje de
+*15 may a 04 ago*: el selector parecía roto cuando en realidad estaba mintiendo.
+
+El respaldo se mantiene —un gráfico vacío es peor— pero ahora se avisa: *"Solo 1
+medición en los últimos 30 días: se muestra el histórico completo para que la
+línea tenga sentido"*.
+
+### Más información
+
+- Cada botón de rango dice **cuántas mediciones** contiene, así se ve de un
+  vistazo cuál tiene datos antes de pulsarlo
+- Al tocar un día, cada métrica muestra el cambio **desde el inicio** y también
+  **respecto a la medición anterior**, que es la comparación que uno hace de
+  cabeza
