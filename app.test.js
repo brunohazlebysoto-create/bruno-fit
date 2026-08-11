@@ -1068,6 +1068,101 @@ describe('datos de recuperación', () => {
   });
 });
 
+describe('días sin comida registrada', () => {
+  const { buildDailyNutrition, averageDailyNutrition, calcTDEE, analyzeMacroPattern } = require('./app.js');
+
+  // Un día de comida "normal" para no repetir el objeto en cada test
+  const dia = (kcal, p = 150, c = 200, f = 60) => [{ kcal, proteina: p, carbo: c, grasa: f }];
+  const semana = (desde, kcal, n = 7) => {
+    const log = {};
+    for (let i = 0; i < n; i++) {
+      const d = new Date(desde + 'T12:00:00');
+      d.setDate(d.getDate() + i);
+      log[d.toISOString().slice(0, 10)] = dia(kcal);
+    }
+    return log;
+  };
+
+  test('rellena el hueco con el promedio de los días registrados cercanos', () => {
+    const log = { ...semana('2026-07-01', 2000, 4) };
+    delete log['2026-07-03'];               // olvidó anotar el día 3
+    const serie = buildDailyNutrition(log, { desde: '2026-07-01', hasta: '2026-07-04' });
+    expect(serie).toHaveLength(4);
+    const hueco = serie.find(d => d.date === '2026-07-03');
+    expect(hueco.estimado).toBe(true);
+    expect(hueco.kcal).toBe(2000);
+    expect(serie.filter(d => !d.estimado)).toHaveLength(3);
+  });
+
+  test('el promedio sale de los días CERCANOS, no de todo el historial', () => {
+    // Volumen viejo a 3200 kcal y definición reciente a 2000: el hueco de julio
+    // tiene que parecerse a julio, no a la media de los dos períodos.
+    const log = { ...semana('2026-05-01', 3200, 20), ...semana('2026-06-20', 2000, 14) };
+    delete log['2026-07-01'];
+    const serie = buildDailyNutrition(log, { desde: '2026-07-01', hasta: '2026-07-01' });
+    expect(serie[0].estimado).toBe(true);
+    // Con el promedio de todo el historial saldrían ~2700 kcal; el hueco tiene
+    // que quedarse pegado a la fase actual.
+    expect(serie[0].kcal).toBeLessThan(2150);
+  });
+
+  test('no inventa comida lejos de cualquier registro real', () => {
+    const log = semana('2026-04-01', 2000, 7);   // dejó de usar la app en abril
+    const serie = buildDailyNutrition(log, { desde: '2026-07-01', hasta: '2026-07-03' });
+    expect(serie.every(d => d.estimado === false && d.kcal === 0)).toBe(true);
+  });
+
+  test('con menos de tres días registrados no hay promedio que valga', () => {
+    const log = { '2026-07-01': dia(2000), '2026-07-02': dia(2100) };
+    const serie = buildDailyNutrition(log, { desde: '2026-07-01', hasta: '2026-07-04' });
+    expect(serie.filter(d => d.estimado)).toHaveLength(0);
+  });
+
+  test('un día registrado nunca se sustituye por la estimación', () => {
+    const log = { ...semana('2026-07-01', 2000, 6), '2026-07-07': dia(4500) }; // comilona real
+    const serie = buildDailyNutrition(log, { desde: '2026-07-07', hasta: '2026-07-07' });
+    expect(serie[0].estimado).toBe(false);
+    expect(serie[0].kcal).toBe(4500);
+  });
+
+  test('el promedio del período cuenta los días estimados como un día más', () => {
+    const log = semana('2026-07-01', 2000, 7);
+    delete log['2026-07-06'];
+    const prom = averageDailyNutrition(buildDailyNutrition(log, { desde: '2026-07-01', hasta: '2026-07-07' }));
+    expect(prom.dias).toBe(7);
+    expect(prom.diasReales).toBe(6);
+    expect(prom.diasEstimados).toBe(1);
+    expect(prom.kcal).toBe(2000);
+  });
+
+  test('el TDEE usa 21 días de calendario, no 21 días registrados', () => {
+    // 24 días de calendario con 4 olvidos: antes hacían falta 21 días
+    // registrados y la ventana de comida no cuadraba con la de peso.
+    const log = semana('2026-07-01', 2500, 24);
+    ['2026-07-05', '2026-07-11', '2026-07-18', '2026-07-22'].forEach(d => delete log[d]);
+    const metrics = { '2026-07-04': { weight: 90 }, '2026-07-24': { weight: 90 } };
+    const tdee = calcTDEE(log, metrics);
+    expect(tdee).toBe(2500); // peso estable → TDEE = ingesta media
+  });
+
+  test('el TDEE se niega a calcularse si casi todo el período es estimado', () => {
+    const log = semana('2026-07-01', 2500, 6);   // solo 6 días reales en 21
+    const metrics = { '2026-07-01': { weight: 90 }, '2026-07-21': { weight: 90 } };
+    expect(calcTDEE(log, metrics)).toBe(null);
+  });
+
+  test('el patrón de macros informa cuántos días son estimados', () => {
+    const log = semana('2026-07-01', 2000, 7);
+    delete log['2026-07-05'];
+    delete log['2026-07-06'];
+    const p = analyzeMacroPattern(log);
+    expect(p.days).toBe(7);
+    expect(p.diasReales).toBe(5);
+    expect(p.diasEstimados).toBe(2);
+    expect(p.avgKcal).toBe(2000);
+  });
+});
+
 describe('cambios desde la última medición', () => {
   const { buildMetricChanges } = require('./app.js');
 

@@ -889,3 +889,55 @@ ceros y cadenas vacías que no cuentan como medición.
 scroll 6000, que en esa página es el fondo, y las demás quedaban por encima.
 Añadida `registro-09-cambios-medicion`, anclada al título, para que esa franja
 deje de ser un punto ciego.
+
+## Los días sin comida registrada valían cero (W68)
+
+> *"los dias que no registre comida, registra un valor promedio de calorias y
+> macronutrientes"*
+
+Un día sin anotar no es un día de ayuno: es un día que se olvidó. La app lo
+trataba de dos maneras, ambas malas:
+
+- En el **gráfico**, como una barra vacía — un día de 0 kcal que nunca ocurrió.
+- En los **promedios**, saltándoselo. "Promedio de la semana" era en realidad el
+  promedio de los días que sí anotó, que no es lo mismo.
+
+### La estimación
+
+`buildDailyNutrition(foodlog, {desde, hasta, dias})` devuelve la serie diaria
+con los huecos rellenados. Cada día sale marcado con `estimado`, y **nada de
+esto se escribe en `foodlog`**: el registro real no se toca.
+
+El relleno usa el promedio de los **14 días registrados más cercanos en el
+tiempo**, de cualquiera de los dos lados. No el promedio de todo el historial:
+si hace dos meses comías 3200 kcal y ahora 2400, el hueco de esta semana tiene
+que parecerse a esta semana. Y mirar solo hacia atrás dejaba sin estimar los
+huecos de las primeras semanas de uso, cuando todavía no hay pasado.
+
+Dos frenos para no inventar datos:
+
+- Con **menos de 3 días registrados** no hay promedio que valga: el día se
+  queda vacío.
+- A **más de 14 días** del registro real más cercano tampoco se estima. Un mes
+  sin abrir la app es un mes sin abrir la app, no treinta olvidos.
+
+### Dónde cambia
+
+- **Gráfico nutricional**: el día estimado se pinta translúcido y con el
+  contorno punteado, con su entrada en la leyenda y una marca `est.` en el
+  detalle diario. Se ve la forma de la semana sin que un promedio pase por
+  medido.
+- **Calorías Promedio**: ahora dice "6 días reales + 1 estimado".
+- **TDEE Real**: el arreglo de fondo. Promediaba **21 días registrados** contra
+  un cambio de peso medido sobre el **calendario**: dos ventanas distintas, y
+  con olvidos los 21 días podían abarcar cinco semanas. Ahora son 21 días de
+  calendario, exigiendo que al menos 12 sean reales — un TDEE calculado sobre
+  promedios inventados solo devolvería lo que se le metió.
+- **Refeed / diet break**: troceaba los días registrados de 7 en 7, así que una
+  "semana" podía abarcar tres semanas reales y "8 semanas en déficit" no
+  significaba nada. Ahora son semanas de calendario.
+- **Prompts de la IA**: se le dice cuántos días son estimados. Si va a ajustar
+  el plan sobre un promedio, tiene que saber que lo es.
+
+El preview ahora deja dos días sin comida a propósito: sin ellos las capturas
+nunca enseñarían un día estimado. Escena nueva `registro-10-historial-nutricional`.

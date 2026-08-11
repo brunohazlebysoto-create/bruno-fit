@@ -147,6 +147,9 @@ const ESCENAS = [
   // Sustituye al "Radar Corporal": ninguna escena caía sobre esa zona, por eso
   // el radar pudo estar duplicado sin que las capturas lo delataran
   { id: "registro-09-cambios-medicion", tab: "Registro", scrollHasta: "Cambios desde la medición anterior" },
+  // Historial nutricional: aquí se ve si un día sin anotar sale estimado
+  { id: "registro-10-historial-nutricional", tab: "Registro", scrollHasta: "Historial Nutricional Acumulado",
+    scrollDespues: 120 },
   { id: "registro-04-final", tab: "Registro", scroll: 6000 },
   { id: "perfil-01", tab: "Perfil", scroll: 0 },
   { id: "coach-01", tab: "Coach", scroll: 0 },

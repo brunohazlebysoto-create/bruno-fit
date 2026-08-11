@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W67";
+const APP_VERSION = "v2026.07.29-W68";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1337,22 +1337,136 @@ function linearRegression(ys, xsArg) {
   return { slope, intercept };
 }
 
+/* ===================== DÍAS SIN COMIDA REGISTRADA =====================
+   Un día sin registrar no es un día de ayuno: es un día que se olvidó anotar.
+   Tratarlo como 0 kcal hunde todos los promedios, y saltárselo deja huecos en
+   el gráfico y descuadra el TDEE (las kcal salían de N días registrados
+   mientras el cambio de peso abarcaba el calendario entero, que es justo el
+   error de mezclar dos ventanas distintas).
+
+   El hueco se rellena con el promedio de los días registrados MÁS CERCANOS, no
+   con el de todo el historial: si hace dos meses comías 3200 kcal y ahora 2400,
+   el hueco de esta semana tiene que parecerse a esta semana.
+
+   Lo estimado NUNCA se escribe en foodlog ni se confunde con lo real: cada día
+   sale marcado con `estimado`, y quien lo pinta o se lo manda a la IA lo dice.  */
+const NUTRI_VENTANA = 14;   // días registrados que forman el promedio
+const NUTRI_MIN_DIAS = 3;   // con menos que esto no hay promedio que valga
+const NUTRI_HUECO_MAX = 14; // más lejos de un registro real es "dejé de usar la app", no un olvido
+
+function sumDayNutrition(entries) {
+  return (entries || []).reduce((a, e) => ({
+    kcal: a.kcal + (parseFloat(e?.kcal) || 0),
+    p:    a.p    + (parseFloat(e?.proteina) || 0),
+    c:    a.c    + (parseFloat(e?.carbo) || 0),
+    f:    a.f    + (parseFloat(e?.grasa) || 0),
+  }), { kcal: 0, p: 0, c: 0, f: 0 });
+}
+
+/**
+ * Serie diaria de calorías y macros con los huecos rellenados.
+ * opts: { hasta, desde, dias, estimar, ventana, huecoMax }
+ * Devuelve [{ date, kcal, p, c, f, estimado, registros }] en orden ascendente.
+ */
+function buildDailyNutrition(foodlog, opts = {}) {
+  const {
+    estimar = true, ventana = NUTRI_VENTANA, huecoMax = NUTRI_HUECO_MAX,
+  } = opts;
+  const log = foodlog || {};
+  const reales = Object.keys(log).filter(d => (log[d] || []).length > 0).sort();
+  const fin = opts.hasta || reales[reales.length - 1];
+  if (!fin) return [];
+
+  const mover = (fecha, n) => {
+    const d = new Date(fecha + "T12:00:00");
+    d.setDate(d.getDate() + n);
+    return getLocalDateStr(d);
+  };
+  const distancia = (a, b) =>
+    Math.abs(new Date(a + "T12:00:00") - new Date(b + "T12:00:00")) / 86400000;
+
+  let ini = opts.desde;
+  if (!ini && opts.dias > 0) ini = mover(fin, -(opts.dias - 1));
+  if (!ini) ini = reales[0] || fin;
+
+  const totales = {};
+  reales.forEach(d => { totales[d] = sumDayNutrition(log[d]); });
+
+  // Promedio de los `ventana` días registrados más CERCANOS en el tiempo, de
+  // cualquiera de los dos lados. Mirar solo hacia atrás dejaba sin estimar los
+  // huecos de las primeras semanas de uso, cuando todavía no hay pasado.
+  // A igual distancia manda el día anterior: es lo que ya comió, no lo que
+  // comerá.
+  const promedioCerca = (dia) => {
+    if (reales.length < NUTRI_MIN_DIAS) return null;
+    const base = reales
+      .map(d => ({ d, dist: distancia(d, dia), antes: d < dia }))
+      .sort((a, b) => a.dist - b.dist || (a.antes === b.antes ? 0 : a.antes ? -1 : 1))
+      .slice(0, ventana)
+      .map(x => x.d);
+    const s = base.reduce((a, d) => ({
+      kcal: a.kcal + totales[d].kcal, p: a.p + totales[d].p,
+      c: a.c + totales[d].c, f: a.f + totales[d].f,
+    }), { kcal: 0, p: 0, c: 0, f: 0 });
+    return {
+      kcal: Math.round(s.kcal / base.length), p: Math.round(s.p / base.length),
+      c: Math.round(s.c / base.length),       f: Math.round(s.f / base.length),
+    };
+  };
+
+  const salida = [];
+  for (let d = ini; d <= fin; d = mover(d, 1)) {
+    const registros = (log[d] || []).length;
+    if (registros > 0) {
+      salida.push({ date: d, ...totales[d], estimado: false, registros });
+      continue;
+    }
+    // Solo se estima cerca de datos reales. Un mes entero sin abrir la app no
+    // se rellena con un mes de comidas inventadas.
+    const cerca = reales.length > 0 && Math.min(...reales.map(r => distancia(r, d))) <= huecoMax;
+    const prom = estimar && cerca ? promedioCerca(d) : null;
+    salida.push(prom
+      ? { date: d, ...prom, estimado: true, registros: 0 }
+      : { date: d, kcal: 0, p: 0, c: 0, f: 0, estimado: false, registros: 0 });
+    if (salida.length > 800) break; // cinturón: rangos absurdos no cuelgan la app
+  }
+  return salida;
+}
+
+/** Promedio diario del período, contando los días estimados como un día más. */
+function averageDailyNutrition(serie) {
+  const dias = (serie || []).filter(d => d.registros > 0 || d.estimado);
+  if (!dias.length) return null;
+  const s = dias.reduce((a, d) => ({
+    kcal: a.kcal + d.kcal, p: a.p + d.p, c: a.c + d.c, f: a.f + d.f,
+  }), { kcal: 0, p: 0, c: 0, f: 0 });
+  return {
+    kcal: Math.round(s.kcal / dias.length), p: Math.round(s.p / dias.length),
+    c: Math.round(s.c / dias.length),       f: Math.round(s.f / dias.length),
+    dias: dias.length,
+    diasReales: dias.filter(d => !d.estimado).length,
+    diasEstimados: dias.filter(d => d.estimado).length,
+  };
+}
+
 function calcTDEE(foodlog, metricslog) {
-  // Necesita al menos 21 dias de datos
-  const dates = Object.keys(foodlog).filter(d => foodlog[d]?.length > 0).sort();
-  if (dates.length < 21) return null;
-  const last21 = dates.slice(-21);
-  const avgKcal = last21.reduce((s,d)=>{
-    const dayKcal = (foodlog[d]||[]).reduce((a,e)=>a+(+e.kcal||0),0);
-    return s + dayKcal;
-  },0) / last21.length;
+  // 21 días de CALENDARIO, no 21 días registrados: el cambio de peso se mide
+  // sobre el calendario, así que las kcal tienen que salir de la misma ventana.
+  // Los días sin registrar entran con su estimación, pero se exige que la mitad
+  // larga del período sea real: un TDEE calculado sobre promedios inventados
+  // solo repetiría lo que ya se le metió.
+  const serie = buildDailyNutrition(foodlog, { dias: 21 });
+  const conDato = serie.filter(d => d.registros > 0 || d.estimado);
+  const reales = conDato.filter(d => !d.estimado).length;
+  if (conDato.length < 21 || reales < 12) return null;
+  const avgKcal = conDato.reduce((s, d) => s + d.kcal, 0) / conDato.length;
   const allWeightDates = Object.keys(metricslog).filter(d=>metricslog[d]?.weight).sort();
   if (allWeightDates.length < 2) return null;
   // Alinear la ventana de peso con la de comida: usar solo pesos dentro del
-  // mismo período reciente (last21). Antes el cambio de peso abarcaba TODO el
-  // historial (ej: -8kg en 6 meses) mientras las kcal eran de 21 días → TDEE
-  // muy sesgado. Si no hay ≥2 pesos recientes, cae a los 2 últimos.
-  const foodStart = last21[0];
+  // mismo período reciente. Antes el cambio de peso abarcaba TODO el historial
+  // (ej: -8kg en 6 meses) mientras las kcal eran de 21 días → TDEE muy
+  // sesgado. Si no hay ≥2 pesos recientes, cae a los 2 últimos.
+  const foodStart = conDato[0].date;
   const recent = allWeightDates.filter(d => d >= foodStart);
   const weightDates = recent.length >= 2 ? recent : allWeightDates.slice(-2);
   // Usar el peso SUAVIZADO (EMA) en los extremos, no la lectura cruda: un día
@@ -1780,17 +1894,14 @@ function detectMuscleImbalances(exlog, exercises) {
 }
 
 function analyzeMacroPattern(foodlog) {
-  const dates = Object.keys(foodlog).sort().slice(-7);
-  if (dates.length < 3) return null;
-  let totP=0, totC=0, totF=0, totKcal=0, days=0;
-  dates.forEach(d=>{
-    const entries = foodlog[d]||[];
-    if (entries.length===0) return;
-    entries.forEach(e=>{ totP+=(+e.proteina||0); totC+=(+e.carbo||0); totF+=(+e.grasa||0); totKcal+=(+e.kcal||0); });
-    days++;
-  });
-  if (days===0) return null;
-  return { avgP: Math.round(totP/days), avgC: Math.round(totC/days), avgF: Math.round(totF/days), avgKcal: Math.round(totKcal/days), days };
+  // Los días sin registrar entran con su estimación, para que una semana con
+  // dos olvidos no parezca una semana de 5 días.
+  const prom = averageDailyNutrition(buildDailyNutrition(foodlog, { dias: 7 }));
+  if (!prom || prom.diasReales === 0) return null;
+  return {
+    avgP: prom.p, avgC: prom.c, avgF: prom.f, avgKcal: prom.kcal,
+    days: prom.dias, diasReales: prom.diasReales, diasEstimados: prom.diasEstimados,
+  };
 }
 
 function detectFatigueFromNotes(notes) {
@@ -1823,8 +1934,11 @@ function getWeeklyStats(foodlog, exlog, metricslog, notes) {
     return getLocalDateStr(d);
   }).reverse();
   const trainDays = last7.filter(d => Object.values(exlog||{}).some(sets=>(sets||[]).some(s=>s?.date?.slice(0,10)===d)));
-  const avgProtein = last7.reduce((s,d)=>{ const fl=foodlog[d]||[]; return s+(fl.reduce((a,e)=>a+(+e.proteina||0),0)); },0)/Math.max(1,last7.filter(d=>(foodlog[d]||[]).length>0).length);
-  const avgKcal = last7.reduce((s,d)=>{ const fl=foodlog[d]||[]; return s+(fl.reduce((a,e)=>a+(+e.kcal||0),0)); },0)/Math.max(1,last7.filter(d=>(foodlog[d]||[]).length>0).length);
+  // Los días sin registrar se estiman en vez de saltarse: si no, "promedio de
+  // la semana" era en realidad el promedio de los días que sí anotó.
+  const nutri = averageDailyNutrition(buildDailyNutrition(foodlog, { hasta: last7[last7.length-1], dias: 7 }));
+  const avgProtein = nutri ? nutri.p : 0;
+  const avgKcal = nutri ? nutri.kcal : 0;
   const weightDates = last7.filter(d=>metricslog?.[d]?.weight);
   // Cambio de peso sobre la serie SUAVIZADA (EMA), no sobre lecturas crudas:
   // dos pesadas puntuales con retención de agua daban cambios semanales irreales.
@@ -1835,7 +1949,9 @@ function getWeeklyStats(foodlog, exlog, metricslog, notes) {
     ? wAt(weightDates[weightDates.length-1]) - wAt(weightDates[0])
     : null;
   const fatigueCount = detectFatigueFromNotes(notes);
-  return { trainDays: trainDays.length, avgProtein: Math.round(avgProtein), avgKcal: Math.round(avgKcal), weightChange, fatigueCount };
+  return { trainDays: trainDays.length, avgProtein: Math.round(avgProtein), avgKcal: Math.round(avgKcal),
+           diasNutriReales: nutri ? nutri.diasReales : 0, diasNutriEstimados: nutri ? nutri.diasEstimados : 0,
+           weightChange, fatigueCount };
 }
 
 // Métricas corporales que tiene sentido seguir día a día, con la dirección en
@@ -2212,17 +2328,19 @@ function detectRefeedNeed(metricslog, foodlog, targets, opts = {}) {
   const noData = { recommended: false, reason: "", weeksInDeficit: 0, stalled: false, adherencePct: null };
   if (!tdee || isNaN(deficit) || deficit >= 0) return noData; // no está en déficit
 
-  // Semanas seguidas comiendo por debajo del TDEE (por media semanal real)
-  const dates = Object.keys(foodlog || {}).filter(d => (foodlog[d] || []).length > 0).sort();
-  if (dates.length < 7) return noData;
-  const kcalOf = (d) => (foodlog[d] || []).reduce((a, e) => a + (+e.kcal || 0), 0);
+  // Semanas seguidas comiendo por debajo del TDEE. Las semanas son de
+  // CALENDARIO: antes se troceaban los días registrados de 7 en 7, así que con
+  // olvidos una "semana" podía abarcar tres semanas reales y "8 semanas en
+  // déficit" no significaba nada. Los días sin registrar entran estimados.
+  const serie = buildDailyNutrition(foodlog, { dias: 8 * 7 });
+  const conDato = serie.filter(d => d.registros > 0 || d.estimado);
+  if (conDato.filter(d => !d.estimado).length < 7) return noData;
 
   const weeks = [];
   for (let i = 0; i < 8; i++) {
-    const slice = dates.slice(Math.max(0, dates.length - (i + 1) * 7), dates.length - i * 7);
+    const slice = conDato.slice(Math.max(0, conDato.length - (i + 1) * 7), conDato.length - i * 7);
     if (slice.length < 4) break; // semana incompleta: no cuenta
-    const avg = slice.reduce((a, d) => a + kcalOf(d), 0) / slice.length;
-    weeks.push(avg);
+    weeks.push(slice.reduce((a, d) => a + d.kcal, 0) / slice.length);
   }
   let weeksInDeficit = 0;
   for (const avg of weeks) {
@@ -2232,8 +2350,8 @@ function detectRefeedNeed(metricslog, foodlog, targets, opts = {}) {
 
   // Adherencia: ¿está comiendo cerca de su objetivo? (si no, el problema es otro)
   const targetKcal = parseFloat(t.kcal) || 0;
-  const recent = dates.slice(-14);
-  const avgRecent = recent.length ? recent.reduce((a, d) => a + kcalOf(d), 0) / recent.length : 0;
+  const recent = conDato.slice(-14);
+  const avgRecent = recent.length ? recent.reduce((a, d) => a + d.kcal, 0) / recent.length : 0;
   const adherencePct = targetKcal > 0 && avgRecent > 0
     ? Math.round((1 - Math.abs(avgRecent - targetKcal) / targetKcal) * 100) : null;
   const adherent = adherencePct != null && adherencePct >= 85;
@@ -5817,26 +5935,16 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
 
       // Get 7-day average nutrition
       const getNutritionAverages = (days = 7) => {
-        const today = new Date(selectedDateStr + "T12:00:00");
-        let totalKcal = 0, totalP = 0, totalC = 0, totalF = 0;
-        let loggedDays = 0;
-        for (let i = 0; i < days; i++) {
-          const d = new Date(today);
-          d.setDate(d.getDate() - i);
-          const dateStr = getLocalDateStr(d);
-          const entries = (foodlog || {})[dateStr];
-          if (entries && entries.length > 0) {
-            loggedDays++;
-            entries.forEach(e => {
-              totalKcal += parseFloat(e.kcal) || 0;
-              totalP += parseFloat(e.proteina) || 0;
-              totalC += parseFloat(e.carbo) || 0;
-              totalF += parseFloat(e.grasa) || 0;
-            });
-          }
-        }
-        if (loggedDays === 0) return "Sin registros nutricionales en los últimos 7 días.";
-        return `Promedios diarios reales consumidos en los últimos ${days} días: ${Math.round(totalKcal / loggedDays)} kcal (P: ${Math.round(totalP / loggedDays)}g, C: ${Math.round(totalC / loggedDays)}g, G: ${Math.round(totalF / loggedDays)}g) basado en ${loggedDays} días con registros.`;
+        const prom = averageDailyNutrition(
+          buildDailyNutrition(foodlog, { hasta: selectedDateStr, dias: days })
+        );
+        if (!prom || prom.diasReales === 0) return "Sin registros nutricionales en los últimos 7 días.";
+        // Se le dice a la IA cuántos días son estimados: si ajusta el plan sobre
+        // un promedio inventado, tiene que saber que lo es.
+        const nota = prom.diasEstimados > 0
+          ? ` (${prom.diasReales} días registrados y ${prom.diasEstimados} estimados con su propio promedio reciente)`
+          : ` (${prom.diasReales} días registrados)`;
+        return `Promedio diario de los últimos ${days} días: ${prom.kcal} kcal (P: ${prom.p}g, C: ${prom.c}g, G: ${prom.f}g)${nota}.`;
       };
       const recentNutrition = getNutritionAverages(7);
 
@@ -17268,43 +17376,12 @@ function Registro({
   const [type, setType] = useState("peso");
   const [statsPeriod, setStatsPeriod] = useState(7); // 7 or 30 days
 
+  // Los días sin comida registrada se rellenan con el promedio de los días
+  // registrados más cercanos, marcados como estimados: el gráfico deja de tener
+  // huecos y el promedio deja de ser "el promedio de los días que sí anoté".
   const [dailyNutritionData, hasNutritionData, macroStats] = useMemo(() => {
-    const today = new Date(selectedDateStr + "T12:00:00");
-    const data = [];
-    let totalKcal = 0, totalP = 0, totalC = 0, totalF = 0;
-    let activeDays = 0;
-
-    for (let i = statsPeriod - 1; i >= 0; i--) {
-      const d = new Date(today);
-      d.setDate(d.getDate() - i);
-      const dateStr = getLocalDateStr(d);
-      const entries = (foodlog || {})[dateStr] || [];
-      let kcal = 0, p = 0, c = 0, f = 0;
-
-      if (entries.length > 0) {
-        activeDays++;
-        entries.forEach(e => {
-          kcal += parseFloat(e.kcal) || 0;
-          p += parseFloat(e.proteina) || 0;
-          c += parseFloat(e.carbo) || 0;
-          f += parseFloat(e.grasa) || 0;
-        });
-        totalKcal += kcal;
-        totalP += p;
-        totalC += c;
-        totalF += f;
-      }
-      data.push({ date: dateStr, kcal, p, c, f });
-    }
-
-    const mStats = activeDays === 0 ? null : {
-      kcal: Math.round(totalKcal / activeDays),
-      p: Math.round(totalP / activeDays),
-      c: Math.round(totalC / activeDays),
-      f: Math.round(totalF / activeDays),
-      activeDays
-    };
-
+    const data = buildDailyNutrition(foodlog, { hasta: selectedDateStr, dias: statsPeriod });
+    const mStats = averageDailyNutrition(data);
     return [data, data.some(d => d.kcal > 0), mStats];
   }, [selectedDateStr, foodlog, statsPeriod]);
 
@@ -17333,6 +17410,11 @@ function Registro({
           <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:7, height:7, borderRadius:"50%", background:C.amber}}/> Carbohidrato</span>
           <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:7, height:7, borderRadius:"50%", background:C.rose}}/> Grasa</span>
           <span style={{display:"flex", alignItems:"center", gap:3}}><span style={{width:10, height:1, borderBottom:`1.5px dashed ${C.lime}`}}/> Objetivo ({target ? target.kcal : 2500})</span>
+          {macroStats?.diasEstimados > 0 && (
+            <span style={{display:"flex", alignItems:"center", gap:3}}>
+              <span style={{width:7, height:7, borderRadius:2, border:`1px dashed ${C.muted}`}}/> Estimado ({macroStats.diasEstimados})
+            </span>
+          )}
         </div>
 
         <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%", height:H, display:"block"}}>
@@ -17368,14 +17450,21 @@ function Registro({
             const yC = yP - cHeight;
             const yF = yC - fHeight;
 
+            // Un día estimado se pinta translúcido y con el contorno punteado:
+            // se ve la forma de la semana sin que un promedio pase por medido.
+            const op = d.estimado ? 0.35 : 1;
             return (
-              <g key={i}>
+              <g key={i} opacity={op}>
                 {/* Proteína (abajo) */}
                 {pK > 0 && <rect x={X(i) + 2} y={yP} width={barW - 4} height={pHeight} fill={C.cyan} rx="1"/>}
                 {/* Carbohidratos (medio) */}
                 {cK > 0 && <rect x={X(i) + 2} y={yC} width={barW - 4} height={cHeight} fill={C.amber} rx="1"/>}
                 {/* Grasa (arriba) */}
                 {fK > 0 && <rect x={X(i) + 2} y={yF} width={barW - 4} height={fHeight} fill={C.rose} rx="1"/>}
+                {d.estimado && (
+                  <rect x={X(i) + 2} y={yF} width={barW - 4} height={pHeight + cHeight + fHeight}
+                        fill="none" stroke={C.muted} strokeWidth="0.8" strokeDasharray="2,2" rx="1"/>
+                )}
               </g>
             );
           })}
@@ -17403,7 +17492,10 @@ function Registro({
                 style={{background:"none", border:"none", cursor:"pointer", width:"100%", display:"flex", justifyContent:"space-between", alignItems:"center", padding:0}}
               >
                 <span style={{fontSize:11, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em"}}>
-                  Detalle diario <span style={{textTransform:"none", letterSpacing:0, fontWeight:600}}>· {dias.length} día{dias.length !== 1 ? "s" : ""} registrado{dias.length !== 1 ? "s" : ""}</span>
+                  Detalle diario <span style={{textTransform:"none", letterSpacing:0, fontWeight:600}}>
+                    · {macroStats?.diasReales ?? dias.length} registrado{(macroStats?.diasReales ?? dias.length) !== 1 ? "s" : ""}
+                    {macroStats?.diasEstimados > 0 && ` · ${macroStats.diasEstimados} estimado${macroStats.diasEstimados !== 1 ? "s" : ""}`}
+                  </span>
                 </span>
                 <span style={{color:C.muted, fontSize:12}}>{detalleAbierto ? "▲" : "▼"}</span>
               </button>
@@ -17417,10 +17509,13 @@ function Registro({
                     else if (compliance > 110) dotColor = C.rose;
 
                     return (
-                      <div key={d.date} style={{display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:11.5, padding:"5px 0", borderBottom:`1px solid rgba(42,46,32,0.4)`}}>
-                        <span style={{fontWeight:600}}>{fdate(d.date + "T12:00:00Z")}</span>
+                      <div key={d.date} style={{display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:11.5, padding:"5px 0", borderBottom:`1px solid rgba(42,46,32,0.4)`, opacity: d.estimado ? 0.7 : 1}}>
+                        <span style={{fontWeight:600}}>
+                          {fdate(d.date + "T12:00:00Z")}
+                          {d.estimado && <span style={{fontSize:9, fontWeight:700, color:C.muted, marginLeft:4}}>est.</span>}
+                        </span>
                         <div style={{display:"flex", alignItems:"center", gap:6}}>
-                          <span style={{width:6, height:6, borderRadius:"50%", background:dotColor}} title={`${Math.round(compliance)}% del objetivo`}/>
+                          <span style={{width:6, height:6, borderRadius:"50%", background: d.estimado ? C.muted : dotColor}} title={d.estimado ? "Estimado: no registraste comida ese día" : `${Math.round(compliance)}% del objetivo`}/>
                           <span style={{fontWeight:700, color:C.ink}}>{Math.round(d.kcal)} kcal</span>
                         </div>
                         <span style={{color:C.muted, fontSize:10.5}}>P: {Math.round(d.p)}g · C: {Math.round(d.c)}g · G: {Math.round(d.f)}g</span>
@@ -17933,26 +18028,16 @@ function Registro({
       ? customMetrics : activeMetrics;
     const series = weightsToUse.map(w => `${fdate(w.date)}: ${w.weight}kg`).join(" -> ") || "Sin datos";
     
-    // Calculate 7-day nutritional average
-    let totalKcal = 0, totalP = 0, totalC = 0, totalF = 0, loggedDays = 0;
-    const today = new Date(selectedDateStr + "T12:00:00");
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(today);
-      d.setDate(d.getDate() - i);
-      const dateStr = getLocalDateStr(d);
-      const entries = (foodlog || {})[dateStr];
-      if (entries && entries.length > 0) {
-        loggedDays++;
-        entries.forEach(e => {
-          totalKcal += parseFloat(e.kcal) || 0;
-          totalP += parseFloat(e.proteina) || 0;
-          totalC += parseFloat(e.carbo) || 0;
-          totalF += parseFloat(e.grasa) || 0;
-        });
-      }
-    }
-    const nutAvgText = loggedDays > 0 
-      ? `Promedio nutricional de los últimos 7 días: ${Math.round(totalKcal / loggedDays)} kcal/día (P: ${Math.round(totalP / loggedDays)}g, C: ${Math.round(totalC / loggedDays)}g, G: ${Math.round(totalF / loggedDays)}g).`
+    // Promedio de los últimos 7 días, con los días sin registrar estimados a
+    // partir del promedio reciente del propio Bruno y declarados como tales.
+    const nutProm = averageDailyNutrition(
+      buildDailyNutrition(foodlog, { hasta: selectedDateStr, dias: 7 })
+    );
+    const nutAvgText = (nutProm && nutProm.diasReales > 0)
+      ? `Promedio nutricional de los últimos 7 días: ${nutProm.kcal} kcal/día (P: ${nutProm.p}g, C: ${nutProm.c}g, G: ${nutProm.f}g)`
+        + (nutProm.diasEstimados > 0
+            ? `, con ${nutProm.diasReales} días registrados y ${nutProm.diasEstimados} estimados.`
+            : ".")
       : "Sin registros nutricionales recientes.";
 
     // Historial de composición corporal (últimas mediciones)
@@ -19328,13 +19413,14 @@ ${alertas || "ninguna"}`;
               <div>
                 <div style={{fontSize:10.5, color:C.muted}}>Metabolismo Estimado (TDEE Real)</div>
                 <div style={{fontSize:16, fontWeight:800, color:C.cyan, marginTop:3}}>
-                  {tdeeEstimate ? `${tdeeEstimate} kcal/día` : "Calculando... (mín. 3 semanas de datos)"}
+                  {tdeeEstimate ? `${tdeeEstimate} kcal/día` : "Calculando... (mín. 3 semanas, con 12 días registrados)"}
                 </div>
               </div>
               <Activity size={16} color={C.cyan} />
             </div>
             <div style={{fontSize:9.5, color:C.muted, marginTop:4, lineHeight:1.3}}>
-              Calculado en base a tu ingesta histórica y variaciones de peso reales.
+              Ingesta de los últimos 21 días frente al cambio de peso del mismo período.
+              Los días sin registrar entran con tu promedio reciente.
             </div>
           </div>
 
@@ -19346,6 +19432,12 @@ ${alertas || "ninguna"}`;
             {macroStats && (
               <div style={{fontSize:9.5, color:C.muted, marginTop:2, lineHeight:1.2}}>
                 P: {macroStats.p}g · C: {macroStats.c}g · G: {macroStats.f}g
+                {macroStats.diasEstimados > 0 && (
+                  <div style={{marginTop:1}}>
+                    {macroStats.diasReales} {macroStats.diasReales === 1 ? "día real" : "días reales"}
+                    {" + "}{macroStats.diasEstimados} {macroStats.diasEstimados === 1 ? "estimado" : "estimados"}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -20434,6 +20526,7 @@ if (typeof module !== 'undefined' && module.exports) {
     calcMetabolicAdaptation, calcWaistMetrics, detectRecomposition,
     detectWeightOutlier, calcBodyProjection, fatFractionOfLoss, leanFractionOfGain,
     evaluateRecovery, calcRestingHRBaseline, buildRecompositionSeries, buildMetricChanges, getWeeklyStats,
+    buildDailyNutrition, averageDailyNutrition, sumDayNutrition, calcTDEE, analyzeMacroPattern,
     RECOVERY_FIELDS, getLocalDateStr,
     normalizeMuscle, canonMuscleName, dedupeMuscles, calcMuscleVolumeBalance, SLUG_MUSCLE,
     normalizeBodyEntry, mergeMetricsUpTo, validateBodyMetrics, RANGOS_BIO,

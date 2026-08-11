@@ -105,6 +105,9 @@ function buildSeed() {
       pasos: 6000 + (i % 5) * 1500,
       fuente: "bascula", ayunas: true,
     };
+    // Dos días sin anotar comida: pasa en el uso real y es el caso que rellena
+    // la estimación. Sin ellos el preview nunca enseñaría un día estimado.
+    if (i === 2 || i === 9) { waterlog[k] = 8 + (i % 5); continue; }
     foodlog[k] = [
       { id: "s" + i + "a", nombre: "Avena con whey", kcal: 620, proteina: 48, carbo: 72, grasa: 14 },
       { id: "s" + i + "b", nombre: "Pollo con arroz", kcal: 780, proteina: 62, carbo: 88, grasa: 16 },
