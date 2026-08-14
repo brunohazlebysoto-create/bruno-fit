@@ -89,6 +89,8 @@ function buildSeed() {
   const diasAtras = (n) => { const d = new Date(hoy); d.setDate(d.getDate() - n); return d; };
 
   const metricslog = {}, foodlog = {}, waterlog = {};
+  // Caminata inclinada en días alternos, que es como se usa de verdad
+  const cardiolog = {};
   for (let i = 45; i >= 0; i--) {
     const d = diasAtras(i), k = key(d);
     // Peso con ruido diario para que se note el efecto del suavizado
@@ -105,6 +107,14 @@ function buildSeed() {
       pasos: 6000 + (i % 5) * 1500,
       fuente: "bascula", ayunas: true,
     };
+    if (i % 2 === 1 && i <= 13) {
+      cardiolog[k] = [{
+        id: "cam" + i,
+        bloques: i % 4 === 1
+          ? [{ min: 5, vel: 4.5, incl: 2 }, { min: 30, vel: 5.2, incl: 9 }, { min: 5, vel: 4, incl: 0 }]
+          : [{ min: 5, vel: 4.5, incl: 2 }, { min: 40, vel: 5.5, incl: 6 }, { min: 5, vel: 4, incl: 0 }],
+      }];
+    }
     // Dos días sin anotar comida: pasa en el uso real y es el caso que rellena
     // la estimación. Sin ellos el preview nunca enseñaría un día estimado.
     if (i === 2 || i === 9) { waterlog[k] = 8 + (i % 5); continue; }
@@ -165,7 +175,7 @@ function buildSeed() {
 
   const store = {
     onboarding_shown: "1",
-    metricslog, foodlog, waterlog, exlog, notes, workoutDurations,
+    metricslog, foodlog, waterlog, cardiolog, exlog, notes, workoutDurations,
     body_profile: { sexo: "hombre", edad: 34, alturaCm: 180, objetivo: "definicion", actividad: 1.45, ritmoKgSemana: -0.5, pesoInicial: 95, pesoObjetivo: 85 },
   };
   return Object.entries(store)

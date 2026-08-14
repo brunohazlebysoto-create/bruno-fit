@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W69";
+const APP_VERSION = "v2026.07.29-W70";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1336,6 +1336,126 @@ function linearRegression(ys, xsArg) {
   const intercept = (sumY - slope*sumX) / n;
   return { slope, intercept };
 }
+
+/* ============== CAMINATA EN CINTA CON INCLINACIÓN ==============
+   Una caminata no cabe en el registro de fuerza: no hay peso ni repeticiones, y
+   lo que decide el coste no es la distancia sino la PENDIENTE. Media hora a 5
+   km/h son unas 130 kcal en llano y más del doble al 12%, con la misma
+   distancia y el mismo tiempo. Guardar solo "30 min de cinta" pierde justo el
+   dato que importa.
+
+   Se usa la ecuación de marcha del ACSM, que mete la pendiente como término
+   propio en vez de esconderla en un MET de tabla:
+
+     VO2 (ml/kg/min) = 0.1·S + 1.8·S·G + 3.5     S en m/min, G pendiente (0–1)
+
+   y 1 litro de O2 ≈ 5 kcal. Es válida CAMINANDO. Por encima de ~6.4 km/h la
+   marcha pasa a trote y la relación cambia: esos bloques se marcan como fuera
+   de rango en vez de devolver un número inventado con cara de exacto.            */
+const VEL_MARCHA_MAX = 6.4;  // km/h — por encima ya no es marcha
+
+/** Coste de un bloque de caminata: {min, vel (km/h), incl (%)}. */
+function calcWalkBlock(bloque, pesoKg) {
+  const min = Math.max(0, parseFloat(bloque?.min) || 0);
+  const vel = Math.max(0, parseFloat(bloque?.vel) || 0);
+  const incl = Math.max(0, parseFloat(bloque?.incl) || 0);
+  const peso = parseFloat(pesoKg) || 0;
+  const S = (vel * 1000) / 60;            // m/min
+  const G = incl / 100;
+  const vo2 = 0.1 * S + 1.8 * S * G + 3.5;
+  const km = (vel * min) / 60;
+  return {
+    min, vel, incl,
+    mets: Math.round((vo2 / 3.5) * 10) / 10,
+    kcal: peso > 0 ? Math.round((vo2 * peso / 1000) * 5 * min) : 0,
+    km: Math.round(km * 100) / 100,
+    // Desnivel acumulado: los metros que "subes" sin moverte del sitio. Es la
+    // medida que de verdad progresa en caminata inclinada.
+    desnivel: Math.round(km * 1000 * G),
+    fueraDeRango: vel > VEL_MARCHA_MAX,
+  };
+}
+
+/** Suma de una sesión con varios bloques (intervalos de velocidad/pendiente). */
+function calcCardioSession(sesion, pesoKg) {
+  const bloques = (sesion?.bloques || []).map(b => calcWalkBlock(b, pesoKg));
+  const min = bloques.reduce((a, b) => a + b.min, 0);
+  if (!min) return { min: 0, kcal: 0, km: 0, desnivel: 0, mets: 0, inclMedia: 0, velMedia: 0, bloques, fueraDeRango: false };
+  // Medias PONDERADAS POR TIEMPO: un pico de 15% durante un minuto no vale lo
+  // mismo que veinte minutos al 8%, y la media simple de los bloques lo diría.
+  const pond = (k) => Math.round((bloques.reduce((a, b) => a + b[k] * b.min, 0) / min) * 10) / 10;
+  return {
+    min,
+    kcal: bloques.reduce((a, b) => a + b.kcal, 0),
+    km: Math.round(bloques.reduce((a, b) => a + b.km, 0) * 100) / 100,
+    desnivel: bloques.reduce((a, b) => a + b.desnivel, 0),
+    mets: pond("mets"),
+    inclMedia: pond("incl"),
+    velMedia: pond("vel"),
+    bloques,
+    fueraDeRango: bloques.some(b => b.fueraDeRango),
+  };
+}
+
+/** Totales de cardio de una ventana de días, para ver la carga de la semana. */
+function getCardioSummary(cardiolog, pesoKg, hasta, dias = 7) {
+  const fin = hasta || getLocalDateStr(new Date());
+  const desde = (() => { const d = new Date(fin + "T12:00:00"); d.setDate(d.getDate() - (dias - 1)); return getLocalDateStr(d); })();
+  const fechas = Object.keys(cardiolog || {}).filter(d => d >= desde && d <= fin).sort();
+  const sesiones = [];
+  fechas.forEach(d => (cardiolog[d] || []).forEach(s => sesiones.push({ ...calcCardioSession(s, pesoKg), fecha: d, id: s.id })));
+  return {
+    sesiones: sesiones.length,
+    dias: fechas.length,
+    min: sesiones.reduce((a, s) => a + s.min, 0),
+    kcal: sesiones.reduce((a, s) => a + s.kcal, 0),
+    km: Math.round(sesiones.reduce((a, s) => a + s.km, 0) * 10) / 10,
+    desnivel: sesiones.reduce((a, s) => a + s.desnivel, 0),
+    inclMax: sesiones.reduce((a, s) => Math.max(a, ...s.bloques.map(b => b.incl)), 0),
+    detalle: sesiones,
+  };
+}
+
+/* Programas de caminata inclinada. Son plantillas: al cargarlas rellenan los
+   bloques y desde ahí se editan, porque nadie sigue un plan al minuto.
+   La progresión sube ANTES la pendiente que la velocidad: a más pendiente el
+   coste sube mucho más rápido y el impacto en rodilla y tendón sigue siendo el
+   de caminar, que es la razón de elegir cinta inclinada y no correr. */
+const PROGRAMAS_CAMINATA = [
+  {
+    key: "z2",
+    nombre: "Base Z2 · 40 min",
+    para: "El del día a día. 2-3 veces por semana.",
+    detalle: "Ritmo cómodo pero constante: deberías poder hablar en frases cortas, no cantar.",
+    bloques: [
+      { min: 5,  vel: 4.5, incl: 2 },
+      { min: 30, vel: 5.2, incl: 9 },
+      { min: 5,  vel: 4.0, incl: 0 },
+    ],
+  },
+  {
+    key: "intervalos",
+    nombre: "Intervalos de pendiente · 42 min",
+    para: "Un día a la semana, nunca antes de pierna.",
+    detalle: "8 subidas fuertes con bajada activa. La velocidad casi no cambia; cambia la cuesta.",
+    bloques: [
+      { min: 6, vel: 4.5, incl: 3 },
+      ...Array.from({ length: 8 }, () => [{ min: 2, vel: 4.8, incl: 13 }, { min: 2, vel: 5.2, incl: 3 }]).flat(),
+      { min: 4, vel: 4.0, incl: 0 },
+    ],
+  },
+  {
+    key: "larga",
+    nombre: "Larga suave · 60 min",
+    para: "Día sin pesas o de descanso activo.",
+    detalle: "Pendiente moderada y mucho rato. Es la sesión que más grasa oxida sin dejarte fatiga.",
+    bloques: [
+      { min: 5,  vel: 4.5, incl: 2 },
+      { min: 50, vel: 5.5, incl: 6 },
+      { min: 5,  vel: 4.0, incl: 0 },
+    ],
+  },
+];
 
 /* ===================== DÍAS SIN COMIDA REGISTRADA =====================
    Un día sin registrar no es un día de ayuno: es un día que se olvidó anotar.
@@ -3483,6 +3603,8 @@ export default function App(){
   const [geminiKey, setGeminiKey] = useState("");
   const [prAlerts, setPrAlerts] = useState([]);
   const [workoutDurations, setWorkoutDurations] = useState({});
+  // Caminata en cinta: { "YYYY-MM-DD": [{ id, bloques:[{min,vel,incl}], nota }] }
+  const [cardiolog, setCardiolog] = useState({});
   const [exerciseTechNotes, setExerciseTechNotes] = useState({});
 
   // ── 20 AI Features: New States ──
@@ -3853,6 +3975,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       }
       let localWorkoutDurations = await loadKey("workout_durations", {});
       if (!localWorkoutDurations || typeof localWorkoutDurations !== 'object') localWorkoutDurations = {};
+      let localCardiolog = await loadKey("cardiolog", {});
+      if (!localCardiolog || typeof localCardiolog !== 'object') localCardiolog = {};
       let localExerciseTechNotes = await loadKey("exercise_tech_notes", {});
       if (!localExerciseTechNotes || typeof localExerciseTechNotes !== 'object') localExerciseTechNotes = {};
 
@@ -3897,6 +4021,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         localMetricslog = (initialData.metricslog && typeof initialData.metricslog === 'object') ? initialData.metricslog : localMetricslog;
         localSuppsInventory = (initialData.suppsInventory && typeof initialData.suppsInventory === 'object') ? initialData.suppsInventory : localSuppsInventory;
         localWorkoutDurations = (initialData.workoutDurations && typeof initialData.workoutDurations === 'object') ? initialData.workoutDurations : localWorkoutDurations;
+        localCardiolog = (initialData.cardiolog && typeof initialData.cardiolog === 'object') ? initialData.cardiolog : localCardiolog;
       }
 
       // MIGRATION OF LEGACY DAILY DATA
@@ -3983,6 +4108,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       await saveKey("metricslog", localMetricslog);
       await saveKey("supps_inventory", localSuppsInventory);
       await saveKey("workout_durations", localWorkoutDurations);
+      await saveKey("cardiolog", localCardiolog);
       if (initialData && initialData.updatedAt) {
         await saveKey("last_local_update", initialData.updatedAt);
       }
@@ -4009,6 +4135,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         "Whey Protein": { active: true, servingsLeft: 30, totalServings: 30 }
       });
       setWorkoutDurations(localWorkoutDurations || {});
+      setCardiolog(localCardiolog || {});
       setExerciseTechNotes(localExerciseTechNotes || {});
       setDietGuidelines(localDietGuidelines || "");
       setTrainingGuidelines(localTrainingGuidelines || "");
@@ -4127,6 +4254,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
               "Whey Protein": { active: true, servingsLeft: 30, totalServings: 30 }
             };
             const nextWorkoutDurations = cloudData.workoutDurations || {};
+            const nextCardiolog = cloudData.cardiolog || {};
 
             // Actualizar estados React
             setPresetKey(cloudData.presetKey || "definicion");
@@ -4154,6 +4282,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
             if (nextMetricslog !== undefined) setMetricslog(nextMetricslog);
             setSuppsInventory(nextSuppsInventory);
             setWorkoutDurations(nextWorkoutDurations);
+            setCardiolog(nextCardiolog);
 
             // Guardar localmente
             await saveKey("profile", { presetKey: cloudData.presetKey || "definicion" });
@@ -4179,6 +4308,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
             if (nextMetricslog !== undefined) await saveKey("metricslog", nextMetricslog);
             await saveKey("supps_inventory", nextSuppsInventory);
             await saveKey("workout_durations", nextWorkoutDurations);
+            await saveKey("cardiolog", nextCardiolog);
             await saveKey("last_local_update", cloudData.updatedAt);
             
             setSyncStatus("Sincronizado");
@@ -4281,6 +4411,11 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       nextWorkoutDurations = updates.workoutDurations;
     }
 
+    let nextCardiolog = { ...cardiolog };
+    if (updates.cardiolog !== undefined) {
+      nextCardiolog = updates.cardiolog;
+    }
+
     let nextExerciseTechNotes = { ...exerciseTechNotes };
     if (updates.exerciseTechNotes !== undefined) {
       nextExerciseTechNotes = updates.exerciseTechNotes;
@@ -4325,6 +4460,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       metricslog: nextMetricslog,
       suppsInventory: nextSuppsInventory,
       workoutDurations: nextWorkoutDurations,
+      cardiolog: nextCardiolog,
       exerciseTechNotes: nextExerciseTechNotes,
       experiments: nextExperiments,
       smartGoals: updates.smartGoals !== undefined ? updates.smartGoals : smartGoals,
@@ -4343,6 +4479,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     if (updates.metricslog !== undefined || updates.weight !== undefined || updates.bodyComp !== undefined) setMetricslog(nextMetricslog);
     if (updates.suppsInventory !== undefined) setSuppsInventory(nextSuppsInventory);
     if (updates.workoutDurations !== undefined) setWorkoutDurations(nextWorkoutDurations);
+    if (updates.cardiolog !== undefined) setCardiolog(nextCardiolog);
     if (updates.exerciseTechNotes !== undefined) setExerciseTechNotes(nextExerciseTechNotes);
     if (updates.customPresets !== undefined) setCustomPresets(nextCustomPresets);
     if (updates.presetKey !== undefined) setPresetKey(updates.presetKey);
@@ -4375,6 +4512,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     if (updates.metricslog !== undefined || updates.bodyComp !== undefined || updates.weight !== undefined) writes.push(saveKey("metricslog", nextMetricslog));
     if (updates.suppsInventory !== undefined) writes.push(saveKey("supps_inventory", nextSuppsInventory));
     if (updates.workoutDurations !== undefined) writes.push(saveKey("workout_durations", nextWorkoutDurations));
+    if (updates.cardiolog !== undefined) writes.push(saveKey("cardiolog", nextCardiolog));
     if (updates.exerciseTechNotes !== undefined) writes.push(saveKey("exercise_tech_notes", nextExerciseTechNotes));
     writes.push(saveKey("last_local_update", updateTime));
     await Promise.all(writes);
@@ -4834,6 +4972,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       if (s.metricslog && Object.keys(s.metricslog).length > 0) { setMetricslog(s.metricslog); await saveKey("metricslog", s.metricslog); }
       if (s.suppsInventory && Object.keys(s.suppsInventory).length > 0) { setSuppsInventory(s.suppsInventory); await saveKey("supps_inventory", s.suppsInventory); }
       if (s.workoutDurations && Object.keys(s.workoutDurations).length > 0) { setWorkoutDurations(s.workoutDurations); await saveKey("workout_durations", s.workoutDurations); }
+      if (s.cardiolog && Object.keys(s.cardiolog).length > 0) { setCardiolog(s.cardiolog); await saveKey("cardiolog", s.cardiolog); }
       if (s.meals && Array.isArray(s.meals) && s.meals.length > 0) { setMeals(s.meals); await saveKey("meals", s.meals); }
       if (s.splits && Array.isArray(s.splits) && s.splits.length > 0) { setSplits(s.splits); await saveKey("training_splits", s.splits); }
       if (s.bodyComp) { setBodyComp(s.bodyComp); await saveKey("body_comp", s.bodyComp); }
@@ -4861,7 +5000,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     const snapshot = {
       exportedAt: new Date().toISOString(),
       notes, exlog, exercises, foodlog, waterlog, suppslog, metricslog,
-      suppsInventory, workoutDurations, meals, splits, bodyComp,
+      suppsInventory, workoutDurations, cardiolog, meals, splits, bodyComp,
       shoppingList, presetKey, activeSplitKey, customPresets,
       customSuggestions, chat, experiments, smartGoals, challenges,
       weeklyInsight, upcomingEvent
@@ -4876,7 +5015,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
   };
 
   // Mantener ref actualizada con el estado más reciente para el backup nocturno
-  nightlyBackupRef.current = { log, notes, exlog, exercises, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, meals, splits, bodyComp, shoppingList, presetKey, activeSplitKey, customPresets, customSuggestions, chat, experiments, smartGoals, challenges, weeklyInsight, upcomingEvent, supabase, supabaseUser };
+  nightlyBackupRef.current = { log, notes, exlog, exercises, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, cardiolog, meals, splits, bodyComp, shoppingList, presetKey, activeSplitKey, customPresets, customSuggestions, chat, experiments, smartGoals, challenges, weeklyInsight, upcomingEvent, supabase, supabaseUser };
 
   // Backup automático: al abrir la app (si se perdió el de medianoche) y cada 00:00
   useEffect(() => {
@@ -4886,7 +5025,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       const today = getLocalDateStr(new Date());
       if (localStorage.getItem("last_backup_date") === today) return;
       const st = nightlyBackupRef.current;
-      const snap = { exportedAt: new Date().toISOString(), updatedAt: Date.now(), notes: st.notes, exlog: st.exlog, exercises: st.exercises, foodlog: st.foodlog, waterlog: st.waterlog, suppslog: st.suppslog, metricslog: st.metricslog, suppsInventory: st.suppsInventory, workoutDurations: st.workoutDurations, meals: st.meals, splits: st.splits, bodyComp: st.bodyComp, shoppingList: st.shoppingList, presetKey: st.presetKey, activeSplitKey: st.activeSplitKey, customPresets: st.customPresets, customSuggestions: st.customSuggestions, smartGoals: st.smartGoals, challenges: st.challenges, chat: st.chat, experiments: st.experiments, weeklyInsight: st.weeklyInsight, upcomingEvent: st.upcomingEvent };
+      const snap = { exportedAt: new Date().toISOString(), updatedAt: Date.now(), notes: st.notes, exlog: st.exlog, exercises: st.exercises, foodlog: st.foodlog, waterlog: st.waterlog, suppslog: st.suppslog, metricslog: st.metricslog, suppsInventory: st.suppsInventory, workoutDurations: st.workoutDurations, cardiolog: st.cardiolog, meals: st.meals, splits: st.splits, bodyComp: st.bodyComp, shoppingList: st.shoppingList, presetKey: st.presetKey, activeSplitKey: st.activeSplitKey, customPresets: st.customPresets, customSuggestions: st.customSuggestions, smartGoals: st.smartGoals, challenges: st.challenges, chat: st.chat, experiments: st.experiments, weeklyInsight: st.weeklyInsight, upcomingEvent: st.upcomingEvent };
       // 1. Descargar JSON
       try {
         const blob = new Blob([JSON.stringify(snap, null, 2)], { type: "application/json" });
@@ -4943,6 +5082,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         if (s.metricslog && typeof s.metricslog === 'object') { setMetricslog(s.metricslog); await saveKey("metricslog", s.metricslog); }
         if (s.suppsInventory && typeof s.suppsInventory === 'object') { setSuppsInventory(s.suppsInventory); await saveKey("supps_inventory", s.suppsInventory); }
         if (s.workoutDurations && typeof s.workoutDurations === 'object') { setWorkoutDurations(s.workoutDurations); await saveKey("workout_durations", s.workoutDurations); }
+        if (s.cardiolog && typeof s.cardiolog === 'object') { setCardiolog(s.cardiolog); await saveKey("cardiolog", s.cardiolog); }
         if (s.meals && Array.isArray(s.meals)) { setMeals(s.meals); await saveKey("meals", s.meals); }
         if (s.splits && Array.isArray(s.splits)) { setSplits(s.splits); await saveKey("training_splits", s.splits); }
         if (s.bodyComp) { setBodyComp(s.bodyComp); await saveKey("body_comp", s.bodyComp); }
@@ -4990,7 +5130,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       setSyncStatus("Sincronizando...");
       const today = getLocalDateStr(new Date());
       const updateTime = Date.now();
-      const current = { presetKey, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, updatedAt: updateTime };
+      const current = { presetKey, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, cardiolog, updatedAt: updateTime };
       try {
         await pushStateToCloud(syncCode, current);
         setSyncStatus("Sincronizado");
@@ -5031,7 +5171,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         
         const today = getLocalDateStr(new Date());
         const updateTime = Date.now();
-        const current = { presetKey, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, updatedAt: updateTime };
+        const current = { presetKey, log, notes, chat, exlog, exercises, water, supplements, bodyComp, shoppingList, meals, activeSplitKey, dailyDate: today, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, cardiolog, updatedAt: updateTime };
         try {
           await pushStateToCloud(code, current);
           setSyncStatus("Sincronizado");
@@ -5097,6 +5237,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         "Whey Protein": { active: true, servingsLeft: 30, totalServings: 30 }
       });
       setWorkoutDurations(cloudData.workoutDurations || {});
+      setCardiolog(cloudData.cardiolog || {});
 
       // Guardar todos localmente
       await saveKey("profile", { presetKey: cloudData.presetKey || "definicion" });
@@ -5126,6 +5267,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         "Whey Protein": { active: true, servingsLeft: 30, totalServings: 30 }
       });
       await saveKey("workout_durations", cloudData.workoutDurations || {});
+      await saveKey("cardiolog", cloudData.cardiolog || {});
       await saveKey("last_local_update", updateTime);
 
       setSyncStatus("Sincronizado");
@@ -5174,6 +5316,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         "Whey Protein": { active: true, servingsLeft: 30, totalServings: 30 }
       });
       setWorkoutDurations(cloudData.workoutDurations || {});
+      setCardiolog(cloudData.cardiolog || {});
 
       // Guardar todos localmente
       await saveKey("profile", { presetKey: cloudData.presetKey || "definicion" });
@@ -5203,6 +5346,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         "Whey Protein": { active: true, servingsLeft: 30, totalServings: 30 }
       });
       await saveKey("workout_durations", cloudData.workoutDurations || {});
+      await saveKey("cardiolog", cloudData.cardiolog || {});
       await saveKey("last_local_update", updateTime);
 
       setSyncStatus("Sincronizado");
@@ -6014,6 +6158,12 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
         return recentAnalyses.length ? recentAnalyses.join("\n") : null;
       };
       const fitdaysComp = getFitdaysCompositionText();
+      // Caminata inclinada: sin esto la IA planifica como si Bruno solo
+      // levantara pesas, y son 3-4 sesiones de cardio a la semana.
+      const cardioSem = getCardioSummary(cardiolog, parseFloat(activeMetrics.weight) || 0, selectedDateStr, 7);
+      const cardioCtx = cardioSem.sesiones > 0
+        ? `Caminata en cinta (últimos 7 días): ${cardioSem.sesiones} sesiones, ${cardioSem.min} min, ${cardioSem.km} km, ${cardioSem.desnivel} m de desnivel acumulado, pendiente máxima ${cardioSem.inclMax}%, unas ${cardioSem.kcal} kcal. Ese gasto YA está reflejado en el peso y en el TDEE observado: no lo sumes otra vez al objetivo calórico. Úsalo para la recuperación de piernas y la distribución de carbohidratos.`
+        : "Caminata en cinta: sin sesiones registradas en los últimos 7 días.";
       const fotoAnalysisCtx = getFotoAnalysisContext();
 
       const sys = `Eres el coach nutricional y de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral, bodyProfile)}${dietGuidelines ? `\nDIRECTRICES DIETÉTICAS PERSONALIZADAS DE BRUNO (respétalas siempre): ${dietGuidelines}` : ""}${trainingGuidelines ? `\nDIRECTRICES DE ENTRENAMIENTO PERSONALIZADAS DE BRUNO (respétalas siempre): ${trainingGuidelines}` : ""}
@@ -6021,7 +6171,7 @@ MOMENTO ACTUAL: ${timeBlock}. ADAPTA tu respuesta a este contexto horario — no
 Plan nutricional activo: ${target.kcal} kcal (${target.label}), P:${target.p}g / C:${target.c}g / G:${target.f}g.
 Métricas antropométricas y corporales: ${metricsSummary}
 Datos de Composición Corporal (Fitdays): ${fitdaysComp}${fotoAnalysisCtx ? `\nAnálisis de fotos de progreso recientes:\n${fotoAnalysisCtx}` : ""}
-Historial nutricional acumulado reciente: ${recentNutrition}
+Historial nutricional acumulado reciente: ${recentNutrition}\n${cardioCtx}
 Día de Split de entrenamiento activo hoy: Día ${activeSplit.key} (${activeSplit.name}), combustible de carbohidratos asignado: ${activeSplit.fuel}.
 Estado de entrenamiento hoy: ${trainedToday ? "✓ YA ENTRENÓ HOY — no preguntes si va a entrenar, asume recuperación activa." : "✗ AÚN NO HA ENTRENADO HOY — puedes orientar pre-entreno, timing y energía si aplica."}
 Datos adicionales del día ${selectedDateStr}: agua: ${water || waterlog[selectedDateStr] || 0}ml, duración sesión: ${workoutDurations[selectedDateStr] ? workoutDurations[selectedDateStr]+" min" : "no registrada"}, suplementos activos: ${Object.entries(supplements||{}).filter(([,v])=>v).map(([k])=>k).join(", ")||"ninguno"}.
@@ -6805,6 +6955,8 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             setCalMonth={setCalMonth}
             workoutDurations={workoutDurations}
             setWorkoutDurations={(wd) => saveState({ workoutDurations: wd })}
+            cardiolog={cardiolog}
+            setCardiolog={(cl) => saveState({ cardiolog: cl })}
             exerciseTechNotes={exerciseTechNotes}
             setExerciseTechNotes={(etn) => saveState({ exerciseTechNotes: etn })}
             prAlerts={prAlerts}
@@ -7379,6 +7531,191 @@ function MarkdownText({ text, style = {} }) {
 }
 
 /* ===== SUB-PANEL IA (AIPanel) ===== */
+/* ===== CAMINATA EN CINTA =====
+   Se registra por BLOQUES, no como "40 min de cinta": el propio usuario cambia
+   velocidad y pendiente varias veces dentro de la misma sesión, y la pendiente
+   es lo que decide el coste. Un promedio la borraría.
+
+   No suma al TDEE. El TDEE de la app sale de la ingesta frente al cambio de
+   peso real, así que el gasto de caminar YA está dentro: sumarlo otra vez sería
+   contarlo dos veces y acabaría inflando el objetivo calórico. */
+function CardioCinta({ cardiolog, setCardiolog, selectedDateStr, pesoKg }) {
+  const sesionesHoy = (cardiolog || {})[selectedDateStr] || [];
+  const [abierto, setAbierto] = useState(false);
+  const [bloques, setBloques] = useState([{ min: 5, vel: 4.5, incl: 2 }, { min: 30, vel: 5.2, incl: 9 }]);
+  const [nota, setNota] = useState("");
+
+  const previa = calcCardioSession({ bloques }, pesoKg);
+  const semana = getCardioSummary(cardiolog, pesoKg, selectedDateStr, 7);
+
+  const setBloque = (i, campo, valor) =>
+    setBloques(bs => bs.map((b, j) => j === i ? { ...b, [campo]: valor === "" ? "" : parseFloat(valor) } : b));
+
+  const guardar = () => {
+    const limpios = bloques.filter(b => (parseFloat(b.min) || 0) > 0 && (parseFloat(b.vel) || 0) > 0);
+    if (!limpios.length) return;
+    const sesion = { id: "c" + Date.now(), bloques: limpios, nota: nota.trim() };
+    setCardiolog({ ...(cardiolog || {}), [selectedDateStr]: [...sesionesHoy, sesion] });
+    setNota("");
+    setAbierto(false);
+  };
+
+  const borrar = (id) => {
+    const resto = sesionesHoy.filter(s => s.id !== id);
+    const next = { ...(cardiolog || {}) };
+    if (resto.length) next[selectedDateStr] = resto; else delete next[selectedDateStr];
+    setCardiolog(next);
+  };
+
+  const num = (val, onCh, ancho = 46) => (
+    <input type="number" inputMode="decimal" value={val} onChange={e => onCh(e.target.value)}
+      style={{width:ancho, background:C.bg, border:`1px solid ${C.line}`, borderRadius:6,
+              padding:"4px 5px", fontSize:12, color:C.ink, textAlign:"center"}}/>
+  );
+
+  return (
+    <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:2}}>
+        <div style={{fontSize:12.5, fontWeight:800, display:"flex", alignItems:"center", gap:6}}>
+          <Activity size={15} color={C.cyan}/> Caminata en cinta
+        </div>
+        <button onClick={() => setAbierto(v => !v)}
+          style={{background: abierto ? C.panel2 : C.lime, color: abierto ? C.muted : C.onAccent,
+                  border:`1px solid ${abierto ? C.line : "transparent"}`, borderRadius:8,
+                  padding:"5px 10px", fontSize:11.5, fontWeight:800, cursor:"pointer"}}>
+          {abierto ? "Cancelar" : "+ Registrar"}
+        </button>
+      </div>
+
+      {semana.sesiones > 0 && (
+        <div style={{fontSize:10, color:C.muted, marginBottom:8, lineHeight:1.45}}>
+          Últimos 7 días: <b style={{color:C.ink}}>{semana.sesiones}</b> {semana.sesiones === 1 ? "sesión" : "sesiones"} ·{" "}
+          <b style={{color:C.ink}}>{semana.min} min</b> ·{" "}
+          <b style={{color:C.ink}}>{semana.km} km</b> ·{" "}
+          <b style={{color:C.ink}}>{semana.desnivel} m</b> de desnivel ·{" "}
+          <b style={{color:C.ink}}>{semana.kcal}</b> kcal
+        </div>
+      )}
+
+      {sesionesHoy.map(s => {
+        const r = calcCardioSession(s, pesoKg);
+        return (
+          <div key={s.id} style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"8px 10px", marginBottom:6}}>
+            <div style={{display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:8}}>
+              <span style={{fontSize:12.5, fontWeight:800, color:C.ink}}>
+                {r.min} min · {r.km} km · {r.desnivel} m ↑
+              </span>
+              <span style={{display:"flex", alignItems:"center", gap:8}}>
+                <span style={{fontSize:12, fontWeight:800, color:C.lime}}>{r.kcal} kcal</span>
+                <button onClick={() => borrar(s.id)} title="Borrar"
+                  style={{background:"none", border:"none", color:C.muted, cursor:"pointer", fontSize:13, padding:0}}>×</button>
+              </span>
+            </div>
+            <div style={{fontSize:10, color:C.muted, marginTop:2}}>
+              Media {r.velMedia} km/h al {r.inclMedia}% · {r.mets} MET
+              {r.bloques.length > 1 && ` · ${r.bloques.length} bloques`}
+            </div>
+            <div style={{display:"flex", flexWrap:"wrap", gap:4, marginTop:5}}>
+              {r.bloques.map((b, i) => (
+                <span key={i} style={{fontSize:9.5, fontWeight:700, color:C.muted, background:C.bg,
+                        border:`1px solid ${C.line}`, borderRadius:5, padding:"2px 5px"}}>
+                  {b.min}′ · {b.vel} · {b.incl}%
+                </span>
+              ))}
+            </div>
+            {s.nota && <div style={{fontSize:10.5, color:C.muted, marginTop:4, fontStyle:"italic"}}>{s.nota}</div>}
+            {r.fueraDeRango && (
+              <div style={{fontSize:9.5, color:C.amber, marginTop:4}}>
+                Por encima de {VEL_MARCHA_MAX} km/h ya no es marcha: las kcal de ese bloque son orientativas.
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {abierto && (
+        <div style={{marginTop:8}}>
+          <div style={{fontSize:10.5, color:C.muted, fontWeight:700, textTransform:"uppercase", letterSpacing:".05em", marginBottom:5}}>
+            Cargar un programa
+          </div>
+          <div style={{display:"flex", flexDirection:"column", gap:5, marginBottom:10}}>
+            {PROGRAMAS_CAMINATA.map(pr => {
+              const r = calcCardioSession(pr, pesoKg);
+              return (
+                <button key={pr.key} onClick={() => setBloques(pr.bloques.map(b => ({ ...b })))}
+                  style={{textAlign:"left", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10,
+                          padding:"7px 9px", cursor:"pointer"}}>
+                  <div style={{display:"flex", justifyContent:"space-between", gap:8, alignItems:"baseline"}}>
+                    <span style={{fontSize:11.5, fontWeight:800, color:C.ink}}>{pr.nombre}</span>
+                    <span style={{fontSize:10.5, fontWeight:800, color:C.lime, whiteSpace:"nowrap"}}>~{r.kcal} kcal</span>
+                  </div>
+                  <div style={{fontSize:9.5, color:C.muted, marginTop:1}}>{pr.para} {pr.detalle}</div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{fontSize:10.5, color:C.muted, fontWeight:700, textTransform:"uppercase", letterSpacing:".05em", marginBottom:5}}>
+            Bloques
+          </div>
+          <div style={{display:"flex", gap:6, fontSize:9.5, color:C.muted, marginBottom:3, paddingLeft:2}}>
+            <span style={{width:46, textAlign:"center"}}>min</span>
+            <span style={{width:52, textAlign:"center"}}>km/h</span>
+            <span style={{width:46, textAlign:"center"}}>%</span>
+          </div>
+          {bloques.map((b, i) => (
+            <div key={i} style={{display:"flex", gap:6, alignItems:"center", marginBottom:4}}>
+              {num(b.min, v => setBloque(i, "min", v))}
+              {num(b.vel, v => setBloque(i, "vel", v), 52)}
+              {num(b.incl, v => setBloque(i, "incl", v))}
+              <span style={{fontSize:10, color:C.muted, flex:1}}>
+                {calcWalkBlock(b, pesoKg).kcal} kcal
+              </span>
+              {bloques.length > 1 && (
+                <button onClick={() => setBloques(bs => bs.filter((_, j) => j !== i))}
+                  style={{background:"none", border:"none", color:C.muted, cursor:"pointer", fontSize:14, padding:"0 4px"}}>×</button>
+              )}
+            </div>
+          ))}
+          <button onClick={() => setBloques(bs => [...bs, { ...(bs[bs.length - 1] || { min: 5, vel: 5, incl: 5 }) }])}
+            style={{background:"transparent", border:`1px dashed ${C.line}`, color:C.muted, borderRadius:8,
+                    padding:"5px 9px", fontSize:11, fontWeight:700, cursor:"pointer", marginTop:2}}>
+            + Añadir bloque
+          </button>
+
+          <input value={nota} onChange={e => setNota(e.target.value)} placeholder="Nota (opcional): sensaciones, pulsaciones…"
+            style={{width:"100%", background:C.bg, border:`1px solid ${C.line}`, borderRadius:8,
+                    padding:"7px 9px", fontSize:12, color:C.ink, marginTop:8}}/>
+
+          <div style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"8px 10px", marginTop:8}}>
+            <div style={{fontSize:12, fontWeight:800, color:C.ink}}>
+              {previa.min} min · {previa.km} km · {previa.desnivel} m ↑ · <span style={{color:C.lime}}>{previa.kcal} kcal</span>
+            </div>
+            <div style={{fontSize:9.5, color:C.muted, marginTop:2}}>
+              Media {previa.velMedia} km/h al {previa.inclMedia}% · {previa.mets} MET.
+              {pesoKg > 0 ? ` Calculado con ${pesoKg} kg.` : " Registra tu peso para estimar las kcal."}
+            </div>
+          </div>
+
+          <button onClick={guardar} disabled={previa.min === 0}
+            style={{width:"100%", marginTop:8, padding:"10px", borderRadius:11, border:"none",
+                    background: previa.min === 0 ? C.panel2 : C.lime, color: previa.min === 0 ? C.muted : C.onAccent,
+                    fontWeight:800, fontSize:13, cursor: previa.min === 0 ? "default" : "pointer"}}>
+            Guardar caminata
+          </button>
+        </div>
+      )}
+
+      {!abierto && sesionesHoy.length === 0 && (
+        <div style={{fontSize:11, color:C.muted, lineHeight:1.45, marginTop:4}}>
+          Sin caminata registrada este día. Se guarda por bloques de minutos, velocidad y pendiente,
+          porque el coste depende sobre todo de la cuesta: media hora a 5 km/h cuesta el doble al 12% que en llano.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AIPanel({title, busy, text, color=C.lime, onClose}){
   if(!busy && !text) return null;
   return (
@@ -12683,7 +13020,7 @@ th.spark{text-align:center}
 function Entreno({
   exlog, setExlog, exercises, setExercises, geminiKey, handleAnalyzeWorkout, importWorkoutData,
   activeSplitKey, setActiveSplitKey, selectedDateStr, setSelectedDateStr, calMonth, setCalMonth,
-  workoutDurations, setWorkoutDurations, exerciseTechNotes, setExerciseTechNotes, prAlerts, setPrAlerts, checkNewPR, activeMetrics,
+  workoutDurations, setWorkoutDurations, cardiolog, setCardiolog, exerciseTechNotes, setExerciseTechNotes, prAlerts, setPrAlerts, checkNewPR, activeMetrics,
   overloadSuggestions, plateauAlerts, muscleImbalances, splits, setSplits, notes, setNotes, chat,
   bodyProfile, caloricPhase
 }){
@@ -16153,6 +16490,16 @@ tr:last-child td{border-bottom:none}
           </div>
         )}
       </div>
+
+      {/* La caminata no pertenece a ningún día del split: se hace en días
+          alternos y a menudo sin pesas, así que vive fuera del bloque de
+          ejercicios y por encima de los botones de IA. */}
+      <CardioCinta
+        cardiolog={cardiolog}
+        setCardiolog={setCardiolog}
+        selectedDateStr={selectedDateStr}
+        pesoKg={parseFloat(activeMetrics?.weight) || 0}
+      />
 
       {/* Botón de Análisis del Entrenamiento */}
       <button 
@@ -20556,6 +20903,7 @@ if (typeof module !== 'undefined' && module.exports) {
     detectWeightOutlier, calcBodyProjection, fatFractionOfLoss, leanFractionOfGain,
     evaluateRecovery, calcRestingHRBaseline, buildRecompositionSeries, buildMetricChanges, getWeeklyStats,
     buildDailyNutrition, averageDailyNutrition, sumDayNutrition, calcTDEE, analyzeMacroPattern,
+    calcWalkBlock, calcCardioSession, getCardioSummary, PROGRAMAS_CAMINATA, VEL_MARCHA_MAX,
     RECOVERY_FIELDS, getLocalDateStr,
     normalizeMuscle, canonMuscleName, dedupeMuscles, calcMuscleVolumeBalance, SLUG_MUSCLE,
     normalizeBodyEntry, mergeMetricsUpTo, validateBodyMetrics, RANGOS_BIO,

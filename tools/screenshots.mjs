@@ -129,6 +129,11 @@ const ESCENAS = [
   // Posicionar por texto en vez de por píxeles: este panel se mueve cada vez
   // que crece algo por encima, y con scroll fijo la captura acabaría en otro sitio
   { id: "entreno-10-volumen-semanal", tab: "Entreno", scrollHasta: "Volumen Semanal" },
+  // Caminata en cinta: el registro por bloques de velocidad y pendiente
+  { id: "entreno-14-caminata", tab: "Entreno", scrollHasta: "Caminata en cinta" },
+  { id: "entreno-15-caminata-programas", tab: "Entreno", scrollHasta: "Caminata en cinta",
+    accion: async (page) => { await page.getByRole("button", { name: "+ Registrar" }).first().click({ timeout: 5000 }); },
+    scrollDespues: 200 },
   { id: "registro-01-peso-y-tendencia", tab: "Registro", scroll: 0 },
   // Registro de cintura: la métrica que mejor distingue perder grasa de perder peso
   { id: "registro-06-cintura", tab: "Registro", scroll: 0,

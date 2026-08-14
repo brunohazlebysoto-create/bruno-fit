@@ -1002,3 +1002,67 @@ la pérdida de peso. No quedaba margen para comprobar que sube, y el resultado
 dependía del día en que se ejecutara. El historial de prueba lleva ahora una
 descarga explícita hace 3 semanas: parte de `none` y la comparación significa
 algo.
+
+## Caminata en cinta con inclinación (W70)
+
+> *"estoy caminando en inclinación casi día por medio, podríamos agregarlo para
+> registro y de qué manera porque también tiene intervalos distintos de
+> velocidad e inclinación"*
+
+No había ningún registro de cardio. Tres o cuatro sesiones semanales de caminata
+inclinada no entraban en ningún cálculo y la IA no las veía al ajustar los
+planes.
+
+### Por qué por bloques y no "40 min de cinta"
+
+Porque lo que decide el coste no es el tiempo ni la distancia: es la
+**pendiente**. Media hora a 5 km/h son unas 130 kcal en llano y **más del
+doble** al 12%, con la misma distancia y el mismo tiempo. Guardar un promedio
+borra justo el dato que importa, y la sesión real cambia de cuesta varias veces.
+
+Cada sesión se guarda como una lista de bloques `{minutos, km/h, %}`.
+
+### El cálculo
+
+Ecuación de marcha del ACSM, que mete la pendiente como término propio en vez de
+esconderla en un MET de tabla:
+
+```
+VO2 (ml/kg/min) = 0.1·S + 1.8·S·G + 3.5     S en m/min, G pendiente (0–1)
+```
+
+con 1 litro de O2 ≈ 5 kcal. De ahí salen kcal, METs, distancia y **desnivel
+acumulado** — los metros que subes sin moverte del sitio, que es la medida que
+de verdad progresa en caminata inclinada.
+
+Dos honestidades:
+
+- La ecuación vale **caminando**. Por encima de 6.4 km/h la marcha pasa a trote
+  y la relación cambia: esos bloques se marcan como fuera de rango en vez de
+  devolver un número inventado con cara de exacto.
+- Las medias de la sesión se ponderan **por tiempo**. Un minuto al 20% no puede
+  pesar lo mismo que veintinueve al 2%; la media simple diría 11% donde la real
+  es 2.6%.
+
+### Lo que NO hace: sumarse al TDEE
+
+El TDEE de la app sale de la ingesta frente al cambio de peso real, así que el
+gasto de caminar **ya está dentro**. Sumarlo otra vez sería contarlo dos veces e
+inflaría el objetivo calórico. A la IA se le pasa el resumen semanal con esa
+advertencia explícita, para que lo use en recuperación de piernas y reparto de
+carbohidratos, no en el balance calórico.
+
+### Los programas
+
+Tres plantillas cargables de un toque, que rellenan los bloques y desde ahí se
+editan:
+
+| Programa | Estructura | Cuándo |
+|---|---|---|
+| **Base Z2 · 40 min** | 5′ @4.5/2% + 30′ @5.2/9% + 5′ @4/0% | 2-3 por semana |
+| **Intervalos de pendiente · 42 min** | 6′ cal. + 8×(2′ @4.8/13% + 2′ @5.2/3%) + 4′ calma | 1 por semana, nunca antes de pierna |
+| **Larga suave · 60 min** | 5′ + 50′ @5.5/6% + 5′ | Día sin pesas |
+
+La progresión sube **antes la pendiente que la velocidad**: el coste crece mucho
+más rápido y el impacto articular sigue siendo el de caminar, que es la razón de
+elegir cinta inclinada en vez de correr.

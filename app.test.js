@@ -1085,6 +1085,78 @@ describe('datos de recuperación', () => {
   });
 });
 
+describe('caminata en cinta con inclinación', () => {
+  const { calcWalkBlock, calcCardioSession, getCardioSummary, PROGRAMAS_CAMINATA, VEL_MARCHA_MAX } = require('./app.js');
+
+  test('la pendiente domina el coste: mismo tiempo y velocidad, más del doble de kcal', () => {
+    const llano = calcWalkBlock({ min: 30, vel: 5, incl: 0 }, 92);
+    const cuesta = calcWalkBlock({ min: 30, vel: 5, incl: 12 }, 92);
+    expect(cuesta.km).toBe(llano.km);            // misma distancia
+    expect(cuesta.kcal).toBeGreaterThan(llano.kcal * 2);
+  });
+
+  test('coincide con la ecuación de marcha del ACSM', () => {
+    // 5 km/h = 83.33 m/min al 10%: VO2 = 0.1·83.33 + 1.8·83.33·0.10 + 3.5 = 26.83
+    // kcal/min = 26.83 × 90 / 1000 × 5 = 12.07 → 30 min ≈ 362 kcal
+    const r = calcWalkBlock({ min: 30, vel: 5, incl: 10 }, 90);
+    expect(r.kcal).toBeGreaterThanOrEqual(358);
+    expect(r.kcal).toBeLessThanOrEqual(366);
+    expect(r.mets).toBeCloseTo(7.7, 1);
+  });
+
+  test('el desnivel acumulado sale de la distancia por la pendiente', () => {
+    // 1 hora a 5 km/h al 10% = 5 km × 0.10 = 500 m de desnivel
+    expect(calcWalkBlock({ min: 60, vel: 5, incl: 10 }, 90).desnivel).toBe(500);
+  });
+
+  test('sin peso registrado no inventa calorías', () => {
+    const r = calcWalkBlock({ min: 30, vel: 5, incl: 8 }, 0);
+    expect(r.kcal).toBe(0);
+    expect(r.km).toBe(2.5);   // lo que no depende del peso sigue saliendo
+  });
+
+  test('avisa cuando la velocidad se sale del rango de marcha', () => {
+    expect(calcWalkBlock({ min: 10, vel: VEL_MARCHA_MAX + 1, incl: 2 }, 90).fueraDeRango).toBe(true);
+    expect(calcWalkBlock({ min: 10, vel: 5.5, incl: 2 }, 90).fueraDeRango).toBe(false);
+  });
+
+  test('las medias de la sesión se ponderan por tiempo, no por bloque', () => {
+    // Un minuto al 20% no puede pesar lo mismo que 29 minutos al 2%
+    const r = calcCardioSession({ bloques: [
+      { min: 1, vel: 5, incl: 20 },
+      { min: 29, vel: 5, incl: 2 },
+    ] }, 90);
+    expect(r.min).toBe(30);
+    expect(r.inclMedia).toBeCloseTo(2.6, 1);   // la media simple daría 11
+  });
+
+  test('suma los bloques de una sesión de intervalos', () => {
+    const inter = PROGRAMAS_CAMINATA.find(p => p.key === 'intervalos');
+    const r = calcCardioSession(inter, 92);
+    expect(r.min).toBe(42);
+    expect(r.bloques).toHaveLength(18);         // calentamiento + 8×2 + vuelta a la calma
+    expect(r.kcal).toBeGreaterThan(300);
+  });
+
+  test('el resumen semanal solo cuenta los días de la ventana', () => {
+    const log = {
+      '2026-08-01': [{ id: 'a', bloques: [{ min: 40, vel: 5, incl: 9 }] }],  // fuera de los 7 días
+      '2026-08-10': [{ id: 'b', bloques: [{ min: 40, vel: 5, incl: 9 }] }],
+      '2026-08-12': [{ id: 'c', bloques: [{ min: 30, vel: 5, incl: 6 }] }],
+    };
+    const r = getCardioSummary(log, 92, '2026-08-14', 7);
+    expect(r.sesiones).toBe(2);
+    expect(r.min).toBe(70);
+    expect(r.inclMax).toBe(9);
+  });
+
+  test('todos los programas son caminata de verdad, no trote encubierto', () => {
+    PROGRAMAS_CAMINATA.forEach(p => {
+      expect(calcCardioSession(p, 92).fueraDeRango).toBe(false);
+    });
+  });
+});
+
 describe('días sin comida registrada', () => {
   const { buildDailyNutrition, averageDailyNutrition, calcTDEE, analyzeMacroPattern } = require('./app.js');
 
