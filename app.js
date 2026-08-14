@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W70";
+const APP_VERSION = "v2026.07.29-W71";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1414,6 +1414,59 @@ function getCardioSummary(cardiolog, pesoKg, hasta, dias = 7) {
     inclMax: sesiones.reduce((a, s) => Math.max(a, ...s.bloques.map(b => b.incl)), 0),
     detalle: sesiones,
   };
+}
+
+/* ===== SESIÓN GUIADA =====
+   En la cinta no se puede ir leyendo la pantalla: hay que saber QUÉ TOCAR y
+   CUÁNDO, de un vistazo y con aviso por delante. Estas dos funciones son toda
+   la lógica del guiado, separadas de la interfaz para poder probarlas.        */
+const AVISO_SEG = 15;   // segundos de antelación con que se anuncia el cambio
+
+/** Dónde está la sesión en el segundo `seg`: bloque actual, siguiente y restos. */
+function walkStateAt(bloques, seg) {
+  const lista = (bloques || []).filter(b => (parseFloat(b?.min) || 0) > 0);
+  const total = lista.reduce((a, b) => a + parseFloat(b.min) * 60, 0);
+  const t = Math.max(0, Math.min(seg, total));
+  let acum = 0, idx = -1;
+  for (let i = 0; i < lista.length; i++) {
+    const dur = parseFloat(lista[i].min) * 60;
+    // `<` y no `<=`: en el segundo exacto del cambio ya mandas el bloque nuevo,
+    // que es lo que el usuario tiene delante en la cinta.
+    if (t < acum + dur) { idx = i; break; }
+    acum += dur;
+  }
+  const terminado = idx === -1 || total === 0;
+  const bloque = terminado ? null : lista[idx];
+  const restanteBloque = terminado ? 0 : Math.ceil(acum + parseFloat(bloque.min) * 60 - t);
+  return {
+    idx: terminado ? lista.length : idx,
+    bloque,
+    siguiente: terminado ? null : (lista[idx + 1] || null),
+    restanteBloque,
+    transcurrido: Math.floor(t),
+    total: Math.round(total),
+    restanteTotal: Math.ceil(total - t),
+    // El aviso solo tiene sentido si hay algo a lo que cambiar: en el último
+    // bloque avisar de "prepárate" sin decir a qué es peor que no avisar.
+    avisando: !terminado && !!lista[idx + 1] && restanteBloque <= AVISO_SEG,
+    terminado,
+  };
+}
+
+/** Recorta los bloques a lo realmente hecho, para guardar una sesión cortada. */
+function trimBlocksTo(bloques, seg) {
+  const lista = (bloques || []).filter(b => (parseFloat(b?.min) || 0) > 0);
+  let restante = Math.max(0, seg) / 60;   // en minutos
+  const hechos = [];
+  for (const b of lista) {
+    const min = parseFloat(b.min);
+    if (restante <= 0) break;
+    // Al décimo de minuto: guardar "2.4166666 min" sería precisión falsa
+    const usado = Math.round(Math.min(min, restante) * 10) / 10;
+    if (usado > 0) hechos.push({ ...b, min: usado });
+    restante -= min;
+  }
+  return hechos;
 }
 
 /* Programas de caminata inclinada. Son plantillas: al cargarlas rellenan los
@@ -7539,11 +7592,237 @@ function MarkdownText({ text, style = {} }) {
    No suma al TDEE. El TDEE de la app sale de la ingesta frente al cambio de
    peso real, así que el gasto de caminar YA está dentro: sumarlo otra vez sería
    contarlo dos veces y acabaría inflando el objetivo calórico. */
+/* Sesión guiada de caminata: dice qué poner en la cinta y avisa antes de cada
+   cambio. Pensada para mirarse de reojo mientras se camina, así que los números
+   que hay que tocar (pendiente y velocidad) van en grande y todo lo demás es
+   secundario.
+
+   Tres decisiones que vienen de que el móvil está apoyado en la cinta:
+   · El tiempo se calcula desde una marca de reloj, NO acumulando en un
+     intervalo: el navegador ralentiza los temporizadores en segundo plano y una
+     cuenta acumulada se retrasaría minutos a lo largo de la sesión.
+   · Se pide wake lock para que la pantalla no se apague a mitad de un bloque.
+   · Cada cambio suena y vibra, porque nadie va a estar mirando en el segundo
+     exacto en que toca subir la cuesta. */
+function SesionGuiada({ bloques, pesoKg, onGuardar, onCerrar }) {
+  const [seg, setSeg] = useState(0);
+  const [pausada, setPausada] = useState(false);
+  const inicioRef = useRef(Date.now());
+  const pausaRef = useRef({ desde: null, total: 0 });
+  const audioRef = useRef(null);
+  const wakeRef = useRef(null);
+  const ultimoAvisoRef = useRef(-1);
+
+  const est = walkStateAt(bloques, seg);
+
+  // Pitido sintetizado: no hace falta ningún archivo y funciona sin red.
+  const pitar = (freq, ms) => {
+    try {
+      const ctx = audioRef.current;
+      if (!ctx) return;
+      const osc = ctx.createOscillator(), gan = ctx.createGain();
+      osc.frequency.value = freq;
+      osc.type = "sine";
+      gan.gain.setValueAtTime(0.001, ctx.currentTime);
+      gan.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + 0.01);
+      gan.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + ms / 1000);
+      osc.connect(gan); gan.connect(ctx.destination);
+      osc.start(); osc.stop(ctx.currentTime + ms / 1000);
+    } catch (e) { /* sin audio se sigue igual: el aviso también es visual */ }
+  };
+  const vibrar = (patron) => { try { navigator.vibrate?.(patron); } catch (e) {} };
+
+  // El contexto de audio y el wake lock necesitan un gesto del usuario, y este
+  // componente solo se monta al pulsar "Empezar".
+  useEffect(() => {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) { audioRef.current = new AC(); audioRef.current.resume?.(); }
+    } catch (e) {}
+    const pedirWake = async () => {
+      try { wakeRef.current = await navigator.wakeLock?.request("screen"); } catch (e) {}
+    };
+    pedirWake();
+    const alVolver = () => { if (document.visibilityState === "visible") pedirWake(); };
+    document.addEventListener("visibilitychange", alVolver);
+    return () => {
+      document.removeEventListener("visibilitychange", alVolver);
+      try { wakeRef.current?.release?.(); } catch (e) {}
+      try { audioRef.current?.close?.(); } catch (e) {}
+    };
+  }, []);
+
+  useEffect(() => {
+    if (pausada) return;
+    const id = setInterval(() => {
+      setSeg(Math.floor((Date.now() - inicioRef.current - pausaRef.current.total) / 1000));
+    }, 250);
+    return () => clearInterval(id);
+  }, [pausada]);
+
+  // Avisos: cuenta atrás en los últimos segundos y un pitido largo al cambiar.
+  useEffect(() => {
+    if (pausada || est.terminado) return;
+    const clave = `${est.idx}:${est.restanteBloque}`;
+    if (ultimoAvisoRef.current === clave) return;
+    ultimoAvisoRef.current = clave;
+    if (est.restanteBloque === 0) { pitar(880, 600); vibrar([300]); }
+    else if (est.avisando && est.restanteBloque <= 3) { pitar(660, 120); vibrar(80); }
+    else if (est.avisando && est.restanteBloque === AVISO_SEG) { pitar(520, 200); vibrar(150); }
+  }, [est.idx, est.restanteBloque, est.avisando, est.terminado, pausada]);
+
+  // Al terminar, un aviso distinto y más largo
+  const finRef = useRef(false);
+  useEffect(() => {
+    if (est.terminado && !finRef.current) {
+      finRef.current = true;
+      pitar(440, 900); vibrar([200, 100, 200, 100, 400]);
+      try { wakeRef.current?.release?.(); } catch (e) {}
+    }
+  }, [est.terminado]);
+
+  const alternarPausa = () => {
+    setPausada(p => {
+      if (p) { pausaRef.current.total += Date.now() - pausaRef.current.desde; pausaRef.current.desde = null; }
+      else { pausaRef.current.desde = Date.now(); }
+      return !p;
+    });
+  };
+
+  const saltar = () => {
+    // Adelantar el reloj hasta el inicio del bloque siguiente en vez de tocar
+    // un contador aparte: así el tiempo sigue saliendo de una sola fuente.
+    const lista = (bloques || []).filter(b => (parseFloat(b?.min) || 0) > 0);
+    const hasta = lista.slice(0, est.idx + 1).reduce((a, b) => a + parseFloat(b.min) * 60, 0);
+    pausaRef.current.total -= (hasta - seg) * 1000;
+    setSeg(hasta);
+  };
+
+  const terminar = () => {
+    const hechos = trimBlocksTo(bloques, est.transcurrido);
+    if (hechos.length) onGuardar(hechos);
+    else onCerrar();
+  };
+
+  const mmss = (s) => `${Math.floor(Math.max(0, s) / 60)}:${String(Math.max(0, s) % 60).padStart(2, "0")}`;
+  const resumen = calcCardioSession({ bloques: trimBlocksTo(bloques, est.transcurrido) }, pesoKg);
+  const pctBloque = est.bloque ? 1 - est.restanteBloque / (parseFloat(est.bloque.min) * 60) : 1;
+  const pctTotal = est.total ? est.transcurrido / est.total : 0;
+  const acento = est.terminado ? C.lime : est.avisando ? C.amber : C.cyan;
+
+  return (
+    <div style={{position:"fixed", inset:0, background:C.bg, zIndex:10000, display:"flex",
+                 flexDirection:"column", padding:"18px 18px calc(18px + env(safe-area-inset-bottom))"}}>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14}}>
+        <span style={{fontSize:11, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".08em"}}>
+          Caminata guiada · bloque {Math.min(est.idx + 1, est.terminado ? est.idx : est.idx + 1)}
+          {!est.terminado && ` de ${(bloques || []).filter(b => (parseFloat(b?.min) || 0) > 0).length}`}
+        </span>
+        <button onClick={terminar} style={{background:"none", border:`1px solid ${C.line}`, borderRadius:8,
+          color:C.muted, fontSize:11.5, fontWeight:700, padding:"5px 10px", cursor:"pointer"}}>
+          Terminar
+        </button>
+      </div>
+
+      {est.terminado ? (
+        <div style={{flex:1, display:"flex", flexDirection:"column", justifyContent:"center", alignItems:"center", textAlign:"center", gap:6}}>
+          <div style={{fontSize:44, fontWeight:900, color:C.lime, lineHeight:1}}>¡Hecho!</div>
+          <div style={{fontSize:15, fontWeight:800, color:C.ink, marginTop:6}}>
+            {resumen.min} min · {resumen.km} km · {resumen.desnivel} m ↑
+          </div>
+          <div style={{fontSize:13, fontWeight:800, color:C.lime}}>{resumen.kcal} kcal</div>
+          <div style={{fontSize:11, color:C.muted, marginTop:2}}>
+            Media {resumen.velMedia} km/h al {resumen.inclMedia}%
+          </div>
+        </div>
+      ) : (
+        <div style={{flex:1, display:"flex", flexDirection:"column", justifyContent:"center"}}>
+          {est.avisando && (
+            <div style={{background:alfa(C.amber, 14), border:`1px solid ${C.amber}`, borderRadius:12,
+                         padding:"9px 12px", marginBottom:14, textAlign:"center"}}>
+              <div style={{fontSize:11, fontWeight:800, color:C.amber, textTransform:"uppercase", letterSpacing:".06em"}}>
+                En {est.restanteBloque} s cambia
+              </div>
+              <div style={{fontSize:15, fontWeight:900, color:C.ink, marginTop:2}}>
+                {est.siguiente.incl}% · {est.siguiente.vel} km/h
+              </div>
+            </div>
+          )}
+
+          <div style={{display:"flex", gap:10, marginBottom:14}}>
+            {[["Pendiente", `${est.bloque.incl}%`], ["Velocidad", `${est.bloque.vel}`]].map(([lbl, val], i) => (
+              <div key={lbl} style={{flex:1, background:C.panel, border:`1px solid ${C.line}`, borderRadius:16,
+                                     padding:"14px 10px", textAlign:"center"}}>
+                <div style={{fontSize:10.5, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".06em"}}>{lbl}</div>
+                <div style={{fontSize:46, fontWeight:900, color:acento, lineHeight:1.05, marginTop:2}}>{val}</div>
+                <div style={{fontSize:10.5, color:C.muted}}>{i === 0 ? "inclinación" : "km/h"}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:56, fontWeight:900, color:C.ink, lineHeight:1, fontVariantNumeric:"tabular-nums"}}>
+              {mmss(est.restanteBloque)}
+            </div>
+            <div style={{fontSize:11, color:C.muted, marginTop:2}}>restante en este bloque</div>
+          </div>
+
+          <div style={{height:6, borderRadius:4, background:C.track, marginTop:12, overflow:"hidden"}}>
+            <div style={{height:"100%", width:`${Math.round(pctBloque * 100)}%`, background:acento, borderRadius:4}}/>
+          </div>
+
+          <div style={{fontSize:11.5, color:C.muted, marginTop:14, textAlign:"center"}}>
+            {est.siguiente
+              ? <>Después: <b style={{color:C.ink}}>{est.siguiente.incl}% · {est.siguiente.vel} km/h</b> durante {est.siguiente.min} min</>
+              : "Último bloque"}
+          </div>
+        </div>
+      )}
+
+      <div style={{marginTop:14}}>
+        <div style={{display:"flex", justifyContent:"space-between", fontSize:10.5, color:C.muted, marginBottom:4}}>
+          <span>{mmss(est.transcurrido)} de {mmss(est.total)}</span>
+          <span>{resumen.kcal} kcal · {resumen.desnivel} m ↑</span>
+        </div>
+        <div style={{height:4, borderRadius:3, background:C.track, overflow:"hidden", marginBottom:12}}>
+          <div style={{height:"100%", width:`${Math.round(pctTotal * 100)}%`, background:C.lime, borderRadius:3}}/>
+        </div>
+
+        {est.terminado ? (
+          <div style={{display:"flex", gap:8}}>
+            <button onClick={onCerrar} style={{flex:1, padding:"13px", borderRadius:12, border:`1px solid ${C.line}`,
+              background:C.panel, color:C.muted, fontWeight:800, fontSize:13, cursor:"pointer"}}>
+              Descartar
+            </button>
+            <button onClick={terminar} style={{flex:2, padding:"13px", borderRadius:12, border:"none",
+              background:C.lime, color:C.onAccent, fontWeight:800, fontSize:13.5, cursor:"pointer"}}>
+              Guardar caminata
+            </button>
+          </div>
+        ) : (
+          <div style={{display:"flex", gap:8}}>
+            <button onClick={alternarPausa} style={{flex:2, padding:"13px", borderRadius:12,
+              background: pausada ? C.lime : C.panel, color: pausada ? C.onAccent : C.ink,
+              border: pausada ? "none" : `1px solid ${C.line}`, fontWeight:800, fontSize:13.5, cursor:"pointer"}}>
+              {pausada ? "Reanudar" : "Pausa"}
+            </button>
+            <button onClick={saltar} style={{flex:1, padding:"13px", borderRadius:12, border:`1px solid ${C.line}`,
+              background:C.panel, color:C.muted, fontWeight:800, fontSize:13, cursor:"pointer"}}>
+              Saltar
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CardioCinta({ cardiolog, setCardiolog, selectedDateStr, pesoKg }) {
   const sesionesHoy = (cardiolog || {})[selectedDateStr] || [];
   const [abierto, setAbierto] = useState(false);
   const [bloques, setBloques] = useState([{ min: 5, vel: 4.5, incl: 2 }, { min: 30, vel: 5.2, incl: 9 }]);
   const [nota, setNota] = useState("");
+  const [guiando, setGuiando] = useState(null);   // bloques de la sesión en curso
 
   const previa = calcCardioSession({ bloques }, pesoKg);
   const semana = getCardioSummary(cardiolog, pesoKg, selectedDateStr, 7);
@@ -7557,6 +7836,15 @@ function CardioCinta({ cardiolog, setCardiolog, selectedDateStr, pesoKg }) {
     const sesion = { id: "c" + Date.now(), bloques: limpios, nota: nota.trim() };
     setCardiolog({ ...(cardiolog || {}), [selectedDateStr]: [...sesionesHoy, sesion] });
     setNota("");
+    setAbierto(false);
+  };
+
+  // Al terminar la sesión guiada se guarda lo REALMENTE hecho: si se corta a la
+  // mitad, queda registrada la mitad, no el plan entero.
+  const guardarGuiada = (hechos) => {
+    const sesion = { id: "c" + Date.now(), bloques: hechos, nota: "Sesión guiada", guiada: true };
+    setCardiolog({ ...(cardiolog || {}), [selectedDateStr]: [...sesionesHoy, sesion] });
+    setGuiando(null);
     setAbierto(false);
   };
 
@@ -7642,15 +7930,25 @@ function CardioCinta({ cardiolog, setCardiolog, selectedDateStr, pesoKg }) {
             {PROGRAMAS_CAMINATA.map(pr => {
               const r = calcCardioSession(pr, pesoKg);
               return (
-                <button key={pr.key} onClick={() => setBloques(pr.bloques.map(b => ({ ...b })))}
-                  style={{textAlign:"left", background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10,
-                          padding:"7px 9px", cursor:"pointer"}}>
+                <div key={pr.key} style={{background:C.panel2, border:`1px solid ${C.line}`, borderRadius:10, padding:"7px 9px"}}>
                   <div style={{display:"flex", justifyContent:"space-between", gap:8, alignItems:"baseline"}}>
                     <span style={{fontSize:11.5, fontWeight:800, color:C.ink}}>{pr.nombre}</span>
                     <span style={{fontSize:10.5, fontWeight:800, color:C.lime, whiteSpace:"nowrap"}}>~{r.kcal} kcal</span>
                   </div>
                   <div style={{fontSize:9.5, color:C.muted, marginTop:1}}>{pr.para} {pr.detalle}</div>
-                </button>
+                  <div style={{display:"flex", gap:6, marginTop:6}}>
+                    <button onClick={() => setGuiando(pr.bloques.map(b => ({ ...b })))}
+                      style={{flex:2, background:C.lime, color:C.onAccent, border:"none", borderRadius:8,
+                              padding:"6px 8px", fontSize:11, fontWeight:800, cursor:"pointer"}}>
+                      ▶ Empezar guiado
+                    </button>
+                    <button onClick={() => setBloques(pr.bloques.map(b => ({ ...b })))}
+                      style={{flex:1, background:"transparent", color:C.muted, border:`1px solid ${C.line}`, borderRadius:8,
+                              padding:"6px 8px", fontSize:11, fontWeight:700, cursor:"pointer"}}>
+                      Editar
+                    </button>
+                  </div>
+                </div>
               );
             })}
           </div>
@@ -7697,13 +7995,31 @@ function CardioCinta({ cardiolog, setCardiolog, selectedDateStr, pesoKg }) {
             </div>
           </div>
 
-          <button onClick={guardar} disabled={previa.min === 0}
-            style={{width:"100%", marginTop:8, padding:"10px", borderRadius:11, border:"none",
-                    background: previa.min === 0 ? C.panel2 : C.lime, color: previa.min === 0 ? C.muted : C.onAccent,
-                    fontWeight:800, fontSize:13, cursor: previa.min === 0 ? "default" : "pointer"}}>
-            Guardar caminata
-          </button>
+          <div style={{display:"flex", gap:8, marginTop:8}}>
+            <button onClick={() => setGuiando(bloques.filter(b => (parseFloat(b.min) || 0) > 0).map(b => ({ ...b })))}
+              disabled={previa.min === 0}
+              style={{flex:2, padding:"10px", borderRadius:11, border:"none",
+                      background: previa.min === 0 ? C.panel2 : C.lime, color: previa.min === 0 ? C.muted : C.onAccent,
+                      fontWeight:800, fontSize:13, cursor: previa.min === 0 ? "default" : "pointer"}}>
+              ▶ Empezar guiado
+            </button>
+            <button onClick={guardar} disabled={previa.min === 0}
+              style={{flex:1, padding:"10px", borderRadius:11, border:`1px solid ${C.line}`,
+                      background:"transparent", color:C.muted,
+                      fontWeight:800, fontSize:12, cursor: previa.min === 0 ? "default" : "pointer"}}>
+              Ya la hice
+            </button>
+          </div>
         </div>
+      )}
+
+      {guiando && (
+        <SesionGuiada
+          bloques={guiando}
+          pesoKg={pesoKg}
+          onGuardar={guardarGuiada}
+          onCerrar={() => setGuiando(null)}
+        />
       )}
 
       {!abierto && sesionesHoy.length === 0 && (
@@ -20904,6 +21220,7 @@ if (typeof module !== 'undefined' && module.exports) {
     evaluateRecovery, calcRestingHRBaseline, buildRecompositionSeries, buildMetricChanges, getWeeklyStats,
     buildDailyNutrition, averageDailyNutrition, sumDayNutrition, calcTDEE, analyzeMacroPattern,
     calcWalkBlock, calcCardioSession, getCardioSummary, PROGRAMAS_CAMINATA, VEL_MARCHA_MAX,
+    walkStateAt, trimBlocksTo, AVISO_SEG,
     RECOVERY_FIELDS, getLocalDateStr,
     normalizeMuscle, canonMuscleName, dedupeMuscles, calcMuscleVolumeBalance, SLUG_MUSCLE,
     normalizeBodyEntry, mergeMetricsUpTo, validateBodyMetrics, RANGOS_BIO,

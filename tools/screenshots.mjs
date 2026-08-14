@@ -134,6 +134,14 @@ const ESCENAS = [
   { id: "entreno-15-caminata-programas", tab: "Entreno", scrollHasta: "Caminata en cinta",
     accion: async (page) => { await page.getByRole("button", { name: "+ Registrar" }).first().click({ timeout: 5000 }); },
     scrollDespues: 200 },
+  // Sesión guiada: la pantalla que se mira de reojo desde la cinta. Con el
+  // reloj congelado siempre arranca en el segundo 0, así que es comparable.
+  { id: "entreno-16-caminata-guiada", tab: "Entreno", scrollHasta: "Caminata en cinta",
+    accion: async (page) => {
+      await page.getByRole("button", { name: "+ Registrar" }).first().click({ timeout: 5000 });
+      await page.waitForTimeout(500);
+      await page.getByRole("button", { name: /Empezar guiado/ }).first().click({ timeout: 5000 });
+    } },
   { id: "registro-01-peso-y-tendencia", tab: "Registro", scroll: 0 },
   // Registro de cintura: la métrica que mejor distingue perder grasa de perder peso
   { id: "registro-06-cintura", tab: "Registro", scroll: 0,

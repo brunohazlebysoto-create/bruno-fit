@@ -1066,3 +1066,48 @@ editan:
 La progresión sube **antes la pendiente que la velocidad**: el coste crece mucho
 más rápido y el impacto articular sigue siendo el de caminar, que es la razón de
 elegir cinta inclinada en vez de correr.
+
+## Sesión guiada: la app dice cómo configurar la cinta (W71)
+
+> *"la idea es que al elegir qué modo me vayas avisando por la aplicación cómo
+> ir configurando la cinta"*
+
+Cargar un programa dejaba una lista de bloques, pero caminando en la cinta esa
+lista no sirve: hay que saber **qué tocar y cuándo**, sin ponerse a leer.
+
+Al elegir un programa ahora hay **▶ Empezar guiado**, que abre una pantalla a
+pantalla completa con la pendiente y la velocidad **en grande**, la cuenta atrás
+del bloque y lo que viene después. Todo lo demás es secundario y va pequeño.
+
+### Los avisos
+
+- A **15 segundos** del cambio, la pantalla se pone ámbar y anuncia el valor
+  siguiente: *"En 15 s cambia → 9% · 5.2 km/h"*. Da tiempo a llegar a los
+  botones.
+- Cuenta atrás con pitidos en los últimos 3 segundos y un tono largo justo en
+  el cambio, más vibración. El pitido se sintetiza con WebAudio: no hace falta
+  ningún archivo y funciona sin conexión.
+- En el **último bloque no avisa**. Decir "prepárate" sin poder decir a qué es
+  peor que no decir nada.
+
+### Tres detalles que vienen de que el móvil está apoyado en la cinta
+
+1. **El tiempo se calcula desde una marca de reloj**, no acumulando en un
+   intervalo. El navegador ralentiza los temporizadores cuando la pestaña pierde
+   el foco, y una cuenta acumulada se retrasaría minutos a lo largo de la
+   sesión.
+2. **Wake lock**: la pantalla no se apaga a mitad de bloque, y se vuelve a pedir
+   al regresar a la app.
+3. **Los cambios suenan y vibran**, porque nadie va a estar mirando en el
+   segundo exacto en que toca subir la cuesta.
+
+### Al terminar se guarda lo que se hizo, no el plan
+
+Si te bajas a los 20 minutos de un programa de 40, `trimBlocksTo` recorta los
+bloques a lo realmente completado y eso es lo que se registra. Guardar el plan
+entero convertiría el registro en una lista de intenciones.
+
+También hay **Pausa** (que descuenta el tiempo parado) y **Saltar bloque**, que
+adelanta el reloj hasta el inicio del siguiente en vez de llevar un contador
+aparte: así el tiempo sigue saliendo de una sola fuente y no puede
+descuadrarse.

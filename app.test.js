@@ -1157,6 +1157,99 @@ describe('caminata en cinta con inclinación', () => {
   });
 });
 
+describe('sesión guiada de caminata', () => {
+  const { walkStateAt, trimBlocksTo, AVISO_SEG, PROGRAMAS_CAMINATA } = require('./app.js');
+
+  const PLAN = [
+    { min: 5,  vel: 4.5, incl: 2 },
+    { min: 30, vel: 5.2, incl: 9 },
+    { min: 5,  vel: 4.0, incl: 0 },
+  ];
+
+  test('en el segundo 0 manda el primer bloque y anuncia el siguiente', () => {
+    const e = walkStateAt(PLAN, 0);
+    expect(e.idx).toBe(0);
+    expect(e.bloque.incl).toBe(2);
+    expect(e.siguiente.incl).toBe(9);
+    expect(e.restanteBloque).toBe(300);
+    expect(e.total).toBe(2400);
+  });
+
+  test('en el segundo exacto del cambio ya manda el bloque nuevo', () => {
+    // Es lo que el usuario tiene delante en la cinta: a los 5:00 la cuesta ya
+    // subió. Con `<=` en la comparación seguiría diciendo el bloque viejo.
+    expect(walkStateAt(PLAN, 299).bloque.incl).toBe(2);
+    expect(walkStateAt(PLAN, 300).bloque.incl).toBe(9);
+  });
+
+  test('avisa con antelación antes de cada cambio', () => {
+    const antes = walkStateAt(PLAN, 300 - AVISO_SEG - 1);
+    const dentro = walkStateAt(PLAN, 300 - AVISO_SEG);
+    expect(antes.avisando).toBe(false);
+    expect(dentro.avisando).toBe(true);
+    expect(dentro.siguiente.incl).toBe(9);
+  });
+
+  test('no avisa en el último bloque: no hay nada a lo que cambiar', () => {
+    // Avisar "prepárate" sin poder decir a qué es peor que no avisar
+    const e = walkStateAt(PLAN, 2400 - 5);
+    expect(e.siguiente).toBe(null);
+    expect(e.avisando).toBe(false);
+  });
+
+  test('al pasar el tiempo total la sesión queda terminada', () => {
+    const e = walkStateAt(PLAN, 2400);
+    expect(e.terminado).toBe(true);
+    expect(e.restanteTotal).toBe(0);
+    expect(e.transcurrido).toBe(2400);
+  });
+
+  test('el tiempo transcurrido nunca se pasa del total ni baja de cero', () => {
+    expect(walkStateAt(PLAN, 99999).transcurrido).toBe(2400);
+    expect(walkStateAt(PLAN, -50).transcurrido).toBe(0);
+    expect(walkStateAt(PLAN, -50).idx).toBe(0);
+  });
+
+  test('ignora los bloques de duración cero en vez de atascarse en ellos', () => {
+    const e = walkStateAt([{ min: 0, vel: 5, incl: 5 }, { min: 10, vel: 5, incl: 9 }], 0);
+    expect(e.bloque.incl).toBe(9);
+    expect(e.total).toBe(600);
+  });
+
+  test('cortar a la mitad guarda lo hecho, no el plan entero', () => {
+    const hechos = trimBlocksTo(PLAN, 20 * 60);   // se bajó a los 20 minutos
+    expect(hechos).toHaveLength(2);
+    expect(hechos[0].min).toBe(5);
+    expect(hechos[1].min).toBe(15);               // 15 de los 30 previstos
+    expect(hechos[1].incl).toBe(9);
+  });
+
+  test('terminar la sesión entera guarda exactamente el plan', () => {
+    const hechos = trimBlocksTo(PLAN, 2400);
+    expect(hechos.map(b => b.min)).toEqual([5, 30, 5]);
+  });
+
+  test('cortar antes de empezar no guarda nada', () => {
+    expect(trimBlocksTo(PLAN, 0)).toEqual([]);
+  });
+
+  test('el programa de intervalos avisa en cada una de sus 16 transiciones', () => {
+    const inter = PROGRAMAS_CAMINATA.find(p => p.key === 'intervalos');
+    const cambios = [];
+    let previo = null;
+    for (let s = 0; s < 42 * 60; s++) {
+      const e = walkStateAt(inter.bloques, s);
+      if (previo !== null && e.idx !== previo) cambios.push(s);
+      previo = e.idx;
+    }
+    expect(cambios).toHaveLength(17);             // 18 bloques → 17 cambios
+    // Cada cambio tuvo su aviso previo salvo el último, que entra en el bloque final
+    cambios.slice(0, -1).forEach(s => {
+      expect(walkStateAt(inter.bloques, s - 1).avisando).toBe(true);
+    });
+  });
+});
+
 describe('días sin comida registrada', () => {
   const { buildDailyNutrition, averageDailyNutrition, calcTDEE, analyzeMacroPattern } = require('./app.js');
 
