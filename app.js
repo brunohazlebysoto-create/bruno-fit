@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W68";
+const APP_VERSION = "v2026.07.29-W69";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -13117,9 +13117,20 @@ tr:last-child td{border-bottom:none}
 
   useEffect(() => {
     (async () => {
-      const savedDaySug = await loadKey("last_day_sug", "");
+      // La rutina sugerida se guardaba como texto pelado, sin recordar PARA QUÉ
+      // día era ni de cuándo. Al recargar, la app la volvía a pintar bajo el
+      // título del día activo en ese momento: salía "Rutina del Día · Día A
+      // (Pecho + Bíceps)" encima de un texto de otra sesión completamente
+      // distinta. Ahora se guarda con su día y su fecha, y se descarta lo que
+      // no sea de hoy (una rutina de anteayer no es "la rutina de hoy") y lo
+      // que venga en el formato viejo, que es justamente el texto zombi.
+      const guardada = await loadKey("last_day_sug", null);
+      if (guardada && typeof guardada === "object" && guardada.texto && guardada.fecha === getLocalDateStr(new Date())) {
+        setDaySug(guardada);
+      } else if (guardada) {
+        saveKey("last_day_sug", null);
+      }
       const savedWk = await loadKey("last_wk_sug", "");
-      if (savedDaySug) setDaySug(savedDaySug);
       if (savedWk) setWk(savedWk);
     })();
   }, []);
@@ -14184,25 +14195,30 @@ tr:last-child td{border-bottom:none}
     setProgBusy("");
   };
 
-  const suggest = async() => { 
-    setDayBusy(true); 
+  const suggest = async() => {
+    const diaKey = sel, diaName = dayObj.name, hoy = getLocalDateStr(new Date());
+    setDayBusy(true);
     setDaySug("");
-    const hist = dayExs.map(ex => { 
+    const hist = dayExs.map(ex => {
       const a = (exlog[ex.name] || []).slice(0, 3).map(s => {
         const rirStr = (s.rir !== undefined && s.rir !== null) ? `@RIR ${s.rir}` : "";
         return `${s.w}kg x ${s.reps}${rirStr}`;
-      }).join(", "); 
-      return a ? `${ex.name}: ${a}` : `${ex.name}: sin marcas`; 
+      }).join(", ");
+      return a ? `${ex.name}: ${a}` : `${ex.name}: sin marcas`;
     }).join(" | ");
-    try{ 
+    const listaEx = dayExs.map((ex, i) => `${i + 1}. ${ex.name}`).join("\n");
+    try{
       const sensations = getRecentSensationsText();
-      const sys = `Eres el entrenador de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral, bodyProfile)} Orden del entrenamiento: mantener el orden asignado del split. Respuestas estructuradas y breves. Si Bruno reporta cansancio, dolores o fatiga acumulada en sus sensaciones recientes, adapta de forma proactiva la rutina sugerida hoy reduciendo volumen o intensidad.`;
-      const out = await callGemini([{role:"user", content:`Día del Split ${sel}: ${dayObj.name}. Músculos: ${dayMuscles.join(", ")}. Historial reciente: ${hist}.\nSensaciones/Notas recientes de Bruno: ${sensations}.\nPlanifica las series, pesos de calentamiento, y series de trabajo sugeridas hoy.`}], sys);
-      setDaySug(out); 
-      saveKey("last_day_sug", out);
-    } catch(e){ 
-      setDaySug(aiErr(e)); 
-    } 
+      // "Planifica hoy" a secas dejaba sitio a que el modelo contestara con un
+      // análisis de la sesión pasada o metiera ejercicios de otros grupos.
+      const sys = `Eres el entrenador de fuerza de Bruno. ${getProfileStr(activeMetrics.weight, activeMetrics.musculo, activeMetrics.grasaPct, activeMetrics.visceral, bodyProfile)} Planificas la sesión de HOY: no analizas sesiones pasadas ni comentas progresiones, solo dices qué hacer ahora. Trabajas EXCLUSIVAMENTE con los ejercicios de la lista que se te da, en ese orden, sin añadir ni sustituir ninguno. Respuestas estructuradas y breves. Si Bruno reporta cansancio, dolores o fatiga acumulada en sus sensaciones recientes, adapta de forma proactiva la rutina de hoy reduciendo volumen o intensidad.`;
+      const out = await callGemini([{role:"user", content:`Día del Split ${diaKey}: ${diaName}. Músculos: ${dayMuscles.join(", ")}.\n\nEJERCICIOS DE HOY (los únicos que puedes planificar, en este orden):\n${listaEx || "(el día no tiene ejercicios asignados)"}\n\nHistorial reciente de esos ejercicios: ${hist}.\nSensaciones/Notas recientes de Bruno: ${sensations}.\n\nPara CADA ejercicio de la lista indica: series de calentamiento con peso, series de trabajo con peso y repeticiones, y RIR objetivo. No incluyas ningún ejercicio que no esté en la lista.`}], sys);
+      const reg = { dayKey: diaKey, dayName: diaName, fecha: hoy, texto: out };
+      setDaySug(reg);
+      saveKey("last_day_sug", reg);
+    } catch(e){
+      setDaySug({ dayKey: diaKey, dayName: diaName, fecha: hoy, texto: aiErr(e) });
+    }
     setDayBusy(false);
   };
 
@@ -15219,10 +15235,13 @@ tr:last-child td{border-bottom:none}
           // El "·" ocupa menos que " + " y separa igual de claro.
           const resumen = (d.name || "").split(/\s*\+\s*/).map(t => t.trim()).filter(Boolean).join(" · ");
           const activo = sel === d.key;
+          // Cambiar de día ya no borra la rutina sugerida: lleva su día dentro
+          // y solo se pinta en el suyo, así que volver al día anterior la
+          // recupera en vez de perderla.
           return (
           <button
             key={d.key}
-            onClick={() => { setSel(d.key); setDaySug(""); setOpen(null); setAdding(false); }}
+            onClick={() => { setSel(d.key); setOpen(null); setAdding(false); }}
             title={d.name}
             style={{
               flex:"1 1 0",
@@ -16167,7 +16186,17 @@ tr:last-child td{border-bottom:none}
       >
         {dayBusy ? <><Loader2 size={16} style={{animation:"spin 1s linear infinite"}}/>Planificando…</> : <><Sparkles size={16}/>Rutina sugerida para hoy</>}
       </button>
-      <AIPanel title={`Rutina del Día · ${dayObj.name}`} busy={dayBusy} text={daySug} onClose={() => { setDaySug(""); saveKey("last_day_sug", ""); }}/>
+      {/* El título sale del día GUARDADO con la rutina, no del día activo: así
+          es imposible que un texto de otra sesión aparezca rotulado como la
+          rutina de hoy. Si la sugerencia es de otro día del split, no se pinta. */}
+      {(dayBusy || daySug?.dayKey === sel) && (
+        <AIPanel
+          title={`Rutina del Día · ${dayBusy ? dayObj.name : daySug.dayName}`}
+          busy={dayBusy}
+          text={dayBusy ? "" : daySug.texto}
+          onClose={() => { setDaySug(""); saveKey("last_day_sug", null); }}
+        />
+      )}
 
       <button 
         onClick={planWeek} 

@@ -814,9 +814,26 @@ describe('deload sensible a la composición corporal', () => {
   });
 
   test('una pérdida muy rápida eleva la urgencia frente a peso estable', () => {
-    const estable = detectDeloadNeed(exlogSteady, [], metricsOf(0));
-    const rapida = detectDeloadNeed(exlogSteady, [], metricsOf(1.6));
+    // Con `exlogSteady` no se detecta ninguna descarga, así que weeksSinceDeload
+    // se va al tope y la urgencia ya sale 'high' sin necesidad de la pérdida de
+    // peso: no quedaba margen para comprobar que sube, y el resultado dependía
+    // del día de la semana en que se ejecutaran las pruebas. Este historial
+    // lleva una descarga explícita hace 3 semanas, así que parte de 'none'.
+    const conDeload = (() => {
+      const out = { 'Press banca': [] };
+      for (let i = 0; i < 70; i++) {
+        const d = new Date(); d.setDate(d.getDate() - i);
+        const series = (i >= 21 && i <= 27) ? 1 : 4;   // semana de descarga
+        for (let s = 0; s < series; s++) {
+          out['Press banca'].push({ date: d.toISOString(), w: 80, reps: 8, type: 'work' });
+        }
+      }
+      return out;
+    })();
+    const estable = detectDeloadNeed(conDeload, [], metricsOf(0));
+    const rapida = detectDeloadNeed(conDeload, [], metricsOf(1.6));
     const ORDER = ['none', 'low', 'medium', 'high'];
+    expect(estable.urgency).toBe('none');
     expect(ORDER.indexOf(rapida.urgency)).toBeGreaterThan(ORDER.indexOf(estable.urgency));
     expect(rapida.reason).toMatch(/%\/sem/);
   });

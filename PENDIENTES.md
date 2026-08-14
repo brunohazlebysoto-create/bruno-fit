@@ -941,3 +941,64 @@ Dos frenos para no inventar datos:
 
 El preview ahora deja dos días sin comida a propósito: sin ellos las capturas
 nunca enseñarían un día estimado. Escena nueva `registro-10-historial-nutricional`.
+
+## "Rutina del Día" mostraba el análisis de otra sesión (W69)
+
+> *"te pedí la rutina de hoy bíceps y pectoral y me diste el análisis de otro día"*
+
+La captura lo dice todo: cabecera **"RUTINA DEL DÍA · DÍA A (PECHO + BÍCEPS)"**
+y debajo una lista de sentadillas, step-ups, face pulls y extensión de
+cuádriceps, con secciones **Progresión** y **Reparto muscular** — la estructura
+del análisis de entrenamiento, no la de una rutina.
+
+### Qué pasaba
+
+Intercepté la petición real: el prompt que sale al pulsar el botón es correcto
+(*"Día del Split A: Pecho + Bíceps… Press banca, Curl martillo…"*). El texto de
+la pantalla no venía de esa llamada.
+
+Venía de `localStorage`. La sugerencia se guardaba como **texto pelado**, sin
+recordar de qué día del split era ni de qué fecha:
+
+```js
+saveKey("last_day_sug", out);          // solo el texto
+…
+if (savedDaySug) setDaySug(savedDaySug);
+…
+<AIPanel title={`Rutina del Día · ${dayObj.name}`} text={daySug}/>
+```
+
+El título salía del día **activo en ese momento** y el texto, de lo último que
+se guardó **alguna vez**. Al recargar, cualquier texto viejo aparecía rotulado
+como la rutina del día actual. Y sin fecha, una sugerencia de hace una semana
+seguía presentándose como "la rutina de hoy".
+
+### El arreglo
+
+La sugerencia se guarda con su día y su fecha — `{dayKey, dayName, fecha,
+texto}` — y:
+
+- El **título sale del día guardado**, no del activo. Es imposible que un texto
+  quede rotulado con un día que no es el suyo.
+- Solo se pinta **en su propio día del split**. Cambiar de pestaña ya no la
+  borra: volver al día la recupera.
+- Al cargar se **descarta lo que no sea de hoy**, y también el formato viejo,
+  que es exactamente el texto zombi que se estaba viendo.
+
+### De paso, el prompt
+
+Decía *"Planifica las series, pesos de calentamiento y series de trabajo
+sugeridas hoy"* y le pasaba el historial. Con eso hay sitio para que el modelo
+conteste analizando la sesión pasada. Ahora el sistema dice explícitamente que
+planifica HOY y que **no analiza sesiones pasadas**, y recibe la lista numerada
+de los ejercicios del día con la instrucción de no añadir ninguno fuera de ella.
+
+### Una prueba que fallaba según el día de la semana
+
+Al ejecutar la batería apareció un fallo en `detectDeloadNeed` que no tenía que
+ver con este cambio: su caso "estable" no detectaba ninguna descarga, así que
+`weeksSinceDeload` se iba al tope y la urgencia ya salía `high` sin necesidad de
+la pérdida de peso. No quedaba margen para comprobar que sube, y el resultado
+dependía del día en que se ejecutara. El historial de prueba lleva ahora una
+descarga explícita hace 3 semanas: parte de `none` y la comparación significa
+algo.
