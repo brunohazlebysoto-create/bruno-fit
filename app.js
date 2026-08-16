@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W72";
+const APP_VERSION = "v2026.07.29-W73";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1758,11 +1758,182 @@ function calcBMRKatch(leanKg) {
 function calcBMR(profile, metrics) {
   const p = { ...DEFAULT_BODY_PROFILE, ...(profile || {}) };
   const m = metrics || {};
-  const lean = calcLeanMass(m.weight, m.grasaPct);
-  if (lean > 0) {
-    return { bmr: calcBMRKatch(lean), method: "Katch-McArdle", leanKg: lean };
+  const { leanKg, fuente } = getMeasuredLeanMass(m);
+  if (leanKg > 0) {
+    return {
+      bmr: calcBMRKatch(leanKg),
+      method: fuente === "medida" ? "Katch-McArdle (masa magra medida)" : "Katch-McArdle",
+      leanKg, leanFuente: fuente,
+      // El propio informe trae su estimación de BMR. No se usa para calcular,
+      // porque cada aparato aplica su fórmula y no se sabe cuál, pero se
+      // arrastra para poder contrastarla: una diferencia grande avisa de que
+      // alguna de las dos entradas está mal leída.
+      bmrInforme: parseInt(m.bmr) || null,
+    };
   }
-  return { bmr: calcBMRMifflin({ ...p, weight: m.weight }), method: "Mifflin-St Jeor", leanKg: 0 };
+  return { bmr: calcBMRMifflin({ ...p, weight: m.weight }), method: "Mifflin-St Jeor", leanKg: 0, leanFuente: null, bmrInforme: parseInt(m.bmr) || null };
+}
+
+/* ===== MASA MAGRA: LA MEDIDA GANA A LA FÓRMULA =====
+   `calcLeanMass` deduce la masa magra de peso × (1 − %grasa). Está bien cuando
+   solo hay báscula, pero el InBody MIDE el peso sin grasa directamente, y ese
+   valor es el que debe entrar en Katch-McArdle: es una medición, no una resta.
+   La diferencia no es cosmética — 1 kg de masa magra son ~22 kcal/día de BMR. */
+function getMeasuredLeanMass(metrics) {
+  const m = metrics || {};
+  const w = parseFloat(m.weight) || 0;
+  const medida = parseFloat(m.pesoSinGrasa);
+  // Se acepta solo si es físicamente posible: entre el 40% y el 98% del peso.
+  // Un dato mal leído del informe no puede colarse al BMR sin más.
+  if (isFinite(medida) && w > 0 && medida >= w * 0.4 && medida <= w * 0.98) {
+    return { leanKg: Math.round(medida * 10) / 10, fuente: "medida" };
+  }
+  const derivada = calcLeanMass(m.weight, m.grasaPct);
+  return derivada > 0 ? { leanKg: derivada, fuente: "derivada" } : { leanKg: 0, fuente: null };
+}
+
+/* ===== CUÁNTO SE MOVIÓ HOY =====
+   El día se clasificaba con `classifyFuelDay(entrenó, etiqueta del split)`: un
+   sí/no y una etiqueta fija. Con eso, una sesión de 20 minutos y una pierna de
+   90 con hora de cinta después recibían exactamente los mismos carbohidratos,
+   y la caminata inclinada no existía para la nutrición.
+
+   Esto estima el gasto REAL del día por encima del reposo, en kcal, sumando lo
+   que hay registrado: fuerza, cardio y pasos. Es una estimación y se dice que
+   lo es, pero está hecha con los datos del día en vez de con una etiqueta.     */
+const MET_FUERZA = 5.0;      // entrenamiento de fuerza con descansos
+const MIN_POR_SERIE = 3;     // si no se registró duración: serie + descanso
+const KCAL_POR_PASO_KG = 0.00038;   // ~0.5 kcal/kg por km, ~1300 pasos/km
+
+function calcDayActivityLoad(opts = {}) {
+  const {
+    exlog, cardiolog, workoutDurations, metricslog, dateStr,
+  } = opts;
+  const peso = parseFloat(opts.pesoKg) || 0;
+
+  // — Fuerza —
+  let series = 0, volumenKg = 0;
+  Object.values(exlog || {}).forEach(sets => (sets || []).forEach(st => {
+    if (!st || st.type === "warmup") return;
+    if ((st.date || "").slice(0, 10) !== dateStr) return;
+    series++;
+    volumenKg += (parseFloat(st.w) || 0) * (parseInt(st.reps) || 0);
+  }));
+  const durReg = parseInt((workoutDurations || {})[dateStr]) || 0;
+  const durFuerza = durReg > 0 ? durReg : series * MIN_POR_SERIE;
+  // MET incluye el metabolismo basal, así que se resta 1 para quedarse con el
+  // gasto POR ENCIMA del reposo; si no, se contaría dos veces con el BMR.
+  const kcalFuerza = peso > 0 && durFuerza > 0
+    ? Math.round(((MET_FUERZA - 1) * 3.5 * peso / 200) * durFuerza) : 0;
+
+  // — Cardio —
+  const sesiones = (cardiolog || {})[dateStr] || [];
+  const cardio = sesiones.reduce((a, s) => {
+    const r = calcCardioSession(s, peso);
+    return { min: a.min + r.min, kcal: a.kcal + r.kcal, desnivel: a.desnivel + r.desnivel };
+  }, { min: 0, kcal: 0, desnivel: 0 });
+  // Las kcal del ACSM también incluyen el reposo (el +3.5 de la ecuación), así
+  // que se descuenta el basal de esos minutos por la misma razón.
+  const kcalCardio = Math.max(0, cardio.kcal - Math.round((3.5 * peso / 200) * cardio.min));
+
+  // — Pasos (NEAT) —
+  const pasos = parseInt((metricslog || {})[dateStr]?.pasos) || 0;
+  const kcalPasosBruto = peso > 0 ? Math.round(pasos * peso * KCAL_POR_PASO_KG) : 0;
+  // El móvil cuenta los pasos de la cinta, así que sumar ambos sería contar la
+  // caminata dos veces. Se descuenta lo que ya aporta el cardio.
+  const kcalPasos = Math.max(0, kcalPasosBruto - kcalCardio);
+
+  const carga = kcalFuerza + kcalCardio + kcalPasos;
+  return {
+    carga,
+    fuerza: { series, volumenKg: Math.round(volumenKg), min: durFuerza, duracionRegistrada: durReg > 0, kcal: kcalFuerza },
+    cardio: { min: cardio.min, desnivel: cardio.desnivel, kcal: kcalCardio },
+    pasos: { pasos, kcal: kcalPasos, solapado: kcalPasosBruto - kcalPasos },
+    entreno: series > 0,
+  };
+}
+
+/** Carga media de los últimos `dias` días, que es la referencia del propio usuario. */
+function calcAverageActivityLoad(opts = {}, dias = 14) {
+  const fin = opts.dateStr || getLocalDateStr(new Date());
+  const cargas = [];
+  for (let i = 0; i < dias; i++) {
+    const d = new Date(fin + "T12:00:00");
+    d.setDate(d.getDate() - i);
+    cargas.push(calcDayActivityLoad({ ...opts, dateStr: getLocalDateStr(d) }).carga);
+  }
+  const media = cargas.reduce((a, b) => a + b, 0) / cargas.length;
+  return { media: Math.round(media), dias: cargas.length, cargas };
+}
+
+/* Factor de carbohidratos del día a partir de las cargas de la ventana.
+
+   El recorte a [0.6, 1.5] tiene un efecto que no se ve de golpe: cuando la
+   semana es desigual, se recortan hacia ARRIBA muchos días flojos y hacia abajo
+   pocos duros, así que la suma de los factores acaba por encima del número de
+   días. En una semana normal eso son ~3% más de carbohidratos cada día: poco
+   para notarlo, suficiente para deshacer parte del déficit sin que nadie se
+   entere. Es exactamente el fallo silencioso que el recorte pretendía evitar.
+
+   Por eso, después de recortar se REESCALA para que la suma vuelva a ser el
+   número de días. Así el recorte protege del día raro y la media semanal sigue
+   siendo la que fija el objetivo.                                             */
+const CARB_FACTOR_MIN = 0.6, CARB_FACTOR_MAX = 1.5;
+
+function calcDayCarbFactor(cargas, cargaHoy) {
+  const lista = (cargas || []).map(c => parseFloat(c) || 0);
+  const n = lista.length;
+  const media = n ? lista.reduce((a, b) => a + b, 0) / n : 0;
+  if (!n || media <= 0) return null;
+  const recorta = (x) => Math.min(CARB_FACTOR_MAX, Math.max(CARB_FACTOR_MIN, x));
+
+  // Recortar y reescalar de una sola pasada tiene un problema propio: si un día
+  // es cuatro veces la media, la reescala multiplica el 1.5 recortado y lo
+  // devuelve por encima del tope, que es lo que el recorte quería impedir. Se
+  // alterna recorte y reescala hasta que se estabiliza.
+  //
+  // Con una distribución extrema, tope y neutralidad semanal exacta son
+  // incompatibles: no se puede subir a los flojos sin pasarse del tope en el
+  // duro. En ese caso manda el tope —una dieta no puede dispararse por un día
+  // raro— y la desviación que queda se DEVUELVE en vez de esconderse.
+  let escala = 1;
+  for (let i = 0; i < 8; i++) {
+    const f = lista.map(c => recorta((c / media) * escala));
+    const suma = f.reduce((a, b) => a + b, 0);
+    if (suma <= 0) break;
+    const ajuste = n / suma;
+    if (Math.abs(ajuste - 1) < 0.0005) break;
+    escala *= ajuste;
+  }
+  const finales = lista.map(c => recorta((c / media) * escala));
+  const desviacion = finales.reduce((a, b) => a + b, 0) / n - 1;
+
+  const bruto = (parseFloat(cargaHoy) || 0) / media;
+  return {
+    factor: recorta(bruto * escala),
+    bruto: Math.round(bruto * 100) / 100,
+    escala: Math.round(escala * 1000) / 1000,
+    media: Math.round(media),
+    // >0 significa que la semana quedaría algo por encima del objetivo pese al
+    // reescalado, porque el tope se impuso. Quien lo muestre puede avisarlo.
+    desviacionSemanal: Math.round(desviacion * 1000) / 1000,
+  };
+}
+
+/**
+ * Factor de actividad que se deduce de los datos reales, para contrastarlo con
+ * el que hay escrito en el perfil. Si alguien marcó "Ligero" (1.375) pero
+ * entrena cuatro días y camina en cuesta tres, su TDEE estimado va corto y el
+ * déficit real es mayor del que cree.
+ */
+function calcObservedActivityFactor(bmr, cargaMedia) {
+  const b = parseFloat(bmr) || 0;
+  const c = parseFloat(cargaMedia) || 0;
+  if (b <= 0) return null;
+  // +10% por el efecto térmico de los alimentos, que el multiplicador de
+  // actividad clásico también lleva dentro.
+  const f = 1 + 0.10 + c / b;
+  return Math.round(f * 100) / 100;
 }
 
 /**
@@ -1777,7 +1948,7 @@ function calcNutritionTargets(profile, metrics, opts = {}) {
   if (weight <= 0) return null;
 
   const goal = GOAL_PRESETS[p.objetivo] || GOAL_PRESETS.definicion;
-  const { bmr, method, leanKg } = calcBMR(p, m);
+  const { bmr, method, leanKg, leanFuente, bmrInforme } = calcBMR(p, m);
   if (!bmr) return null;
 
   const tdeeEstimado = Math.round(bmr * (parseFloat(p.actividad) || 1.45));
@@ -1815,7 +1986,7 @@ function calcNutritionTargets(profile, metrics, opts = {}) {
 
   return {
     kcal: kcalFinal, p: proteina, c: carbo, f: grasa, fibra,
-    bmr, bmrMethod: method, leanKg,
+    bmr, bmrMethod: method, leanKg, leanFuente, bmrInforme,
     tdee, tdeeEstimado, tdeeReal: tdeeReal || null, usandoTdeeReal: usarReal,
     ritmoKgSemana: ritmo, deficitDiario: Math.round(kcalFinal - tdee),
     protPorKgLean: leanKg > 0 ? Math.round((proteina / leanKg) * 10) / 10 : null,
@@ -2394,6 +2565,40 @@ function calcCarbCycleTargets(base, opts = {}) {
   const baseC = parseFloat(base.c) || 0;
   const p = Math.round(parseFloat(base.p) || 0);
   const f = Math.round(parseFloat(base.f) || 0);
+
+  /* Reparto por CARGA REAL del día, si se conoce.
+     `factorDia` = gasto de actividad de hoy ÷ gasto medio de sus últimos días.
+     1.0 es un día normal suyo; 1.4, un día un 40% más duro de lo habitual.
+
+     La propiedad que hay que conservar es que la MEDIA SEMANAL no se mueva: si
+     los días duros suben sin que bajen los flojos, el déficit se deshace solo y
+     nadie se entera. Dividir por la media propia lo garantiza — la suma de los
+     factores dividida por su media es siempre el número de días.
+
+     El recorte a [0.6, 1.5] sacrifica un pelo de esa exactitud a cambio de que
+     un día raro (una gripe, una maratón) no deje la dieta en 40 g de carbo ni
+     la dispare. Es un intercambio consciente, no un olvido. */
+  if (opts.factorDia != null && isFinite(opts.factorDia) && baseC > 0) {
+    const bruto = parseFloat(opts.factorDia);
+    // Red de seguridad con algo de holgura sobre el recorte de
+    // `calcDayCarbFactor`: ese ya viene reescalado y puede rozar los límites,
+    // y volver a recortarlo aquí en seco reintroduciría la desviación semanal.
+    const factor = Math.min(1.6, Math.max(0.55, bruto));
+    const c = Math.max(30, Math.round(baseC * factor));
+    const kcal = p * 4 + c * 4 + f * 9;
+    const baseKcal = p * 4 + Math.round(baseC) * 4 + f * 9;
+    const tipo = factor >= 1.15 ? "alto" : factor <= 0.85 ? "descanso" : "medio";
+    return {
+      kcal, p, c, f, dayType: tipo,
+      label: tipo === "alto" ? "Carbo alto" : tipo === "medio" ? "Carbo medio" : "Carbo bajo",
+      deltaKcal: kcal - baseKcal,
+      deltaCarbo: c - Math.round(baseC),
+      factorDia: Math.round(factor * 100) / 100,
+      factorSinRecortar: Math.round(bruto * 100) / 100,
+      recortado: Math.abs(factor - bruto) > 0.005,
+      porCargaReal: true,
+    };
+  }
 
   // Carbos que se quitan de los días de descanso en toda la semana...
   const pooledC = baseC * restCut * nRest;
@@ -5990,11 +6195,25 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     [nutritionTargets]
   );
 
-  // Objetivos del día con carbohidratos ciclados según el split y si se entrena
+  // Carga real del día: fuerza registrada + cardio + pasos, en kcal por encima
+  // del reposo. Es lo que sustituye al "entrenó sí/no" para repartir carbos.
+  const dayLoad = React.useMemo(() => {
+    const pesoKg = parseFloat(activeMetrics?.weight) || 0;
+    const comun = { exlog, cardiolog, workoutDurations, metricslog, pesoKg };
+    const hoy = calcDayActivityLoad({ ...comun, dateStr: selectedDateStr });
+    const ref = calcAverageActivityLoad({ ...comun, dateStr: selectedDateStr }, 14);
+    const fac = calcDayCarbFactor(ref.cargas, hoy.carga);
+    return { ...hoy, media: ref.media, factor: fac ? fac.factor : null, factorBruto: fac ? fac.bruto : null };
+  }, [exlog, cardiolog, workoutDurations, metricslog, selectedDateStr, activeMetrics]);
+
+  // Objetivos del día con carbohidratos ciclados. Si hay historial suficiente
+  // para saber cómo es un día normal suyo, se reparte por la carga real; si no,
+  // se cae al ciclado por etiqueta del split, que es lo que había.
   const dayFuelTargets = React.useMemo(() => {
-    const trainedToday = Object.values(exlog || {}).some(sets =>
-      (sets || []).some(s => (s?.date || "").slice(0, 10) === selectedDateStr)
-    );
+    if (dayLoad.factor != null && dayLoad.media > 0) {
+      return calcCarbCycleTargets(target, { factorDia: dayLoad.factor });
+    }
+    const trainedToday = dayLoad.entreno;
     const activeSplit = (splits || DEFAULT_SPLITS).find(s => s.key === activeSplitKey);
     const dayType = classifyFuelDay(trainedToday, activeSplit?.fuel);
     const trainingDays = (splits || DEFAULT_SPLITS).length || 4;
@@ -6004,7 +6223,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       trainingDaysPerWeek: trainingDays,
       altoDaysPerWeek: altoDays,
     });
-  }, [target, exlog, selectedDateStr, splits, activeSplitKey]);
+  }, [target, dayLoad, splits, activeSplitKey]);
 
   // ⚡ Bolt: Memoize totals calculation to prevent unnecessary reduce operations on every render
   const totals = useMemo(() => {
@@ -6357,7 +6576,7 @@ Datos de Composición Corporal (Fitdays): ${fitdaysComp}${fotoAnalysisCtx ? `\nA
 Historial nutricional acumulado reciente: ${recentNutrition}\n${cardioCtx}
 Día de Split de entrenamiento activo hoy: Día ${activeSplit.key} (${activeSplit.name}), combustible de carbohidratos asignado: ${activeSplit.fuel}.
 Estado de entrenamiento hoy: ${trainedToday ? "✓ YA ENTRENÓ HOY — no preguntes si va a entrenar, asume recuperación activa." : "✗ AÚN NO HA ENTRENADO HOY — puedes orientar pre-entreno, timing y energía si aplica."}
-Datos adicionales del día ${selectedDateStr}: agua: ${water || waterlog[selectedDateStr] || 0}ml, duración sesión: ${workoutDurations[selectedDateStr] ? workoutDurations[selectedDateStr]+" min" : "no registrada"}, suplementos activos: ${Object.entries(supplements||{}).filter(([,v])=>v).map(([k])=>k).join(", ")||"ninguno"}.
+Carga de actividad de hoy: ${dayLoad.carga} kcal por encima del reposo (${dayLoad.fuerza.series} series de fuerza${dayLoad.fuerza.min ? ` en ${dayLoad.fuerza.min} min` : ""}, ${dayLoad.cardio.min} min de cinta, ${dayLoad.pasos.pasos} pasos), frente a ${dayLoad.media} kcal de media en sus últimos 14 días. Los carbohidratos de hoy ya están ajustados a esa proporción y la media semanal se mantiene: no vuelvas a subirlos por haber entrenado.\nDatos adicionales del día ${selectedDateStr}: agua: ${water || waterlog[selectedDateStr] || 0}ml, duración sesión: ${workoutDurations[selectedDateStr] ? workoutDurations[selectedDateStr]+" min" : "no registrada"}, suplementos activos: ${Object.entries(supplements||{}).filter(([,v])=>v).map(([k])=>k).join(", ")||"ninguno"}.
 Hoy lleva consumido: ${Math.round(totals.kcal)} kcal, P:${Math.round(totals.p)}g C:${Math.round(totals.c)}g G:${Math.round(totals.f)}g. Restante: ${Math.round(remKcal)} kcal, P:${Math.round(remP)}g C:${Math.round(remC)}g G:${Math.round(remF)}g.
 
 Entrenamiento realizado por Bruno hoy:
@@ -7057,6 +7276,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             target={target}
             activeMetrics={activeMetrics}
             dayFuelTargets={dayFuelTargets}
+            dayLoad={dayLoad}
             metricslog={metricslog}
             todayDurationMin={(workoutDurations || {})[selectedDateStr] || 0}
             onQuickWeight={(w) => saveState({ weight: w })}
@@ -9500,7 +9720,7 @@ function Hoy({
   proactiveMsg, aiNotifications, setAiNotifications, macroAdjustSuggestion, setMacroAdjustSuggestion, saveState, customPresets,
   weeklyInsight, smartGoals, challenges, updateChallengeProgress, upcomingEvent, experiments, setExperiments, splits,
   setView, setShowNutritionModal, setModalVals, addFoodInputText, setAddFoodInputText, customSuggestions,
-  exlog, notes, foodlog, sendCoachMessage, activeMetrics, dayFuelTargets, metricslog,
+  exlog, notes, foodlog, sendCoachMessage, activeMetrics, dayFuelTargets, dayLoad, metricslog,
   todayDurationMin, onQuickWeight
 }){
   const [text, setText] = useState("");
@@ -10465,12 +10685,35 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
             </svg>
             <div style={{flex:1, display:"flex", flexDirection:"column", gap:7}}>
               {dayFuelTargets && dayFuelTargets.deltaCarbo !== 0 && (
-                <div title="Ciclado de carbohidratos según tu split: la media semanal se mantiene en tu objetivo"
+                <div title={dayFuelTargets.porCargaReal
+                  ? "Repartido por la carga real del día (fuerza + cardio + pasos) frente a tu media. La media semanal no cambia."
+                  : "Ciclado de carbohidratos según tu split: la media semanal se mantiene en tu objetivo"}
                   style={{display:"inline-flex", alignItems:"center", gap:5, alignSelf:"flex-start", background:`${alfa(fuelCol, 8)}`, border:`1px solid ${alfa(fuelCol, 27)}`, borderRadius:20, padding:"2px 9px", fontSize:10, fontWeight:800, color:fuelCol, marginBottom:1}}>
                   {dayFuelTargets.label}
                   <span style={{fontWeight:600, color:C.muted}}>
                     {dayFuelTargets.deltaCarbo > 0 ? "+" : ""}{dayFuelTargets.deltaCarbo} g carbo
                   </span>
+                </div>
+              )}
+              {/* De dónde sale el ajuste. Sin esto el número cambia solo y no
+                  hay forma de saber por qué, que es lo que convierte un cálculo
+                  en un oráculo. */}
+              {dayFuelTargets?.porCargaReal && dayLoad && (
+                <div style={{fontSize:9.5, color:C.muted, lineHeight:1.45, marginTop:-2}}>
+                  Hoy <b style={{color:C.ink}}>{dayLoad.carga} kcal</b> de actividad
+                  {dayLoad.media > 0 && <> frente a <b style={{color:C.ink}}>{dayLoad.media}</b> de media</>}
+                  {(() => {
+                    const partes = [];
+                    if (dayLoad.fuerza.kcal > 0) partes.push(`${dayLoad.fuerza.series} series${dayLoad.fuerza.duracionRegistrada ? ` en ${dayLoad.fuerza.min} min` : ""}`);
+                    if (dayLoad.cardio.min > 0) partes.push(`${dayLoad.cardio.min} min de cinta`);
+                    if (dayLoad.pasos.pasos > 0) partes.push(`${dayLoad.pasos.pasos.toLocaleString("es")} pasos`);
+                    return partes.length ? <> · {partes.join(" · ")}</> : null;
+                  })()}
+                  {dayFuelTargets.recortado && (
+                    <div style={{color:C.amber, marginTop:1}}>
+                      Ajuste limitado: un día muy fuera de lo normal no debe dispararte la dieta.
+                    </div>
+                  )}
                 </div>
               )}
               {macros.map(m => {
@@ -21396,6 +21639,8 @@ if (typeof module !== 'undefined' && module.exports) {
     calcWalkBlock, calcCardioSession, getCardioSummary, PROGRAMAS_CAMINATA, VEL_MARCHA_MAX,
     walkStateAt, trimBlocksTo, AVISO_SEG,
     exerciseProfile, profileBalance, PERFIL_ETIQUETA,
+    getMeasuredLeanMass, calcDayActivityLoad, calcAverageActivityLoad, calcObservedActivityFactor,
+    calcDayCarbFactor,
     RECOVERY_FIELDS, getLocalDateStr,
     normalizeMuscle, canonMuscleName, dedupeMuscles, calcMuscleVolumeBalance, SLUG_MUSCLE,
     normalizeBodyEntry, mergeMetricsUpTo, validateBodyMetrics, RANGOS_BIO,

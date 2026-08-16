@@ -1157,6 +1157,142 @@ describe('caminata en cinta con inclinación', () => {
   });
 });
 
+describe('macros del día según la carga real', () => {
+  const {
+    getMeasuredLeanMass, calcBMR, calcNutritionTargets,
+    calcDayActivityLoad, calcAverageActivityLoad, calcObservedActivityFactor,
+    calcCarbCycleTargets, calcDayCarbFactor,
+  } = require('./app.js');
+
+  test('la masa magra medida gana a la derivada de peso × %grasa', () => {
+    // El InBody mide el peso sin grasa; deducirlo de una resta es peor dato
+    const m = { weight: 92.3, grasaPct: 24.5, pesoSinGrasa: 70.9 };
+    const r = getMeasuredLeanMass(m);
+    expect(r.fuente).toBe('medida');
+    expect(r.leanKg).toBe(70.9);
+    // Sin la medida, cae a la derivada: 92.3 × 0.755 = 69.7
+    expect(getMeasuredLeanMass({ weight: 92.3, grasaPct: 24.5 }).fuente).toBe('derivada');
+  });
+
+  test('una medida imposible no se cuela hasta el BMR', () => {
+    // 25 kg de masa magra en 92 kg de peso: mal leído del informe
+    const r = getMeasuredLeanMass({ weight: 92.3, grasaPct: 24.5, pesoSinGrasa: 25 });
+    expect(r.fuente).toBe('derivada');
+  });
+
+  test('1 kg de masa magra son ~22 kcal de BMR, así que la diferencia importa', () => {
+    const conMedida = calcBMR({}, { weight: 92.3, grasaPct: 24.5, pesoSinGrasa: 72 });
+    const sinMedida = calcBMR({}, { weight: 92.3, grasaPct: 24.5 });
+    expect(conMedida.leanFuente).toBe('medida');
+    expect(conMedida.bmr - sinMedida.bmr).toBeGreaterThan(40);
+  });
+
+  test('el BMR del informe se arrastra para contrastar, no para calcular', () => {
+    const r = calcBMR({}, { weight: 92.3, grasaPct: 24.5, pesoSinGrasa: 70.9, bmr: 1900 });
+    expect(r.bmrInforme).toBe(1900);
+    expect(r.bmr).not.toBe(1900);           // se calcula con Katch, no se copia
+  });
+
+  test('la carga del día suma fuerza, cardio y pasos por encima del reposo', () => {
+    const d = '2026-08-14';
+    const carga = calcDayActivityLoad({
+      dateStr: d, pesoKg: 92,
+      exlog: { 'Sentadilla': [
+        { date: d + 'T18:00:00', w: 100, reps: 8, type: 'work' },
+        { date: d + 'T18:05:00', w: 100, reps: 8, type: 'work' },
+        { date: d + 'T17:55:00', w: 60,  reps: 12, type: 'warmup' },   // no cuenta
+      ] },
+      workoutDurations: { [d]: 60 },
+      cardiolog: { [d]: [{ id: 'c', bloques: [{ min: 40, vel: 5.2, incl: 9 }] }] },
+      metricslog: { [d]: { pasos: 9000 } },
+    });
+    expect(carga.fuerza.series).toBe(2);           // el calentamiento no suma
+    expect(carga.fuerza.min).toBe(60);
+    expect(carga.fuerza.kcal).toBeGreaterThan(0);
+    expect(carga.cardio.min).toBe(40);
+    expect(carga.carga).toBe(carga.fuerza.kcal + carga.cardio.kcal + carga.pasos.kcal);
+  });
+
+  test('no cuenta dos veces la caminata: los pasos ya la incluyen', () => {
+    const d = '2026-08-14';
+    const cardio = { [d]: [{ id: 'c', bloques: [{ min: 40, vel: 5.2, incl: 9 }] }] };
+    const conCardio = calcDayActivityLoad({ dateStr: d, pesoKg: 92, cardiolog: cardio, metricslog: { [d]: { pasos: 9000 } } });
+    const soloPasos = calcDayActivityLoad({ dateStr: d, pesoKg: 92, metricslog: { [d]: { pasos: 9000 } } });
+    expect(conCardio.pasos.kcal).toBeLessThan(soloPasos.pasos.kcal);
+    expect(conCardio.pasos.solapado).toBeGreaterThan(0);
+  });
+
+  test('sin duración registrada estima el tiempo a partir de las series', () => {
+    const d = '2026-08-14';
+    const c = calcDayActivityLoad({
+      dateStr: d, pesoKg: 92,
+      exlog: { X: Array.from({ length: 12 }, (_, i) => ({ date: d + 'T18:00:00', w: 50, reps: 10, type: 'work' })) },
+    });
+    expect(c.fuerza.duracionRegistrada).toBe(false);
+    expect(c.fuerza.min).toBe(36);              // 12 series × 3 min
+  });
+
+  test('LA PROPIEDAD CLAVE: repartir por carga no mueve la media semanal', () => {
+    // Si los días duros suben sin que bajen los flojos, el déficit se deshace
+    // solo y nadie se entera. Los factores salen de dividir por la media, así
+    // que su suma es siempre el número de días.
+    const base = { kcal: 2400, p: 190, c: 230, f: 70 };
+    const cargas = [900, 300, 750, 250, 820, 400, 680];     // una semana real
+    const carbosSemana = cargas
+      .map(c => calcCarbCycleTargets(base, { factorDia: calcDayCarbFactor(cargas, c).factor }).c)
+      .reduce((a, b) => a + b, 0);
+    const objetivoSemana = base.c * 7;
+    expect(Math.abs(carbosSemana - objetivoSemana) / objetivoSemana).toBeLessThan(0.01);
+  });
+
+  test('un día disparatado se recorta y se dice que se recortó', () => {
+    // El recorte de verdad vive en calcDayCarbFactor; calcCarbCycleTargets solo
+    // pone una red de seguridad más holgada, porque volver a recortar en seco
+    // el factor ya reescalado devolvería la desviación semanal.
+    const cargas = [500, 500, 500, 500, 500, 500, 4000];     // el último, una maratón
+    const f = calcDayCarbFactor(cargas, 4000);
+    expect(f.bruto).toBeGreaterThan(3);
+    // El tope manda: una dieta no puede dispararse por un día raro
+    expect(f.factor).toBeLessThanOrEqual(1.5);
+    // Y aun así la semana cuadra, porque el reescalado sube los días flojos en
+    // vez de saltarse el tope en el duro. La desviación se declara igualmente.
+    expect(Math.abs(f.desviacionSemanal)).toBeLessThan(0.01);
+    expect(calcDayCarbFactor(cargas, 500).factor).toBeGreaterThan(0.6);
+
+    const base = { kcal: 2400, p: 190, c: 230, f: 70 };
+    const r = calcCarbCycleTargets(base, { factorDia: 4 });
+    expect(r.factorDia).toBe(1.6);
+    expect(r.recortado).toBe(true);
+    expect(r.factorSinRecortar).toBe(4);
+  });
+
+  test('el día duro sube carbos y el flojo los baja, sin tocar proteína ni grasa', () => {
+    const base = { kcal: 2400, p: 190, c: 230, f: 70 };
+    const duro = calcCarbCycleTargets(base, { factorDia: 1.4 });
+    const flojo = calcCarbCycleTargets(base, { factorDia: 0.7 });
+    expect(duro.c).toBeGreaterThan(base.c);
+    expect(flojo.c).toBeLessThan(base.c);
+    [duro, flojo].forEach(r => { expect(r.p).toBe(base.p); expect(r.f).toBe(base.f); });
+    expect(duro.dayType).toBe('alto');
+    expect(flojo.dayType).toBe('descanso');
+  });
+
+  test('el factor de actividad observado contrasta con el que hay escrito', () => {
+    // BMR 1900 y 600 kcal/día de actividad ⇒ ~1.42, no el 1.2 de "sedentario"
+    expect(calcObservedActivityFactor(1900, 600)).toBeCloseTo(1.42, 2);
+    expect(calcObservedActivityFactor(0, 600)).toBe(null);
+  });
+
+  test('la media de carga ignora los días futuros y tolera huecos', () => {
+    const r = calcAverageActivityLoad({
+      dateStr: '2026-08-14', pesoKg: 92,
+      metricslog: { '2026-08-14': { pasos: 10000 }, '2026-08-20': { pasos: 30000 } },
+    }, 7);
+    expect(r.dias).toBe(7);
+    expect(r.cargas.filter(c => c > 0)).toHaveLength(1);   // el día 20 no entra
+  });
+});
+
 describe('perfil de resistencia de los ejercicios', () => {
   const { exerciseProfile, profileBalance, recommendDayExercises } = require('./app.js');
 

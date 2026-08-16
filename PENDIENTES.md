@@ -1168,3 +1168,79 @@ La regla genérica `/curl/` (bíceps) casaba con **"Leg curl"**, así que un cur
 femoral salía clasificado como bíceps. El orden de las expresiones importa y la
 regla de isquios estaba por debajo. Movida arriba, con el aviso escrito al lado
 para que no vuelva a colarse.
+
+## Macros del día: biometría medida, carga real y actividad observada (W73)
+
+> *"revisa bien el cálculo de macros del día, según mis medidas biométricas que
+> agrego, según cuánto entrené ese día, según el nivel de actividad"*
+
+Tres huecos, uno por cada cosa que pedía.
+
+### 1. La biometría se usaba a medias
+
+`calcLeanMass` deducía la masa magra de `peso × (1 − %grasa)`. Está bien con solo
+una báscula, pero el InBody **mide** el peso sin grasa, y ese valor es el que
+debe entrar en Katch-McArdle: es una medición, no una resta. No es cosmético —
+1 kg de masa magra son ~22 kcal/día de BMR, y las dos cifras se separan
+fácilmente 1-2 kg.
+
+Ahora manda la medida, con un filtro de plausibilidad (entre el 40% y el 98% del
+peso) para que un dato mal leído del informe no llegue al BMR. El BMR que trae
+el propio informe se arrastra aparte **para contrastar**, no para calcular: cada
+aparato usa su fórmula y no se sabe cuál, pero una diferencia grande avisa de
+que alguna entrada está mal.
+
+### 2. El día solo sabía si entrenaste, no cuánto
+
+`classifyFuelDay(entrenó, etiqueta del split)`: un sí/no y una etiqueta fija. Con
+eso, una sesión de 20 minutos y una pierna de 90 con hora de cinta después
+recibían **exactamente los mismos carbohidratos**. Y la caminata inclinada no
+existía para la nutrición.
+
+`calcDayActivityLoad` estima el gasto real del día por encima del reposo sumando
+lo registrado:
+
+- **Fuerza**: MET 5 por los minutos de sesión (o 3 min por serie si no anotaste
+  duración).
+- **Cardio**: las kcal del ACSM de la caminata.
+- **Pasos**: NEAT.
+
+Dos restas que evitan contar de más: al MET se le quita 1 y a las kcal del ACSM
+se les descuenta el basal de esos minutos, porque **ambos incluyen el reposo** y
+ya está contado en el BMR. Y a los pasos se les descuenta lo que aporta el
+cardio, porque el móvil cuenta los pasos de la cinta y sumar ambos sería contar
+la caminata dos veces.
+
+### 3. El reparto, sin mover la media semanal
+
+El día recibe `factor = carga de hoy ÷ media de sus últimos 14 días`. 1.0 es un
+día normal suyo. Proteína y grasa no se tocan: el vaivén lo absorben los
+carbohidratos.
+
+**La propiedad que hay que conservar** es que la media semanal no cambie: si los
+días duros suben sin que bajen los flojos, el déficit se deshace solo y nadie se
+entera. Dividir por la media propia lo garantiza.
+
+Dos fallos que aparecieron al implementarlo, ambos cazados por los tests:
+
+- El **recorte** a [0.6, 1.5] rompía la neutralidad: en una semana desigual se
+  recortan hacia arriba muchos días flojos y hacia abajo pocos duros, y la suma
+  se iba un **3% por encima**. Poco para notarlo, suficiente para deshacer parte
+  del déficit en silencio — justo el fallo que el recorte pretendía evitar.
+- Reescalar de una pasada tenía su propio problema: con un día cuatro veces la
+  media, la reescala multiplicaba el 1.5 ya recortado y lo devolvía a 2.06, por
+  encima del tope. Ahora se alterna recorte y reescala hasta estabilizar, que
+  resuelve el caso subiendo los días flojos en vez de saltarse el tope. Si aun
+  así quedara desviación, se devuelve en `desviacionSemanal` en vez de
+  esconderse.
+
+### Y se ve de dónde sale
+
+Bajo el anillo de macros: *"Carbo bajo −106 g · Hoy 210 kcal de actividad frente
+a 399 de media · 6000 pasos"*. Un número que cambia solo y sin explicación
+convierte el cálculo en un oráculo.
+
+`calcObservedActivityFactor` deduce además el multiplicador de actividad que
+implican los datos reales, para contrastarlo con el escrito en el perfil: quien
+marcó "Ligero" (1.375) pero entrena cuatro días y camina en cuesta tres tiene un
+TDEE estimado corto y un déficit real mayor del que cree.
