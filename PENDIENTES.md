@@ -1296,3 +1296,72 @@ desde W73 pero no se usaba. Ahora hay un modo **Automático**, por defecto, que
 lo deduce de los entrenos, la cinta y los pasos registrados, y enseña la cuenta:
 *"×1.31 · deducido de lo que registras: 399 kcal/día de actividad de media en
 tus últimos 14 días"*. Los cinco botones siguen ahí como anulación manual.
+
+## Auditoría: de dónde sale cada número (W75)
+
+> *"primero que todos los cálculos que has implementado tengan respaldo
+> científico"*
+
+Repasadas todas las constantes y fórmulas que deciden calorías, macros y gasto.
+El resultado está escrito en el propio `app.js`, en un bloque que las clasifica
+en tres categorías **a propósito**, porque mezclarlas es lo que convierte una app
+en un oráculo:
+
+- **[FÓRMULA]** — ecuación publicada y validada, usada tal cual.
+- **[REFERENCIA]** — cifra tomada de una recomendación o tabla estándar.
+- **[CONVENIO]** — decisión de diseño nuestra, sin respaldo experimental. No
+  puede presentarse como si lo tuviera.
+
+### Lo que estaba bien
+
+| Cálculo | Respaldo |
+|---|---|
+| BMR Katch-McArdle | `370 + 21.6 × masa magra` |
+| BMR Mifflin-St Jeor | Mifflin et al., Am J Clin Nutr 1990 |
+| Marcha en cinta | Ecuación del ACSM: `0.1·S + 1.8·S·G + 3.5` |
+| 1 L de O₂ ≈ 5 kcal · 1 MET = 3.5 ml/kg/min | Equivalencias estándar |
+| Proteína 2.2–2.6 g/kg magra | Helms et al., IJSNEM 2014 (2.3–3.1 en déficit) |
+| Fibra 14 g/1000 kcal | Institute of Medicine |
+| 1RM estimado | Epley |
+| Suelo del TDEE medido | Método de Goldberg (1991; Black 2000) |
+
+Del suelo del TDEE conviene destacar algo: la literatura actual insiste en que el
+nivel de actividad con el que se compara **debe reflejar al sujeto** y no un 1.55
+fijo. Eso es exactamente lo que hace el factor deducido de W74, así que el diseño
+quedó más alineado con la guía vigente de lo que yo mismo pretendía.
+
+### Lo que corregí
+
+**MET del entrenamiento de fuerza.** Había un `5.0` puesto a ojo. El Compendium
+of Physical Activities da **dos** anclajes, no uno: 3.5 MET para esfuerzo
+ligero-moderado y 6.0 para vigoroso. Un 5.0 no es ninguno de los dos. Ahora se
+interpola entre ambos según la fracción de series llevadas a **RIR ≤ 2**, dato
+que ya se registraba y no se usaba para nada. El Compendium no interpola —eso es
+convenio nuestro— pero el resultado se queda siempre **dentro** de sus dos
+valores publicados, y ahora un día suave y uno al fallo dejan de costar lo mismo.
+
+**Coste de los pasos.** Había una constante de `0.00038 kcal por paso y kg`,
+deducida a mano de "0.5 kcal/kg por km y 1300 pasos/km": dos cifras redondeadas
+de memoria para llegar a un número que **ya se podía calcular**. La ecuación del
+ACSM da el coste de caminar en llano, así que ahora los pasos se convierten a
+distancia y se pasan por ella. Desaparece la constante inventada y queda **una
+sola fuente** para todo lo que sea caminar: la cinta y los pasos cuestan lo
+mismo por kilómetro.
+
+### Lo que marqué como convenio, no como ciencia
+
+- **7700 kcal/kg** (regla de Wishnofsky). Es la referencia clásica, pero se sabe
+  que **sobreestima la pérdida a largo plazo** porque el gasto baja al adelgazar
+  (Hall, Int J Obes 2008). Se usa solo para fijar el déficit diario, no para
+  prometer resultados.
+- **Partición de Forbes**: la relación es real, pero la forma lineal concreta
+  (`0.55 + 0.012 × %grasa`) es una aproximación nuestra, no su ecuación.
+- **EMA α = 0.25**, ventana de 14 días, recorte del factor de carbos a
+  [0.6, 1.5], umbral del 35% para preferir el TDEE medido. Ninguno tiene
+  respaldo experimental: existen para que los números no den saltos absurdos.
+- **3 min por serie** cuando no hay duración registrada.
+
+### Una consecuencia práctica
+
+El ACSM no vale para bajadas, así que la pendiente negativa se ignora en vez de
+restar calorías. Hay un test que lo fija.

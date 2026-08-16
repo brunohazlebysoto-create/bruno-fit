@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W74";
+const APP_VERSION = "v2026.07.29-W75";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1698,6 +1698,88 @@ function calcBodyProjection(currentWeight, currentGrasaPct, tdee, targetKcal, we
    eran presets fijos: cambiar de peso o de % de grasa no movía ningún número.
    Estas funciones derivan BMR → TDEE → kcal → macros del perfil real. */
 
+/* ============================================================================
+   DE DÓNDE SALE CADA NÚMERO
+
+   Auditoría de todas las constantes y fórmulas que deciden calorías, macros y
+   gasto. Se distingue a propósito entre tres cosas, porque mezclarlas es lo que
+   convierte una app en un oráculo:
+
+     [FÓRMULA]    ecuación publicada y validada; se usa tal cual.
+     [REFERENCIA] cifra tomada de una recomendación o tabla estándar.
+     [CONVENIO]   decisión de diseño nuestra. No tiene respaldo experimental y
+                  no puede presentarse como si lo tuviera.
+
+   ── Metabolismo basal ──
+   [FÓRMULA]  Katch-McArdle: BMR = 370 + 21.6 × masa magra (kg).
+              Katch & McArdle, Exercise Physiology. Se prefiere siempre que
+              haya masa magra, medida o derivada.
+   [FÓRMULA]  Mifflin-St Jeor: 10·kg + 6.25·cm − 5·edad + 5 (hombre) / −161
+              (mujer). Mifflin et al., Am J Clin Nutr 1990. Solo si no hay
+              composición corporal.
+
+   ── Gasto de la caminata ──
+   [FÓRMULA]  Ecuación de marcha del ACSM:
+                VO2 (ml/kg/min) = 0.1·S + 1.8·S·G + 3.5   (S en m/min)
+              0.1 = coste horizontal por metro y kg; 1.8 = coste de elevar el
+              cuerpo contra la gravedad; 3.5 = reposo. Validada caminando,
+              ~1.9 a 4 mph (50–107 m/min). Por encima se marca fuera de rango.
+              No vale para bajadas, así que solo se admite pendiente ≥ 0.
+   [REFERENCIA] 1 litro de O2 ≈ 5 kcal (equivalente calórico del oxígeno para
+              una mezcla normal de sustratos; el valor exacto va de 4.7 a 5.05).
+   [REFERENCIA] 1 MET = 3.5 ml O2/kg/min.
+
+   ── Gasto del entrenamiento de fuerza ──
+   [REFERENCIA] Compendium of Physical Activities (Ainsworth et al.): 3.5 MET
+              para esfuerzo ligero-moderado y 6.0 MET para esfuerzo vigoroso.
+   [CONVENIO] Interpolar entre esos dos anclajes según la fracción de series a
+              RIR ≤ 2. El Compendium no interpola; esto es nuestro, pero se
+              queda siempre DENTRO de sus dos valores publicados.
+   [CONVENIO] 3 minutos por serie cuando no se registró la duración.
+
+   ── Descuento del reposo ──
+   [FÓRMULA]  Los MET y la ecuación del ACSM incluyen el metabolismo basal. Para
+              sumarlos al BMR hay que quedarse con el gasto NETO, así que se
+              resta 1 MET (o su equivalente 3.5·kg/200 kcal/min). Sin esta resta
+              el basal se contaría dos veces.
+
+   ── Nutrición ──
+   [REFERENCIA] Proteína 2.2–2.6 g/kg de masa magra según la fase. En déficit,
+              las revisiones de composición corporal en atletas sitúan el rango
+              útil en 2.3–3.1 g/kg de masa magra (Helms et al., IJSNEM 2014).
+   [REFERENCIA] Grasa: mínimo 0.6 g/kg de peso, por función hormonal.
+   [REFERENCIA] Fibra: 14 g por cada 1000 kcal (Institute of Medicine).
+   [REFERENCIA] Agua: ~35 ml/kg de peso, más la pérdida por sudor.
+   [FÓRMULA]  Epley para el 1RM estimado: 1RM = peso × (1 + reps/30).
+   [CONVENIO] 7700 kcal por kg de peso corporal (regla de Wishnofsky, 3500
+              kcal/libra). Es la referencia clásica, PERO se sabe que
+              sobreestima la pérdida a largo plazo porque el gasto baja al
+              adelgazar (Hall, Int J Obes 2008). Aquí solo se usa para fijar el
+              déficit diario del objetivo, no para prometer resultados.
+
+   ── Validez del registro de comida ──
+   [FÓRMULA]  El suelo del TDEE medido es una versión simplificada del método de
+              Goldberg (Goldberg et al. 1991; Black, Int J Obes 2000): si la
+              ingesta declarada dividida por el BMR cae por debajo del nivel de
+              actividad plausible, el registro es incompleto, no el metabolismo
+              anómalo. La literatura actual insiste en que el PAL de comparación
+              debe reflejar al sujeto y no un 1.55 fijo — por eso aquí se usa el
+              factor de actividad DEDUCIDO de sus propios entrenos, cardio y
+              pasos, y no una etiqueta elegida a mano.
+
+   ── Partición de la pérdida de peso ──
+   [REFERENCIA] La relación de Forbes describe que cuanta más grasa se tiene,
+              mayor proporción de grasa (y menor de músculo) se pierde.
+   [CONVENIO] La forma lineal concreta (0.55 + 0.012 × %grasa, acotada) es una
+              aproximación nuestra a esa relación, no la ecuación de Forbes.
+
+   ── Suavizados y topes ──
+   [CONVENIO] EMA del peso con α = 0.25; ventana de 14 días para la carga media;
+              recorte del factor de carbohidratos a [0.6, 1.5]; umbral del 35%
+              para preferir el TDEE medido al estimado. Ninguno tiene respaldo
+              experimental: son decisiones de diseño para que los números no den
+              saltos absurdos, y se documentan como tales.
+   ============================================================================ */
 const DEFAULT_BODY_PROFILE = {
   sexo: "hombre",          // "hombre" | "mujer"
   edad: 34,
@@ -1801,9 +1883,43 @@ function getMeasuredLeanMass(metrics) {
    Esto estima el gasto REAL del día por encima del reposo, en kcal, sumando lo
    que hay registrado: fuerza, cardio y pasos. Es una estimación y se dice que
    lo es, pero está hecha con los datos del día en vez de con una etiqueta.     */
-const MET_FUERZA = 5.0;      // entrenamiento de fuerza con descansos
+/* MET del entrenamiento de fuerza.
+   El Compendium of Physical Activities (Ainsworth et al.) da dos anclajes, no
+   uno: 3.5 MET para esfuerzo ligero-moderado y 6.0 para esfuerzo vigoroso
+   (levantamiento con series al fallo o cerca). Antes había aquí un 5.0 a ojo,
+   que no es ninguno de los dos.
+   Se interpola entre ambos con el RIR que ya se registra: cuantas más series se
+   llevan a RIR ≤ 2, más cerca del extremo vigoroso. Es la misma cifra del
+   Compendium, elegida con el dato del usuario en vez de a ojo. */
+const MET_FUERZA_LIGERO = 3.5;
+const MET_FUERZA_VIGOROSO = 6.0;
 const MIN_POR_SERIE = 3;     // si no se registró duración: serie + descanso
-const KCAL_POR_PASO_KG = 0.00038;   // ~0.5 kcal/kg por km, ~1300 pasos/km
+
+function metFuerzaSegunRIR(seriesTotales, seriesDuras) {
+  if (!(seriesTotales > 0)) return MET_FUERZA_LIGERO;
+  const frac = Math.max(0, Math.min(1, seriesDuras / seriesTotales));
+  return MET_FUERZA_LIGERO + (MET_FUERZA_VIGOROSO - MET_FUERZA_LIGERO) * frac;
+}
+
+/* Coste de caminar por pasos.
+   Antes había una constante de 0.00038 kcal por paso y kg, deducida a mano de
+   "0.5 kcal/kg por km y 1300 pasos/km". Eran dos cifras redondeadas de memoria
+   para acabar en un número que ya se podía calcular: la propia ecuación del
+   ACSM da el coste de caminar en llano, y usarla aquí elimina la constante
+   inventada y deja UNA sola fuente para todo lo que sea caminar. */
+const LARGO_PASO_M = 0.75;   // zancada media adulta caminando
+const VEL_PASOS_KMH = 4.5;   // ritmo típico de los pasos del día a día
+
+function kcalDePasos(pasos, pesoKg) {
+  const n = parseInt(pasos) || 0;
+  const peso = parseFloat(pesoKg) || 0;
+  if (n <= 0 || peso <= 0) return 0;
+  const km = (n * LARGO_PASO_M) / 1000;
+  const min = (km / VEL_PASOS_KMH) * 60;
+  const bruto = calcWalkBlock({ min, vel: VEL_PASOS_KMH, incl: 0 }, peso).kcal;
+  // Neto: se descuenta el basal de esos minutos, igual que en el resto
+  return Math.max(0, Math.round(bruto - (3.5 * peso / 200) * min));
+}
 
 function calcDayActivityLoad(opts = {}) {
   const {
@@ -1812,19 +1928,22 @@ function calcDayActivityLoad(opts = {}) {
   const peso = parseFloat(opts.pesoKg) || 0;
 
   // — Fuerza —
-  let series = 0, volumenKg = 0;
+  let series = 0, seriesDuras = 0, volumenKg = 0;
   Object.values(exlog || {}).forEach(sets => (sets || []).forEach(st => {
     if (!st || st.type === "warmup") return;
     if ((st.date || "").slice(0, 10) !== dateStr) return;
     series++;
+    const rir = parseFloat(st.rir);
+    if (isFinite(rir) && rir <= 2) seriesDuras++;
     volumenKg += (parseFloat(st.w) || 0) * (parseInt(st.reps) || 0);
   }));
   const durReg = parseInt((workoutDurations || {})[dateStr]) || 0;
   const durFuerza = durReg > 0 ? durReg : series * MIN_POR_SERIE;
-  // MET incluye el metabolismo basal, así que se resta 1 para quedarse con el
-  // gasto POR ENCIMA del reposo; si no, se contaría dos veces con el BMR.
+  const met = metFuerzaSegunRIR(series, seriesDuras);
+  // El MET incluye el metabolismo basal, así que se resta 1 para quedarse con
+  // el gasto POR ENCIMA del reposo; si no, se contaría dos veces con el BMR.
   const kcalFuerza = peso > 0 && durFuerza > 0
-    ? Math.round(((MET_FUERZA - 1) * 3.5 * peso / 200) * durFuerza) : 0;
+    ? Math.round(((met - 1) * 3.5 * peso / 200) * durFuerza) : 0;
 
   // — Cardio —
   const sesiones = (cardiolog || {})[dateStr] || [];
@@ -1838,7 +1957,7 @@ function calcDayActivityLoad(opts = {}) {
 
   // — Pasos (NEAT) —
   const pasos = parseInt((metricslog || {})[dateStr]?.pasos) || 0;
-  const kcalPasosBruto = peso > 0 ? Math.round(pasos * peso * KCAL_POR_PASO_KG) : 0;
+  const kcalPasosBruto = kcalDePasos(pasos, peso);
   // El móvil cuenta los pasos de la cinta, así que sumar ambos sería contar la
   // caminata dos veces. Se descuenta lo que ya aporta el cardio.
   const kcalPasos = Math.max(0, kcalPasosBruto - kcalCardio);
@@ -1846,7 +1965,7 @@ function calcDayActivityLoad(opts = {}) {
   const carga = kcalFuerza + kcalCardio + kcalPasos;
   return {
     carga,
-    fuerza: { series, volumenKg: Math.round(volumenKg), min: durFuerza, duracionRegistrada: durReg > 0, kcal: kcalFuerza },
+    fuerza: { series, seriesDuras, met: Math.round(met * 10) / 10, volumenKg: Math.round(volumenKg), min: durFuerza, duracionRegistrada: durReg > 0, kcal: kcalFuerza },
     cardio: { min: cardio.min, desnivel: cardio.desnivel, kcal: kcalCardio },
     pasos: { pasos, kcal: kcalPasos, solapado: kcalPasosBruto - kcalPasos },
     entreno: series > 0,
@@ -21726,6 +21845,7 @@ if (typeof module !== 'undefined' && module.exports) {
     exerciseProfile, profileBalance, PERFIL_ETIQUETA,
     getMeasuredLeanMass, calcDayActivityLoad, calcAverageActivityLoad, calcObservedActivityFactor,
     calcDayCarbFactor,
+    metFuerzaSegunRIR, kcalDePasos, MET_FUERZA_LIGERO, MET_FUERZA_VIGOROSO,
     RECOVERY_FIELDS, getLocalDateStr,
     normalizeMuscle, canonMuscleName, dedupeMuscles, calcMuscleVolumeBalance, SLUG_MUSCLE,
     normalizeBodyEntry, mergeMetricsUpTo, validateBodyMetrics, RANGOS_BIO,

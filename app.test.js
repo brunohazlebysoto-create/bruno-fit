@@ -1182,6 +1182,65 @@ describe('caminata en cinta con inclinación', () => {
   });
 });
 
+describe('respaldo de las constantes', () => {
+  const {
+    metFuerzaSegunRIR, kcalDePasos, calcWalkBlock, calcDayActivityLoad,
+    MET_FUERZA_LIGERO, MET_FUERZA_VIGOROSO, calcBMRKatch, estimate1RM,
+  } = require('./app.js');
+
+  test('el MET de fuerza nunca sale de los dos anclajes del Compendium', () => {
+    // 3.5 ligero-moderado, 6.0 vigoroso. Antes había un 5.0 a ojo que no es
+    // ninguno de los dos; ahora se interpola entre ellos con el RIR real.
+    expect(metFuerzaSegunRIR(10, 0)).toBe(MET_FUERZA_LIGERO);
+    expect(metFuerzaSegunRIR(10, 10)).toBe(MET_FUERZA_VIGOROSO);
+    expect(metFuerzaSegunRIR(10, 5)).toBeCloseTo(4.75, 2);
+    // Y aguanta datos imposibles sin salirse del rango
+    [[0, 0], [10, 99], [-1, 5]].forEach(([t, d]) => {
+      const m = metFuerzaSegunRIR(t, d);
+      expect(m).toBeGreaterThanOrEqual(MET_FUERZA_LIGERO);
+      expect(m).toBeLessThanOrEqual(MET_FUERZA_VIGOROSO);
+    });
+  });
+
+  test('el RIR registrado mueve el gasto de la sesión', () => {
+    const d = '2026-08-14';
+    const serie = (rir) => ({ date: d + 'T18:00:00', w: 100, reps: 8, type: 'work', rir });
+    const suave = calcDayActivityLoad({ dateStr: d, pesoKg: 92, workoutDurations: { [d]: 60 },
+      exlog: { X: Array.from({ length: 9 }, () => serie(4)) } });
+    const duro = calcDayActivityLoad({ dateStr: d, pesoKg: 92, workoutDurations: { [d]: 60 },
+      exlog: { X: Array.from({ length: 9 }, () => serie(0)) } });
+    expect(duro.fuerza.kcal).toBeGreaterThan(suave.fuerza.kcal);
+    expect(duro.fuerza.met).toBe(MET_FUERZA_VIGOROSO);
+    expect(suave.fuerza.met).toBe(MET_FUERZA_LIGERO);
+  });
+
+  test('el coste de los pasos sale de la misma ecuación que la cinta', () => {
+    // Antes era una constante deducida a mano; ahora se calcula con el ACSM en
+    // llano, de modo que caminar cuesta lo mismo se registre como se registre.
+    const kcal = kcalDePasos(9000, 92);
+    const equivalente = calcWalkBlock({ min: 90, vel: 4.5, incl: 0 }, 92).kcal
+      - Math.round((3.5 * 92 / 200) * 90);
+    expect(kcal).toBe(equivalente);
+    expect(kcalDePasos(0, 92)).toBe(0);
+    expect(kcalDePasos(9000, 0)).toBe(0);
+  });
+
+  test('la pendiente negativa no se cuenta: el ACSM no vale para bajadas', () => {
+    const bajada = calcWalkBlock({ min: 30, vel: 5, incl: -10 }, 92);
+    const llano = calcWalkBlock({ min: 30, vel: 5, incl: 0 }, 92);
+    expect(bajada.kcal).toBe(llano.kcal);
+  });
+
+  test('Katch-McArdle es literalmente 370 + 21.6 × masa magra', () => {
+    expect(calcBMRKatch(70)).toBe(Math.round(370 + 21.6 * 70));
+    expect(calcBMRKatch(0)).toBe(0);
+  });
+
+  test('Epley es peso × (1 + reps/30)', () => {
+    expect(estimate1RM(100, 10)).toBeCloseTo(100 * (1 + 10 / 30), 1);
+  });
+});
+
 describe('macros del día según la carga real', () => {
   const {
     getMeasuredLeanMass, calcBMR, calcNutritionTargets,
