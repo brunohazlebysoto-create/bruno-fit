@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W73";
+const APP_VERSION = "v2026.07.29-W74";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1951,10 +1951,36 @@ function calcNutritionTargets(profile, metrics, opts = {}) {
   const { bmr, method, leanKg, leanFuente, bmrInforme } = calcBMR(p, m);
   if (!bmr) return null;
 
-  const tdeeEstimado = Math.round(bmr * (parseFloat(p.actividad) || 1.45));
-  const tdeeReal = parseInt(opts.tdeeReal) || 0;
-  // El TDEE observado (de comida + peso real) es más fiable que la estimación,
-  // pero se ignora si se desvía >35% (suele ser dato sucio o registro incompleto).
+  // El factor de actividad puede venir deducido de los datos reales
+  // (entrenamientos, cardio y pasos registrados). Es preferible al botón: nadie
+  // sabe si es "moderado" o "activo", pero la app sí sabe cuánto se ha movido.
+  const actObservada = parseFloat(opts.actividadObservada) || 0;
+  const actUsada = actObservada > 0 ? actObservada : (parseFloat(p.actividad) || 1.45);
+  const tdeeEstimado = Math.round(bmr * actUsada);
+
+  /* El TDEE observado (comida registrada frente al peso real) es mejor dato que
+     cualquier fórmula... siempre que la comida esté bien registrada. Y cuando no
+     lo está, el error va SIEMPRE en la misma dirección: lo que no se anota no
+     existe, así que el TDEE sale bajo, el objetivo sale bajo, y la app acaba
+     recomendando comer de menos a alguien que ya come de menos.
+
+     El caso real que lo destapó: TDEE medido 1873 kcal con un BMR de 1860. Eso
+     es un factor de actividad de 1.007 — imposible en alguien que entrena
+     cuatro días por semana y camina en cuesta en días alternos. La app fijaba
+     el objetivo en 1863 kcal y, tres centímetros más abajo, avisaba de pérdida
+     de fuerza en cinco ejercicios: estaba diagnosticando el daño que causaba su
+     propio número.
+
+     Por eso el TDEE medido tiene ahora un SUELO fisiológico: ni por debajo de
+     1.2 × BMR, ni por debajo del basal más la actividad que sí está registrada.
+     Y cuando toca ese suelo se dice, porque la causa casi siempre es comida sin
+     anotar y eso tiene arreglo. */
+  const tdeeRealBruto = parseInt(opts.tdeeReal) || 0;
+  const cargaMedia = Math.max(0, parseInt(opts.cargaMediaDiaria) || 0);
+  const sueloTdee = Math.max(Math.round(bmr * 1.2), Math.round(bmr * 1.1 + cargaMedia));
+  const tdeeReal = tdeeRealBruto > 0 ? Math.max(tdeeRealBruto, sueloTdee) : 0;
+  const tdeeRealCorregido = tdeeRealBruto > 0 && tdeeReal > tdeeRealBruto;
+
   const usarReal = tdeeReal > 0 && Math.abs(tdeeReal - tdeeEstimado) / tdeeEstimado <= 0.35;
   const tdee = usarReal ? tdeeReal : tdeeEstimado;
 
@@ -1988,6 +2014,9 @@ function calcNutritionTargets(profile, metrics, opts = {}) {
     kcal: kcalFinal, p: proteina, c: carbo, f: grasa, fibra,
     bmr, bmrMethod: method, leanKg, leanFuente, bmrInforme,
     tdee, tdeeEstimado, tdeeReal: tdeeReal || null, usandoTdeeReal: usarReal,
+    tdeeRealBruto: tdeeRealBruto || null, tdeeRealCorregido, sueloTdee,
+    actividadUsada: actUsada, actividadObservada: actObservada || null,
+    actividadDelPerfil: parseFloat(p.actividad) || 1.45,
     ritmoKgSemana: ritmo, deficitDiario: Math.round(kcalFinal - tdee),
     protPorKgLean: leanKg > 0 ? Math.round((proteina / leanKg) * 10) / 10 : null,
     objetivo: p.objetivo, label: goal.label,
@@ -6165,11 +6194,34 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     brazoDer: "", brazoIzq: "", musloDer: "", musloIzq: "", pantorrillaDer: "", pantorrillaIzq: "", cintura: "", pecho: ""
   }, [selectedDateStr, metricslog, bodyComp, notes, bodyProfile]);
 
+  // Carga real del día: fuerza registrada + cardio + pasos, en kcal por encima
+  // del reposo. Es lo que sustituye al "entrenó sí/no" para repartir carbos.
+  const dayLoad = React.useMemo(() => {
+    const pesoKg = parseFloat(activeMetrics?.weight) || 0;
+    const comun = { exlog, cardiolog, workoutDurations, metricslog, pesoKg };
+    const hoy = calcDayActivityLoad({ ...comun, dateStr: selectedDateStr });
+    const ref = calcAverageActivityLoad({ ...comun, dateStr: selectedDateStr }, 14);
+    const fac = calcDayCarbFactor(ref.cargas, hoy.carga);
+    return { ...hoy, media: ref.media, factor: fac ? fac.factor : null, factorBruto: fac ? fac.bruto : null };
+  }, [exlog, cardiolog, workoutDurations, metricslog, selectedDateStr, activeMetrics]);
+
   // Objetivos sugeridos a partir del perfil + composición corporal real.
   // Se recalculan solos al cambiar el peso, el % de grasa o el perfil.
+  // Factor de actividad deducido de lo que Bruno registra, no del botón que
+  // pulsó una vez. Es lo que pidió: "eso deberías saberlo tú según lo que te
+  // cargo de entrenamiento".
+  const actividadObservada = React.useMemo(() => {
+    const { bmr } = calcBMR(bodyProfile, activeMetrics);
+    return dayLoad.media > 0 ? calcObservedActivityFactor(bmr, dayLoad.media) : null;
+  }, [bodyProfile, activeMetrics, dayLoad.media]);
+
   const nutritionTargets = React.useMemo(
-    () => calcNutritionTargets(bodyProfile, activeMetrics, { tdeeReal: tdeeEstimate }),
-    [bodyProfile, activeMetrics.weight, activeMetrics.grasaPct, tdeeEstimate]
+    () => calcNutritionTargets(bodyProfile, activeMetrics, {
+      tdeeReal: tdeeEstimate,
+      cargaMediaDiaria: dayLoad.media,
+      actividadObservada: bodyProfile?.actividadAuto === false ? null : actividadObservada,
+    }),
+    [bodyProfile, activeMetrics.weight, activeMetrics.grasaPct, tdeeEstimate, dayLoad.media, actividadObservada]
   );
 
   // Aplicar los objetivos calculados al preset activo. Es una acción explícita
@@ -6195,16 +6247,6 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     [nutritionTargets]
   );
 
-  // Carga real del día: fuerza registrada + cardio + pasos, en kcal por encima
-  // del reposo. Es lo que sustituye al "entrenó sí/no" para repartir carbos.
-  const dayLoad = React.useMemo(() => {
-    const pesoKg = parseFloat(activeMetrics?.weight) || 0;
-    const comun = { exlog, cardiolog, workoutDurations, metricslog, pesoKg };
-    const hoy = calcDayActivityLoad({ ...comun, dateStr: selectedDateStr });
-    const ref = calcAverageActivityLoad({ ...comun, dateStr: selectedDateStr }, 14);
-    const fac = calcDayCarbFactor(ref.cargas, hoy.carga);
-    return { ...hoy, media: ref.media, factor: fac ? fac.factor : null, factorBruto: fac ? fac.bruto : null };
-  }, [exlog, cardiolog, workoutDurations, metricslog, selectedDateStr, activeMetrics]);
 
   // Objetivos del día con carbohidratos ciclados. Si hay historial suficiente
   // para saber cómo es un día normal suyo, se reparte por la carga real; si no,
@@ -7399,6 +7441,8 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             metabolicAdaptation={metabolicAdaptation}
             recompAlert={recompAlert}
             waistMetrics={waistMetrics}
+            actividadObservada={actividadObservada}
+            dayLoad={dayLoad}
             onApplyTargets={applyNutritionTargets}
             foodlog={foodlog}
             waterlog={waterlog}
@@ -18480,7 +18524,8 @@ function Registro({
   projections, tdeeEstimate, analyzeAndReconfigure, experiments, setExperiments,
   dietGuidelines, setDietGuidelines, trainingGuidelines, setTrainingGuidelines, onSaveGuidelines,
   sendCoachMessage, setView, bodyProfile, updateBodyProfile, nutritionTargets, onApplyTargets,
-  strengthLossAlert, refeedAlert, metabolicAdaptation, recompAlert, waistMetrics
+  strengthLossAlert, refeedAlert, metabolicAdaptation, recompAlert, waistMetrics,
+  actividadObservada, dayLoad
 }){
   const [type, setType] = useState("peso");
   const [statsPeriod, setStatsPeriod] = useState(7); // 7 or 30 days
@@ -19772,6 +19817,9 @@ ${alertas || "ninguna"}`;
       {updateBodyProfile && (() => {
         const bp = { ...DEFAULT_BODY_PROFILE, ...(bodyProfile || {}) };
         const nt = nutritionTargets;
+        // "Automático" es el modo por defecto: solo deja de estarlo si se elige
+        // un nivel a mano, que es una decisión explícita.
+        const auto = bp.actividadAuto !== false && actividadObservada > 0;
         const num = (k, label, unit, min, max) => (
           <div style={{flex:1, minWidth:78}}>
             <div style={{fontSize:9.5, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em", marginBottom:3}}>{label}</div>
@@ -19833,17 +19881,46 @@ ${alertas || "ninguna"}`;
               ))}
             </div>
 
-            {/* Nivel de actividad */}
-            <div style={{fontSize:9.5, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em", marginBottom:4}}>Actividad diaria (sin contar el entreno)</div>
-            <div style={{display:"flex", gap:5, marginBottom:12, flexWrap:"wrap"}}>
+            {/* Nivel de actividad.
+                Elegirlo a mano es adivinar: nadie sabe si es "moderado" o
+                "activo". La app sí sabe cuánto se ha entrenado, caminado y
+                andado, así que lo deduce y el botón queda como anulación. */}
+            <div style={{fontSize:9.5, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em", marginBottom:4}}>Actividad diaria</div>
+            {actividadObservada > 0 && (
+              <button className="btn-active-scale"
+                onClick={() => updateBodyProfile({ actividadAuto: true })}
+                style={{width:"100%", textAlign:"left", marginBottom:6, borderRadius:10, padding:"8px 10px",
+                  background: auto ? "rgba(77,124,15,0.16)" : "transparent",
+                  border:`1px solid ${auto ? C.lime : C.line}`}}>
+                <div style={{display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:8}}>
+                  <span style={{fontSize:11.5, fontWeight:800, color: auto ? C.lime : C.ink}}>
+                    Automático · ×{actividadObservada}
+                  </span>
+                  {auto && <span style={{fontSize:9, fontWeight:800, color:C.lime}}>EN USO</span>}
+                </div>
+                <div style={{fontSize:9.5, color:C.muted, marginTop:2, lineHeight:1.4}}>
+                  Deducido de lo que registras: {dayLoad?.media || 0} kcal/día de actividad de media
+                  en tus últimos 14 días (entrenos, cinta y pasos).
+                </div>
+              </button>
+            )}
+            <div style={{display:"flex", gap:5, marginBottom: auto ? 6 : 12, flexWrap:"wrap", opacity: auto ? 0.5 : 1}}>
               {ACTIVITY_LEVELS.map(a => (
                 <button key={a.key} className="btn-active-scale" title={a.desc}
-                  onClick={() => updateBodyProfile({ actividad: a.key })}
-                  style={{flex:"1 1 auto", background: bp.actividad===a.key ? "rgba(77,124,15,0.16)" : "transparent", border:`1px solid ${bp.actividad===a.key ? C.lime : C.line}`, borderRadius:8, padding:"5px 7px", color: bp.actividad===a.key ? C.lime : C.muted, fontSize:10.5, fontWeight:700}}>
+                  onClick={() => updateBodyProfile({ actividad: a.key, actividadAuto: false })}
+                  style={{flex:"1 1 auto", background: (!auto && bp.actividad===a.key) ? "rgba(77,124,15,0.16)" : "transparent", border:`1px solid ${(!auto && bp.actividad===a.key) ? C.lime : C.line}`, borderRadius:8, padding:"5px 7px", color: (!auto && bp.actividad===a.key) ? C.lime : C.muted, fontSize:10.5, fontWeight:700}}>
                   {a.label}
                 </button>
               ))}
             </div>
+            {/* Tres de estos cinco botones no cambiaban nada y no había forma de
+                saber por qué: el TDEE medido tapaba la estimación en silencio. */}
+            {nt?.usandoTdeeReal && (
+              <div style={{fontSize:9.5, color:C.muted, lineHeight:1.45, marginBottom:12}}>
+                Ahora mismo esta opción <b style={{color:C.ink}}>no cambia tus calorías</b>: se está usando tu
+                TDEE medido, que sale de tu comida y tu peso reales. Solo vuelve a mandar si el registro se queda corto.
+              </div>
+            )}
 
             {/* Resultado del cálculo */}
             {nt ? (
@@ -19871,7 +19948,15 @@ ${alertas || "ninguna"}`;
                   <br/>
                   {nt.usandoTdeeReal
                     ? <>TDEE <b style={{color:C.cyan}}>medido</b> de tu comida y peso real.</>
-                    : <>TDEE estimado (actividad ×{bp.actividad}). Con 21+ días de registro se usará tu TDEE real.</>}
+                    : <>TDEE estimado (actividad ×{nt.actividadUsada}{nt.actividadObservada ? ", automática" : ""}). Con 21+ días de registro se usará tu TDEE real.</>}
+                  {nt.tdeeRealCorregido && (
+                    <div style={{color:C.amber, marginTop:3, lineHeight:1.45}}>
+                      Tu TDEE medido salía <b>{nt.tdeeRealBruto} kcal</b>, prácticamente igual que tu metabolismo
+                      basal. Eso es imposible entrenando y caminando como lo haces: casi siempre significa
+                      <b> comida sin registrar</b>. Se ha subido a {nt.sueloTdee} kcal para no recomendarte
+                      comer de menos por un registro incompleto.
+                    </div>
+                  )}
                   {" "}Balance diario: <b style={{color: nt.deficitDiario < 0 ? C.amber : C.lime}}>{nt.deficitDiario > 0 ? "+" : ""}{nt.deficitDiario} kcal</b> ({nt.ritmoKgSemana > 0 ? "+" : ""}{nt.ritmoKgSemana} kg/sem).
                 </div>
                 {onApplyTargets && (

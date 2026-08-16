@@ -534,8 +534,33 @@ describe('perfil corporal y objetivos derivados', () => {
     const est = calcNutritionTargets(DEFAULT_BODY_PROFILE, m).tdeeEstimado;
     const plausible = calcNutritionTargets(DEFAULT_BODY_PROFILE, m, { tdeeReal: Math.round(est * 1.1) });
     expect(plausible.usandoTdeeReal).toBe(true);
+    // Un TDEE medido disparatado ya no se descarta sin más: se sube al suelo
+    // fisiológico. Descartarlo devolvía a una fórmula pura; corregirlo conserva
+    // la parte del dato que sí vale. Lo que no puede pasar, en ninguno de los
+    // dos casos, es que ese número acabe fijando el objetivo.
     const absurdo = calcNutritionTargets(DEFAULT_BODY_PROFILE, m, { tdeeReal: 900 });
-    expect(absurdo.usandoTdeeReal).toBe(false);
+    expect(absurdo.tdeeRealCorregido).toBe(true);
+    expect(absurdo.tdee).toBeGreaterThanOrEqual(Math.round(absurdo.bmr * 1.2));
+    expect(absurdo.tdee).toBeGreaterThan(900);
+  });
+
+  test('el suelo del TDEE medido cuenta la actividad que sí está registrada', () => {
+    // Comer poco anotado no puede convertir a alguien que entrena y camina en
+    // alguien cuyo gasto iguala su metabolismo basal.
+    const m = { weight: 92.3, grasaPct: 24.5, pesoSinGrasa: 69 };
+    const r = calcNutritionTargets(DEFAULT_BODY_PROFILE, m, { tdeeReal: 1873, cargaMediaDiaria: 550 });
+    expect(r.tdeeRealCorregido).toBe(true);
+    expect(r.tdeeReal).toBeGreaterThanOrEqual(r.bmr * 1.1 + 550);
+    expect(r.kcal).toBeGreaterThan(2000);   // ya no prescribe 1863 kcal
+  });
+
+  test('el factor de actividad deducido de los datos manda sobre el botón', () => {
+    const m = { weight: 92.3, grasaPct: 24.5 };
+    const perfil = { ...DEFAULT_BODY_PROFILE, actividad: 1.2 };   // "sedentario"
+    const auto = calcNutritionTargets(perfil, m, { actividadObservada: 1.62 });
+    expect(auto.actividadUsada).toBe(1.62);
+    expect(auto.actividadDelPerfil).toBe(1.2);
+    expect(auto.tdeeEstimado).toBeGreaterThan(calcNutritionTargets(perfil, m).tdeeEstimado);
   });
 
   test('sin peso no hay objetivos', () => {

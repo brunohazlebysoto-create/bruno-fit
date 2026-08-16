@@ -1244,3 +1244,55 @@ convierte el cálculo en un oráculo.
 implican los datos reales, para contrastarlo con el escrito en el perfil: quien
 marcó "Ligero" (1.375) pero entrena cuatro días y camina en cuesta tres tiene un
 TDEE estimado corto y un déficit real mayor del que cree.
+
+## El selector de actividad no hacía nada, y el TDEE medido mentía (W74)
+
+> *"ahí no hay cambios, se cambió el nivel de ejercicios. Aunque eso deberías
+> saberlo tú según lo que te cargo de entrenamiento"*
+
+Cinco capturas cambiando el nivel de actividad: Sedentario, Ligero y Moderado
+dan **exactamente el mismo objetivo** (1863 kcal). Activo salta a 2333 y Muy
+activo a 2658.
+
+### Por qué tres botones no hacían nada
+
+El TDEE medido tapaba la estimación. La regla era usar el medido salvo que se
+desviara más de un 35% del estimado:
+
+| Nivel | Estimado | Desvío vs medido (1873) | Manda |
+|---|---|---|---|
+| Sedentario | 2232 | 16% | medido |
+| Ligero | 2558 | 27% | medido |
+| Moderado | 2697 | 31% | medido |
+| Activo | 2883 | **35.03%** | estimado |
+| Muy activo | 3209 | 42% | estimado |
+
+Funcionaba según lo escrito, pero desde fuera son tres botones muertos y luego
+un salto de 1000 kcal al cruzar un umbral invisible. Ahora se dice en la propia
+pantalla: *"esta opción no cambia tus calorías: se está usando tu TDEE medido"*.
+
+### El fallo de verdad estaba debajo
+
+**TDEE medido de 1873 kcal con un BMR de 1860.** Eso es un factor de actividad
+de **1.007**: el gasto de alguien en cama. Imposible entrenando cuatro días por
+semana y caminando en cuesta en días alternos.
+
+El TDEE medido sale de la comida registrada frente al cambio de peso, y cuando
+el registro falla el error va **siempre en la misma dirección**: lo que no se
+anota no existe, el TDEE sale bajo, el objetivo sale bajo. La app fijaba **1863
+kcal** para un hombre de 92 kg… y tres centímetros más abajo avisaba de
+**pérdida de fuerza en cinco ejercicios**. Estaba diagnosticando el daño que
+causaba su propio número.
+
+Ahora el TDEE medido tiene un **suelo fisiológico**: ni por debajo de 1.2 × BMR,
+ni por debajo del basal más la actividad que sí está registrada. Cuando toca ese
+suelo se dice, y se nombra la causa probable —comida sin anotar— porque eso
+tiene arreglo.
+
+### Y el nivel de actividad se deduce
+
+Tenía razón: elegirlo a mano es adivinar. `calcObservedActivityFactor` ya existía
+desde W73 pero no se usaba. Ahora hay un modo **Automático**, por defecto, que
+lo deduce de los entrenos, la cinta y los pasos registrados, y enseña la cuenta:
+*"×1.31 · deducido de lo que registras: 399 kcal/día de actividad de media en
+tus últimos 14 días"*. Los cinco botones siguen ahí como anulación manual.
