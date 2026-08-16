@@ -1157,6 +1157,77 @@ describe('caminata en cinta con inclinación', () => {
   });
 });
 
+describe('perfil de resistencia de los ejercicios', () => {
+  const { exerciseProfile, profileBalance, recommendDayExercises } = require('./app.js');
+
+  test('distingue estímulos dentro del mismo músculo', () => {
+    // Los tres son de bíceps y son tres cosas distintas
+    expect(exerciseProfile('Curl inclinado').perfil).toBe('estirado');
+    expect(exerciseProfile('Curl martillo').perfil).toBe('medio');
+    expect(exerciseProfile('Curl predicador').perfil).toBe('contraido');
+  });
+
+  test('las reglas específicas ganan a las genéricas', () => {
+    // /curl/ a secas daría "medio"; el predicador y el inclinado están antes
+    expect(exerciseProfile('Curl scott').perfil).toBe('contraido');
+    // Y "peso muerto rumano" no puede caer en la regla de "peso muerto"
+    expect(exerciseProfile('Peso muerto rumano').perfil).toBe('estirado');
+    expect(exerciseProfile('Peso muerto').perfil).toBe('medio');
+  });
+
+  test('tolera acentos y mayúsculas como el resto del catálogo', () => {
+    expect(exerciseProfile('EXTENSIÓN CUÁDRICEPS').perfil).toBe('contraido');
+    expect(exerciseProfile('sentadilla búlgara').perfil).toBe('estirado');
+  });
+
+  test('un ejercicio desconocido no se inventa un perfil', () => {
+    expect(exerciseProfile('Máquina rara del gimnasio')).toBe(null);
+  });
+
+  test('cada entrada trae claves de ejecución y el error típico', () => {
+    const p = exerciseProfile('Aperturas');
+    expect(p.claves.length).toBeGreaterThan(0);
+    expect(typeof p.error).toBe('string');
+    expect(p.error.length).toBeGreaterThan(5);
+  });
+
+  test('detecta el día que nunca carga el músculo estirado', () => {
+    const bal = profileBalance(['Extensión cuádriceps', 'Leg curl sentado', 'Puente glúteos']);
+    expect(bal.contraido).toBe(3);
+    expect(bal.faltaEstirado).toBe(true);
+  });
+
+  test('no acusa de desequilibrio a un día que solo tiene dos ejercicios', () => {
+    // Con dos ejercicios no "falta" un perfil: es que el día es corto
+    const bal = profileBalance(['Extensión cuádriceps', 'Leg curl sentado']);
+    expect(bal.faltaEstirado).toBe(false);
+  });
+
+  test('la variante propuesta aporta un perfil que los titulares no cubren', () => {
+    const exercises = { X: [
+      { name: 'Curl predicador' },   // contraído
+      { name: 'Curl martillo' },     // medio
+      { name: 'Curl inclinado' },    // estirado — debería destacar como variante
+    ] };
+    const hoy = '2026-08-16';
+    const exlog = {
+      'Curl predicador': [{ date: '2026-08-14T18:00:00', w: 30, reps: 10, type: 'work' }],
+      'Curl martillo':   [{ date: '2026-08-14T18:10:00', w: 16, reps: 10, type: 'work' }],
+      'Curl inclinado':  [{ date: '2026-08-14T18:20:00', w: 12, reps: 10, type: 'work' }],
+    };
+    const reco = recommendDayExercises(exlog, exercises, 'X', { hoy, porGrupo: 2 });
+    const variante = reco.find(r => r.rol === 'variante');
+    const titulares = reco.filter(r => r.rol !== 'variante');
+    expect(variante).toBeDefined();
+    expect(variante.aportaPerfil).toBe(true);
+    // Cuál de los tres queda fuera lo decide la puntuación por historial; lo que
+    // se comprueba aquí es la propiedad: su perfil NO está entre los titulares,
+    // y el motivo lo dice en vez de limitarse a "es la siguiente de la lista".
+    expect(titulares.map(t => t.perfil)).not.toContain(variante.perfil);
+    expect(variante.motivo).toMatch(/que hoy no cubre ningún otro/);
+  });
+});
+
 describe('sesión guiada de caminata', () => {
   const { walkStateAt, trimBlocksTo, AVISO_SEG, PROGRAMAS_CAMINATA } = require('./app.js');
 

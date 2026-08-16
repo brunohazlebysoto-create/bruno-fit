@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W71";
+const APP_VERSION = "v2026.07.29-W72";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -2937,6 +2937,116 @@ function buildComboSets(nombres, filas, fechaISO) {
 // ejercicio que lleva un mes sin tocarse no debería mandar en la sesión.
 const RECO_POR_GRUPO = 3;
 
+/* ===== QUÉ HACE CADA EJERCICIO, NO SOLO A QUÉ MÚSCULO VA =====
+   El recomendador puntuaba por historial: progresión, sesiones, días sin
+   hacerlo. Con eso sabe cuál está funcionando, pero no PARA QUÉ sirve, y dos
+   ejercicios del mismo grupo pueden ser estímulos completamente distintos.
+
+   Lo que diferencia un ejercicio de otro dentro del mismo músculo es dónde
+   carga: si la tensión máxima cae con el músculo estirado, a medio recorrido o
+   contraído. Es mecánica del movimiento, observable, y no hace falta inventar
+   ningún índice numérico para usarla.
+
+   · estirado  → tensión máxima con el músculo alargado. Es el que más cuesta y
+                 el que más se salta la gente; suele faltar en las sesiones.
+   · medio     → carga repartida por todo el recorrido. Los básicos pesados.
+   · contraido → tensión máxima en el acortamiento. Bombeo y conexión, poca
+                 carga mecánica en el estiramiento.
+
+   Cada entrada lleva además las claves que deciden si el músculo objetivo se
+   lleva el trabajo, y el error típico que se lo pasa a otro sitio.            */
+const PERFIL_EJERCICIO = [
+  // — Pectoral —
+  [/apertura|fly|cruce|peck ?deck/, { perfil: "estirado", claves: ["Baja hasta notar el pecho abierto, sin forzar el hombro", "Codo con una flexión fija: si se abre y cierra, es un press"], error: "Convertirlo en press al cansarse" }],
+  [/press inclinad/, { perfil: "medio", claves: ["Banco a 30°, no más: por encima manda el hombro", "Baja a la clavícula, no al esternón"], error: "Inclinar demasiado y pasar el trabajo al deltoides anterior" }],
+  [/fondo|dip/, { perfil: "estirado", claves: ["Tronco inclinado adelante para llevarlo al pecho", "Baja hasta que el hombro quede por debajo del codo, si no duele"], error: "Quedarse vertical, que lo vuelve un ejercicio de tríceps" }],
+  [/press (banca|plano|pecho)|press de banca/, { perfil: "medio", claves: ["Escápulas retraídas y fijas contra el banco", "Barra a la línea del pezón, codos a unos 45°"], error: "Rebotar en el pecho y perder la tensión" }],
+
+  // — Espalda —
+  [/pullover/, { perfil: "estirado", claves: ["Brazo casi recto: el codo apenas cambia de ángulo", "Estira hasta sentir el dorsal, no la axila"], error: "Doblar el codo y hacerlo con el tríceps" }],
+  [/dominada|jalon|pull ?up|lat pulldown/, { perfil: "estirado", claves: ["Empieza deprimiendo la escápula, antes de doblar el codo", "Lleva el codo al bolsillo, no la barra al mentón"], error: "Tirar con el bíceps y balancearse para subir" }],
+  [/remo/, { perfil: "medio", claves: ["Tira del codo hacia atrás, la mano es solo un gancho", "Una pausa corta arriba antes de bajar"], error: "Subir el torso con la barra en vez de tirar con la espalda" }],
+  [/face pull|reverse fly|pajaro/, { perfil: "contraido", claves: ["Manos por fuera de los codos al final", "Poco peso: si necesitas impulso, sobra"], error: "Encogerse de hombros y hacerlo con el trapecio superior" }],
+
+  // — Deltoides —
+  [/vuelo|elevacion lateral|lateral raise/, { perfil: "medio", claves: ["Sube hasta la altura del hombro, ni más", "Menique ligeramente arriba, codo por delante de la muñeca"], error: "Dar impulso con la cadera y subir por encima del hombro" }],
+  [/arnold|press militar|press hombro|overhead press/, { perfil: "medio", claves: ["Costillas abajo: no arquees la lumbar para llegar", "Baja hasta que el codo pase por debajo del hombro"], error: "Convertirlo en press inclinado echando el tronco atrás" }],
+
+  // — Bíceps —
+  // Ojo con el orden: /curl/ a secas también casa con "Leg curl", así que el
+  // femoral tiene que resolverse ANTES o un curl de isquios saldría
+  // clasificado como bíceps.
+  [/leg curl|curl femoral|curl de pierna/, { perfil: "contraido", claves: ["Cadera pegada al banco", "Bajada lenta y controlada"], error: "Levantar la cadera para completar el recorrido" }],
+  [/curl inclinad|curl banco inclinado/, { perfil: "estirado", claves: ["Brazo detrás del cuerpo y ahí se queda", "Baja del todo: el estiramiento es el motivo de este ejercicio"], error: "Llevar el codo adelante y perder el estiramiento" }],
+  [/curl (predicador|scott)/, { perfil: "contraido", claves: ["Axila apoyada, sin despegarla", "Controla la bajada: es donde más se rompe"], error: "Soltar de golpe abajo, que es donde el codo sufre" }],
+  [/curl martillo|hammer/, { perfil: "medio", claves: ["Muñeca neutra y firme", "Codo pegado al costado"], error: "Balancear el cuerpo para subir el último tercio" }],
+  [/curl/, { perfil: "medio", claves: ["Codo quieto: solo se mueve el antebrazo", "Aprieta arriba un segundo"], error: "Usar la espalda como palanca" }],
+
+  // — Tríceps —
+  [/extension sobre cabeza|frances|skull|overhead (tricep|extension)/, { perfil: "estirado", claves: ["Codo apuntando arriba y fijo", "Baja hasta notar el tríceps largo estirado"], error: "Abrir los codos y repartir el trabajo" }],
+  [/extension polea|pushdown|jalon triceps/, { perfil: "contraido", claves: ["Codo pegado y quieto", "Extiende del todo sin bloquear de golpe"], error: "Inclinarse encima para empujar con el peso del cuerpo" }],
+  [/press cerrado|close grip/, { perfil: "medio", claves: ["Manos a la anchura de los hombros, no más juntas", "Codos cerca del cuerpo"], error: "Juntar las manos hasta cargar la muñeca" }],
+
+  // — Cuádriceps —
+  [/sentadilla bulgara|bulgarian/, { perfil: "estirado", claves: ["Pie de atrás alto y lejos", "Baja recto: el trabajo es de la pierna de delante"], error: "Empujar con la pierna de atrás" }],
+  [/extension (de )?cuadriceps|leg extension/, { perfil: "contraido", claves: ["Aprieta arriba y baja despacio", "Espalda apoyada, sin despegar la cadera"], error: "Usar impulso y soltar la bajada" }],
+  [/sentadilla|squat|prensa|leg press|hack/, { perfil: "medio", claves: ["Profundidad hasta donde la lumbar aguante neutra", "Rodilla sigue la línea del pie"], error: "Levantar el talón o hundir la rodilla hacia dentro" }],
+  [/step-?up|estocada|lunge|zancada/, { perfil: "medio", claves: ["Empuja con el talón de la pierna de arriba", "No te ayudes con la pierna de abajo"], error: "Impulsarse con la pierna trasera" }],
+
+  // — Isquios y glúteo —
+  [/peso muerto rumano|rumano|rdl|buenos dias/, { perfil: "estirado", claves: ["Lleva la cadera atrás, no bajes doblando la espalda", "Para cuando el isquio ya no da más, aunque no llegues al suelo"], error: "Convertirlo en sentadilla doblando la rodilla" }],
+  [/\bfemoral\b/, { perfil: "contraido", claves: ["Cadera pegada al banco", "Bajada lenta y controlada"], error: "Levantar la cadera para completar el recorrido" }],
+  [/peso muerto/, { perfil: "medio", claves: ["Barra pegada a la pierna todo el recorrido", "Empieza empujando el suelo, no tirando con la espalda"], error: "Redondear la lumbar al despegar" }],
+  [/puente|hip thrust|empuje de cadera/, { perfil: "contraido", claves: ["Costillas abajo y mentón metido", "Aprieta el glúteo arriba, sin arquear la lumbar"], error: "Terminar el recorrido con la espalda en vez del glúteo" }],
+
+  // — Otros —
+  [/gemelo|pantorrilla|calf/, { perfil: "estirado", claves: ["Baja el talón todo lo que dé el escalón", "Pausa abajo y pausa arriba"], error: "Rebotar con el tendón en vez de trabajar el músculo" }],
+  [/encogimiento|shrug/, { perfil: "contraido", claves: ["Sube recto, sin rotar el hombro", "Pausa arriba"], error: "Rotar los hombros, que no añade nada y carga la articulación" }],
+];
+
+const PERFIL_ETIQUETA = {
+  estirado:  { txt: "en estiramiento", corto: "Estirado" },
+  medio:     { txt: "en todo el recorrido", corto: "Medio" },
+  contraido: { txt: "en contracción", corto: "Contraído" },
+};
+
+/** Perfil de resistencia y claves de ejecución de un ejercicio, por su nombre. */
+function exerciseProfile(nombre) {
+  // `_sinAcentos` y no `normalizeMuscle`: esa canonicaliza nombres de MÚSCULO
+  // ("cuadricep" → "Cuádriceps") y con un nombre de ejercicio devuelve null,
+  // que al probarlo contra las expresiones se convertía en la cadena "null" y
+  // no coincidía con nada. Aquí solo hace falta minúsculas sin acentos.
+  const n = _sinAcentos(nombre);
+  for (const [re, datos] of PERFIL_EJERCICIO) {
+    if (re.test(n)) return { ...datos, etiqueta: PERFIL_ETIQUETA[datos.perfil] };
+  }
+  return null;
+}
+
+/**
+ * Reparto de la sesión por perfil de resistencia.
+ * Un día entero de ejercicios "contraídos" trabaja el músculo sin cargarlo
+ * nunca estirado, que es donde más margen de crecimiento hay. Es un hueco que
+ * el recuento por grupo muscular no ve: los porcentajes por músculo pueden
+ * salir perfectos y aun así faltar el estímulo que importa.
+ */
+function profileBalance(nombres) {
+  const cuenta = { estirado: 0, medio: 0, contraido: 0, sinDatos: 0 };
+  (nombres || []).forEach(n => {
+    const p = exerciseProfile(n);
+    if (p) cuenta[p.perfil]++; else cuenta.sinDatos++;
+  });
+  const conPerfil = cuenta.estirado + cuenta.medio + cuenta.contraido;
+  return {
+    ...cuenta,
+    conPerfil,
+    // "Falta" solo se puede afirmar si hay ejercicios suficientes para hablar
+    // de reparto: con uno o dos, no falta nada, es que el día es corto.
+    faltaEstirado: conPerfil >= 3 && cuenta.estirado === 0,
+    faltaContraido: conPerfil >= 4 && cuenta.contraido === 0,
+  };
+}
+
 function recommendDayExercises(exlog, exercises, splitKey, opts = {}) {
   const lista = ((exercises || {})[splitKey] || []).filter(e => e?.name);
   const ahora = opts.hoy ? new Date(opts.hoy).getTime() : Date.now();
@@ -2984,9 +3094,11 @@ function recommendDayExercises(exlog, exercises, splitKey, opts = {}) {
     if (diasDesde != null && diasDesde > 30) { score -= 1.5; motivos.unshift(`${diasDesde} días sin hacerlo`); }
     else if (diasDesde != null && diasDesde <= 10) score += 0.5;
 
+    const perfil = exerciseProfile(ex.name);
     (porGrupo[grupo] = porGrupo[grupo] || []).push({
       grupo, name: ex.name, score: Math.round(score * 10) / 10,
       sesiones, tendencia, diasDesde, compuesto,
+      perfil: perfil?.perfil || null, claves: perfil?.claves || [], error: perfil?.error || null,
       motivo: motivos[0] || `${sesiones} sesión${sesiones !== 1 ? "es" : ""} registrada${sesiones !== 1 ? "s" : ""}`,
     });
   });
@@ -3001,11 +3113,23 @@ function recommendDayExercises(exlog, exercises, splitKey, opts = {}) {
     const exs = (porGrupo[g] || []).sort((a, b) =>
       b.score - a.score || b.sesiones - a.sesiones || a.name.localeCompare(b.name));
     const nRec = Math.min(tope, exs.length);
+    // El titular del grupo marca qué perfil ya está cubierto, así que la
+    // variante deja de ser "el siguiente de la lista" y pasa a ser la que
+    // aporta algo distinto: cambiar un ejercicio contraído por otro contraído
+    // no cambia el estímulo, solo el nombre.
+    const perfilesTitulares = new Set(exs.slice(0, tope).map(e => e.perfil).filter(Boolean));
     exs.forEach((e, i) => {
       if (i >= nRec) {
-        // La variante entra en lugar del recomendado más flojo de su grupo,
-        // que es justamente el candidato a rotar
-        salida.push({ ...e, rol: "variante", sustituyeA: exs[nRec - 1].name });
+        const aporta = e.perfil && !perfilesTitulares.has(e.perfil);
+        salida.push({
+          ...e, rol: "variante", sustituyeA: exs[nRec - 1].name,
+          // El perfil se añade al motivo, no lo sustituye: saber que está
+          // estancado sigue siendo la razón de que no sea titular.
+          motivo: aporta
+            ? `${e.motivo} · carga ${PERFIL_ETIQUETA[e.perfil].txt}, que hoy no cubre ningún otro`
+            : e.motivo,
+          aportaPerfil: !!aporta,
+        });
         return;
       }
       // Un ejercicio sin historial no está agotado: no tiene datos. Son cosas
@@ -3024,7 +3148,13 @@ function recommendDayExercises(exlog, exercises, splitKey, opts = {}) {
       salida.push({ ...e, rol: agotado ? "rotar" : "recomendado", sustituyeA: null });
     });
   });
-  return salida;
+  // Dentro de cada grupo, la variante que aporta un perfil que falta se
+  // presenta antes que las demás: es la que de verdad merece el cambio.
+  return salida.sort((a, b) => {
+    if (a.grupo !== b.grupo) return 0;
+    if (a.rol !== "variante" || b.rol !== "variante") return 0;
+    return (b.aportaPerfil ? 1 : 0) - (a.aportaPerfil ? 1 : 0);
+  });
 }
 
 // Quita un ejercicio de UN día del split. No toca `exlog`: las series y los PRs
@@ -14289,7 +14419,13 @@ tr:last-child td{border-bottom:none}
             const avgR = Math.round(sets.reduce((a,s)=>a+parseInt(s.reps),0)/sets.length);
             return `${d}: ${maxW}kg×${avgR}r(${sets.length}s)`;
           }).join(" | ");
-          historyLines.push(`**${name}** [Músculos: ${muscles}] [1RM≈${best1RM.toFixed(0)}kg] [MejorPeso: ${bestWeight}kg] [ÚltimaSesión: ${lastDate} → ${lastMaxW}kg×${lastAvgR}r×${lastSets.length}s] [${trend}${isPlat?" ⚠ESTANCADO":""}] [Total: ${dates.length} sesiones]`);
+          // El perfil de resistencia le dice a la IA para qué sirve el
+          // ejercicio, no solo a qué músculo va: sin eso ordena la sesión por
+          // grupo muscular y puede dejar el día entero sin trabajo en
+          // estiramiento, que es el estímulo que más se salta.
+          const perfEx = exerciseProfile(name);
+          const perfStr = perfEx ? ` [Carga ${PERFIL_ETIQUETA[perfEx.perfil].txt}]` : "";
+          historyLines.push(`**${name}** [Músculos: ${muscles}]${perfStr} [1RM≈${best1RM.toFixed(0)}kg] [MejorPeso: ${bestWeight}kg] [ÚltimaSesión: ${lastDate} → ${lastMaxW}kg×${lastAvgR}r×${lastSets.length}s] [${trend}${isPlat?" ⚠ESTANCADO":""}] [Total: ${dates.length} sesiones]`);
           historyLines.push(`  Historial completo: ${sessions}`);
         }
       }
@@ -17184,6 +17320,34 @@ tr:last-child td{border-bottom:none}
                 <strong style={{color:C.muted}}> Nuevo</strong> = sin datos aún.
               </div>
 
+              {/* Reparto por perfil de resistencia: un día puede tener los
+                  porcentajes por músculo perfectos y aun así no cargar nunca el
+                  músculo estirado, que es el estímulo que más se salta. Eso el
+                  recuento por grupo muscular no lo ve. */}
+              {(() => {
+                const bal = profileBalance(Array.from(rutinaSel || []));
+                if (!bal.conPerfil) return null;
+                const avisos = [];
+                if (bal.faltaEstirado) avisos.push("Ninguno carga el músculo estirado: añade una variante en estiramiento.");
+                if (bal.faltaContraido) avisos.push("Ninguno llega a la contracción: falta el trabajo de acortamiento.");
+                return (
+                  <div style={{background:C.panel2, border:`1px solid ${avisos.length ? C.amber : C.line}`,
+                    borderRadius:10, padding:"7px 10px"}}>
+                    <div style={{fontSize:9.5, fontWeight:800, color:C.muted, textTransform:"uppercase", letterSpacing:".06em"}}>
+                      Cómo carga el día
+                    </div>
+                    <div style={{fontSize:10.5, color:C.ink, marginTop:3, lineHeight:1.5}}>
+                      {["estirado", "medio", "contraido"].map(k => bal[k] > 0
+                        ? `${bal[k]} ${PERFIL_ETIQUETA[k].corto.toLowerCase()}` : null).filter(Boolean).join(" · ")}
+                      {bal.sinDatos > 0 && ` · ${bal.sinDatos} sin clasificar`}
+                    </div>
+                    {avisos.map((a, i) => (
+                      <div key={i} style={{fontSize:9.5, color:C.amber, marginTop:3, lineHeight:1.4}}>{a}</div>
+                    ))}
+                  </div>
+                );
+              })()}
+
               {Object.entries(porGrupo).map(([grupo, exs]) => (
                 <div key={grupo}>
                   <div style={{fontSize:10, fontWeight:800, color:C.muted, textTransform:"uppercase",
@@ -17220,6 +17384,16 @@ tr:last-child td{border-bottom:none}
                             <span style={{display:"block", fontSize:9.5, color:C.muted, marginTop:2, lineHeight:1.4}}>
                               {e.rol === "variante" ? `Cambia por ${e.sustituyeA} · ${e.motivo}` : e.motivo}
                             </span>
+                            {/* Qué hace el ejercicio y cómo hacerlo para que lo
+                                haga: sin esto, "recomendado" no dice nada sobre
+                                si el músculo objetivo se lleva el trabajo. */}
+                            {e.perfil && on && (
+                              <span style={{display:"block", fontSize:9, color:C.muted, marginTop:3, lineHeight:1.45}}>
+                                <b style={{color:C.cyan}}>Carga {PERFIL_ETIQUETA[e.perfil].txt}.</b>
+                                {e.claves[0] ? ` ${e.claves[0]}.` : ""}
+                                {e.error ? <><br/><span style={{color:C.amber}}>Error típico:</span> {e.error}.</> : null}
+                              </span>
+                            )}
                           </span>
                         </button>
                       );
@@ -21221,6 +21395,7 @@ if (typeof module !== 'undefined' && module.exports) {
     buildDailyNutrition, averageDailyNutrition, sumDayNutrition, calcTDEE, analyzeMacroPattern,
     calcWalkBlock, calcCardioSession, getCardioSummary, PROGRAMAS_CAMINATA, VEL_MARCHA_MAX,
     walkStateAt, trimBlocksTo, AVISO_SEG,
+    exerciseProfile, profileBalance, PERFIL_ETIQUETA,
     RECOVERY_FIELDS, getLocalDateStr,
     normalizeMuscle, canonMuscleName, dedupeMuscles, calcMuscleVolumeBalance, SLUG_MUSCLE,
     normalizeBodyEntry, mergeMetricsUpTo, validateBodyMetrics, RANGOS_BIO,

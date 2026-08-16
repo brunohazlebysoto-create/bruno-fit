@@ -1111,3 +1111,60 @@ También hay **Pausa** (que descuenta el tiempo parado) y **Saltar bloque**, que
 adelanta el reloj hasta el inicio del siguiente en vez de llevar un contador
 aparte: así el tiempo sigue saliendo de una sola fuente y no puede
 descuadrarse.
+
+## Para qué sirve cada ejercicio, no solo a qué músculo va (W72)
+
+> *"revisa esa página, y saca ideas para recomendar los ejercicios"*
+> (enlace a @emgfitnesslab)
+
+**No pude leer la página.** El proxy de red de este entorno bloquea tanto
+`instagram.com` como `emgfitnesslab.com`. Lo que sigue sale del concepto que sí
+se puede confirmar desde buscadores —una biblioteca de ejercicios ordenada por
+activación muscular medida con EMG, centrada en el montaje, las claves y los
+errores que maximizan esa activación— **no de haber visto sus contenidos**. Las
+claves de ejecución de abajo son mecánica de cada movimiento, no cifras suyas.
+
+### El hueco que tenía el recomendador
+
+`recommendDayExercises` puntuaba solo por **historial**: progresión, número de
+sesiones, días sin hacerlo, si es compuesto. Con eso sabe cuál está funcionando,
+pero no **para qué sirve**, y dos ejercicios del mismo grupo pueden ser estímulos
+completamente distintos. La consecuencia práctica: la "variante" propuesta era
+simplemente *el siguiente de la lista*, así que podía ofrecer cambiar un
+ejercicio contraído por otro contraído — mismo estímulo, otro nombre.
+
+### Perfil de resistencia
+
+Lo que separa un ejercicio de otro dentro del mismo músculo es **dónde carga**:
+
+- **estirado** → tensión máxima con el músculo alargado. El que más cuesta y el
+  que más se salta la gente.
+- **medio** → carga repartida por todo el recorrido. Los básicos pesados.
+- **contraído** → tensión máxima en el acortamiento.
+
+Es mecánica observable del movimiento: no hace falta inventar ningún índice
+numérico, que además sería justo la falsa precisión que este proyecto lleva
+semanas quitando.
+
+Cada entrada trae también las **claves** que deciden si el músculo objetivo se
+lleva el trabajo y el **error típico** que se lo pasa a otro sitio.
+
+### Qué cambia
+
+- La **variante** ya no es la siguiente de la lista: es la que aporta un perfil
+  que ningún titular cubre, y el motivo lo dice — *"estancado: conviene rotarlo
+  · carga en estiramiento, que hoy no cubre ningún otro"*. El motivo original se
+  conserva: saber que está estancado sigue siendo la razón de que no sea
+  titular.
+- **"Cómo carga el día"**: el reparto por perfil de los ejercicios elegidos, con
+  aviso si ninguno carga el músculo estirado. Los porcentajes por músculo pueden
+  salir perfectos y aun así faltar ese estímulo; el recuento por grupo no lo ve.
+- Cada ejercicio marcado muestra su clave de ejecución y su error típico.
+- La IA recibe el perfil de cada ejercicio al generar la rutina.
+
+### Un fallo que encontraron los tests
+
+La regla genérica `/curl/` (bíceps) casaba con **"Leg curl"**, así que un curl
+femoral salía clasificado como bíceps. El orden de las expresiones importa y la
+regla de isquios estaba por debajo. Movida arriba, con el aviso escrito al lado
+para que no vuelva a colarse.
