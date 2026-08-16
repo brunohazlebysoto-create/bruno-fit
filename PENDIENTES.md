@@ -1423,3 +1423,133 @@ La primera versión no abría nada: la condición del menú (`!isEditing &&
 de sustitutos nunca llegaba a evaluarse. Lo vi en el navegador, no en los tests
 —la lógica pura estaba bien— que es exactamente para lo que sirve abrir la app
 de verdad antes de dar algo por hecho.
+
+# ═══════════════════════════════════════════════════════════════
+# CATÁLOGO DE IDEAS (agosto 2026)
+# ═══════════════════════════════════════════════════════════════
+
+Todas las ideas propuestas hasta ahora, juntas. Cada una lleva **qué dato ya
+existe** para alimentarla: eso es lo que separa una idea implementable de una
+lista de deseos.
+
+## A · Datos de entrada — el eslabón que envenena todo lo demás
+
+El TDEE medido salió 1873 kcal con un basal de 1860. Todo lo que se calcula
+encima de la comida registrada arrastra ese error, así que esto va primero.
+
+**1. Comida rápida: tus 15-20 platos habituales a un toque.**
+Hoy hay que describir cada comida. Un plato guardado con sus macros, repetible
+con "lo mismo que ayer" o "×1.5", haría más por la precisión que cualquier
+fórmula que yo afine. → *Datos: `foodlog` completo, ya se puede extraer lo que
+más se repite.*
+
+**2. Aviso de infrarregistro en el momento.**
+Si las kcal anotadas implican un gasto imposible para tu peso y actividad,
+decirlo ese día, no dejar que envenene el objetivo en silencio. → *Ya existe el
+suelo de Goldberg en W74; falta llevarlo al momento de registrar.*
+
+**16. Dónde se te escapa el registro.**
+El infrarregistro nunca es uniforme: vive en fines de semana, cenas fuera y
+picoteo. Comparando kcal por día de la semana sale solo: *"los sábados
+registras un 40% menos que los martes"*. Accionable y solo posible con tus
+datos. → *Datos: `foodlog` con fechas.*
+
+**14. Modo sesión en vivo.**
+Cronómetro de descanso que arranca al guardar una serie, peso y reps
+precargados, botones grandes, avance automático por el orden del día. Además de
+la comodidad, genera **descansos reales** (idea 13) y **duración real** — que hoy
+casi nunca se registra, y por eso la estimación de gasto cae al supuesto de 3
+min/serie. → *Datos: el registro de series ya existe; falta la pantalla.*
+
+## B · Entrenamiento
+
+**13. Descansos entre series, gratis.**
+Cada serie ya se guarda con su hora exacta: restando entre series consecutivas
+salen los descansos sin anotar nada. Es la variable que más explica un día raro
+y que nadie mide — *"hoy descansaste 4:10 frente a tus 2:30 habituales, por eso
+subiste 5 kg"*. Hoy eso se interpreta como progreso o estancamiento. → *Datos:
+`date` por serie. Requiere registrar durante la sesión, de ahí la idea 14.*
+
+**9. Autorregulación diaria por rendimiento.**
+Si la primera serie sale un 10% por debajo de lo previsto, reajustar la sesión
+en el momento —bajar volumen, no carga— en vez de descubrir al final que fue un
+mal día. → *Datos: RIR, PRs, readiness, todo ya registrado.*
+
+**10. Mesociclos con descarga programada.**
+Hoy cada sesión se decide sola. Un bloque de 4-6 semanas con progresión de
+volumen y descarga planificada da un plan que cumplir, y contexto a las alertas:
+estancarse en semana 5 es normal, en semana 1 no. → *Datos: `calcWeeklyTrainingLoad`
+y `detectDeloadNeed` ya existen, les falta el plan contra el que comparar.*
+
+**17. Molestias ligadas a ejercicios concretos.**
+Cruzar las notas de sensaciones con lo entrenado 24-72 h antes encuentra
+patrones invisibles a ojo: *"molestia de hombro tres de las cuatro veces que
+hiciste press militar, siempre al día siguiente"*. Conecta con W76: identificado
+el culpable, ya sabe proponer el cambio que conserva el estímulo. → *Datos:
+`notes` con fecha + `exlog`.*
+
+**12. Sustituir un ejercicio que hoy no puedes hacer.** ✅ **Hecho en W76.**
+
+## C · Cuerpo y composición
+
+**3. Panel segmental del InBody.**
+Ya se guardan grasa y músculo por brazo y pierna, pero solo se usan en un texto
+para la IA. Con eso se detectan asimetrías reales y se cruzan con los ejercicios
+unilaterales que ya registras. → *Datos: `musculoBrazoIzq`, `grasaPiernaDer`…
+guardados y sin usar.*
+
+**5. Marcar en el gráfico las mediciones en ayunas.**
+El campo `ayunas` ya se guarda. Una pesada post-comida mete ruido que la EMA
+arrastra durante días, y ahora mismo se ve igual que una buena. → *Datos: campo
+`ayunas` y `fuente`, ya registrados.*
+
+**11. Fotos de progreso con comparación estable.**
+Se guarda el análisis de las fotos pero no las fotos alineadas en el tiempo. Un
+antes/después con la misma pose es la métrica que más motiva y la única que capta
+lo que la báscula esconde — sobre todo en recomposición, donde el peso no se
+mueve.
+
+## D · Que la app aprenda
+
+**8. Cerrar el bucle: contrastar predicción con realidad.**
+Cada semana la app predice un cambio de peso. Guardarla y compararla con el real
+la convierte en algo que aprende: si predice −0.5 y ocurre −0.1 de forma
+sistemática, tu TDEE real está por encima del calculado y debe corregirse solo.
+Es la diferencia entre una calculadora y un entrenador. → *Datos: proyección y
+peso real, ambos ya existen; falta guardar la predicción.*
+
+**7. Gemelo digital: simular antes de decidir.**
+*"¿Qué pasa si subo a 2600 kcal y añado una caminata?"* respondido con tres
+curvas a 12 semanas antes de cambiar nada. Hoy la proyección solo extrapola lo
+que ya haces. → *Datos: BMR, partición de Forbes y carga real, todo implementado.*
+
+**18. "¿Por qué este número?" en toda la app.**
+Tras la auditoría de W75 cada cálculo tiene su fuente en el código, pero el
+usuario no la ve. Un toque en cualquier cifra que despliegue la cuenta con sus
+datos dentro y la etiqueta de fórmula / referencia / convenio. Efecto
+secundario: cuando un número esté mal, lo verá él antes que yo.
+
+## E · Nutrición
+
+**15. Qué pasa al llegar a 85 kg.**
+La meta está puesta y la app lleva hasta ahí… y luego nada. Es donde casi todo
+el mundo recupera el peso. Un plan de salida —subida escalonada de ~100 kcal por
+semana vigilando peso y cintura— convierte el objetivo en una transición en vez
+de un acantilado. → *Datos: TDEE medido, tendencia suavizada y cintura.*
+
+**4. Ligar la caminata a la recuperación de piernas.**
+Una hora de cinta al 13% el día antes de sentadilla explica una bajada de peso
+que hoy se interpreta como pérdida de fuerza. → *Datos: `cardiolog` (W70) y
+`exlog`, listos para cruzar.*
+
+## F · Tus datos, fuera de aquí
+
+**6. Exportar a CSV.**
+Todo tu historial en un archivo, sin depender de que esta app siga en pie.
+
+## Orden recomendado
+
+1. **14** — arregla la calidad de los datos de entrenamiento y desbloquea la 13.
+2. **16** y **2** — el registro de comida sigue envenenando todo lo demás.
+3. **15** — antes de necesitarlo, no cuando ya estés en 85 kg.
+4. **8** — a partir de aquí la app deja de repetir sus errores.
