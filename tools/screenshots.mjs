@@ -165,6 +165,10 @@ const ESCENAS = [
       await page.waitForTimeout(500);
       await page.getByRole("button", { name: /Empezar guiado/ }).first().click({ timeout: 5000 });
     } },
+  // Platos habituales: registrar sin describir ni llamar a la IA
+  { id: "hoy-04-platos-habituales", tab: "Hoy", scrollHasta: "Registrar comida" },
+  // Calidad del registro: dónde se escapan las calorías sin anotar
+  { id: "registro-11-calidad-registro", tab: "Registro", scrollHasta: "Calidad de tu registro" },
   { id: "registro-01-peso-y-tendencia", tab: "Registro", scroll: 0 },
   // Registro de cintura: la métrica que mejor distingue perder grasa de perder peso
   { id: "registro-06-cintura", tab: "Registro", scroll: 0,

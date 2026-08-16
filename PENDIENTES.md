@@ -1553,3 +1553,52 @@ Todo tu historial en un archivo, sin depender de que esta app siga en pie.
 2. **16** y **2** — el registro de comida sigue envenenando todo lo demás.
 3. **15** — antes de necesitarlo, no cuando ya estés en 85 kg.
 4. **8** — a partir de aquí la app deja de repetir sus errores.
+
+## Calidad del registro de comida: ideas 1, 2 y 16 (W77)
+
+El TDEE medido salía 1873 kcal con un basal de 1860. Todo lo que la app calcula
+—objetivo, macros del día, planes de la IA— se apoya en la comida registrada, así
+que este era el arreglo con más efecto en cadena. Tres piezas.
+
+### 1 · "Lo de siempre"
+
+Describir cada comida con texto libre y esperar a que la IA la interprete cuesta
+trabajo y necesita conexión: por eso se dejan días sin anotar. Pero la comida
+real se repite, así que **lo ya registrado es el mejor catálogo posible**.
+
+`topFrequentMeals` agrupa por nombre —ignorando acentos y mayúsculas, quedándose
+con la grafía más reciente— y **promedia los macros de todas las veces**: la
+misma comida se anotó con cifras algo distintas cada vez, y el promedio propio
+es mejor estimación que la última suelta. Con una sola aparición no entra: eso no
+es un hábito.
+
+En Hoy salen como fichas con multiplicador ×½ / ×1 / ×1½. Entran **sin llamar a
+ningún servicio**, así que funcionan sin cobertura.
+
+### 2 · ¿Falta comida por registrar?
+
+Versión aplicada del método de Goldberg: si la ingesta declarada dividida por el
+basal cae por debajo del nivel de actividad plausible, lo que falla es el
+registro, no el metabolismo. Se compara contra el factor de actividad **deducido
+de sus propios entrenos y pasos**, que es lo que la literatura pide desde que se
+sabe que un 1.55 fijo no sirve.
+
+Se mira sobre una ventana de 14 días, nunca sobre un día suelto: un día bajo es
+normal y avisar por eso sería ruido.
+
+El mensaje evita el reproche y nombra la consecuencia: *"no significa que comas
+de menos, significa que faltan por anotar unas N kcal al día; mientras siga así,
+tu TDEE y tus objetivos salen bajos"*.
+
+### 16 · Dónde se escapa
+
+Saber que faltan calorías no sirve de nada. Saber que faltan **los sábados**, sí.
+
+`analyzeLoggingBias` compara la media de cada día de la semana con la media
+general sobre 8 semanas, exigiendo al menos 3 repeticiones antes de afirmar
+nada: con dos sábados no hay patrón, hay dos sábados. Detecta también los días
+que directamente **nunca se anotan**. Se pinta como siete barras, ámbar las que
+se salen.
+
+El preview siembra ahora sábados con solo el desayuno registrado —el patrón real
+de infrarregistro— porque sin él las capturas no cubrían este panel.

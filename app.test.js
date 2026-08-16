@@ -1243,6 +1243,108 @@ describe('sustituir un ejercicio que hoy no puedes hacer', () => {
   });
 });
 
+describe('calidad del registro de comida', () => {
+  const { topFrequentMeals, detectUnderreporting, analyzeLoggingBias } = require('./app.js');
+
+  const plato = (resumen, kcal, p = 40, c = 50, f = 15) => ({ id: resumen + kcal, resumen, kcal, proteina: p, carbo: c, grasa: f });
+  const dias = (desde, n, entradas) => {
+    const log = {};
+    for (let i = 0; i < n; i++) {
+      const d = new Date(desde + 'T12:00:00'); d.setDate(d.getDate() + i);
+      log[d.toISOString().slice(0, 10)] = entradas(i);
+    }
+    return log;
+  };
+
+  test('los platos habituales salen del propio historial, ordenados por repetición', () => {
+    const log = dias('2026-06-01', 20, (i) => [
+      plato('Avena con whey', 600),
+      ...(i % 2 === 0 ? [plato('Pollo con arroz', 780)] : []),
+      ...(i === 3 ? [plato('Pizza del viernes', 1200)] : []),   // una sola vez
+    ]);
+    const top = topFrequentMeals(log, { hasta: '2026-06-20', dias: 60 });
+    expect(top[0].nombre).toBe('Avena con whey');
+    expect(top[0].veces).toBe(20);
+    expect(top[1].nombre).toBe('Pollo con arroz');
+    // Lo que se comió una sola vez no es "habitual"
+    expect(top.map(t => t.nombre)).not.toContain('Pizza del viernes');
+  });
+
+  test('promedia los macros de todas las veces, no coge la última suelta', () => {
+    const log = {
+      '2026-06-01': [plato('Ensalada', 400, 30, 20, 20)],
+      '2026-06-02': [plato('Ensalada', 600, 50, 40, 20)],
+    };
+    const t = topFrequentMeals(log, { hasta: '2026-06-02' })[0];
+    expect(t.kcal).toBe(500);
+    expect(t.proteina).toBe(40);
+  });
+
+  test('agrupa ignorando acentos y mayúsculas, y conserva la grafía más reciente', () => {
+    const log = {
+      '2026-06-01': [plato('platano con miel', 300)],
+      '2026-06-02': [plato('Plátano con miel', 300)],
+    };
+    const top = topFrequentMeals(log, { hasta: '2026-06-02' });
+    expect(top).toHaveLength(1);
+    expect(top[0].veces).toBe(2);
+    expect(top[0].nombre).toBe('Plátano con miel');
+  });
+
+  test('detecta el infrarregistro cuando la ingesta es fisiológicamente imposible', () => {
+    // El caso real: 1873 kcal con basal 1860 y factor de actividad 1.5
+    const r = detectUnderreporting({ kcalMedia: 1873, bmr: 1860, palEsperado: 1.5, diasReales: 7 });
+    expect(r.sospechoso).toBe(true);
+    expect(r.ratio).toBeCloseTo(1.01, 2);
+    expect(r.faltanKcal).toBeGreaterThan(300);
+  });
+
+  test('no acusa a quien sí registra bien', () => {
+    const r = detectUnderreporting({ kcalMedia: 2600, bmr: 1860, palEsperado: 1.5, diasReales: 7 });
+    expect(r.sospechoso).toBe(false);
+    expect(r.ratio).toBeGreaterThan(r.esperado);
+  });
+
+  test('con pocos días no afirma nada: un día bajo es normal', () => {
+    expect(detectUnderreporting({ kcalMedia: 900, bmr: 1860, palEsperado: 1.5, diasReales: 2 }).sospechoso).toBe(false);
+  });
+
+  test('encuentra el día de la semana que se escapa', () => {
+    // Ocho semanas comiendo 2500, salvo los sábados que se anotan 1400
+    const log = dias('2026-06-01', 56, (i) => {
+      const d = new Date('2026-06-01T12:00:00'); d.setDate(d.getDate() + i);
+      return [plato('Comida', d.getDay() === 6 ? 1400 : 2500)];
+    });
+    const r = analyzeLoggingBias(log, { hasta: '2026-07-26', semanas: 8 });
+    expect(r.flojos.length).toBeGreaterThan(0);
+    expect(r.flojos[0].nombre).toBe('sábado');
+    expect(r.flojos[0].desvioPct).toBeLessThan(-30);
+  });
+
+  test('no llama patrón a lo que solo son dos días', () => {
+    const log = {
+      '2026-07-01': [plato('C', 2500)], '2026-07-02': [plato('C', 2500)],
+      '2026-07-03': [plato('C', 2500)], '2026-07-04': [plato('C', 500)],
+      '2026-07-05': [plato('C', 2500)], '2026-07-06': [plato('C', 2500)],
+      '2026-07-07': [plato('C', 2500)],
+    };
+    const r = analyzeLoggingBias(log, { hasta: '2026-07-07', semanas: 8 });
+    expect(r.flojos).toHaveLength(0);   // un solo sábado no es un patrón
+  });
+
+  test('señala los días de la semana que directamente no se registran', () => {
+    // Cuatro semanas sin anotar nunca el domingo
+    const log = {};
+    for (let i = 0; i < 28; i++) {
+      const d = new Date('2026-06-29T12:00:00'); d.setDate(d.getDate() + i);
+      if (d.getDay() === 0) continue;
+      log[d.toISOString().slice(0, 10)] = [plato('Comida', 2400)];
+    }
+    const r = analyzeLoggingBias(log, { hasta: '2026-07-26', semanas: 8 });
+    expect(r.sinRegistro.map(d => d.nombre)).toContain('domingo');
+  });
+});
+
 describe('respaldo de las constantes', () => {
   const {
     metFuerzaSegunRIR, kcalDePasos, calcWalkBlock, calcDayActivityLoad,

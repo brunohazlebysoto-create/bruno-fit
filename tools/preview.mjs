@@ -118,11 +118,17 @@ function buildSeed() {
     // Dos días sin anotar comida: pasa en el uso real y es el caso que rellena
     // la estimación. Sin ellos el preview nunca enseñaría un día estimado.
     if (i === 2 || i === 9) { waterlog[k] = 8 + (i % 5); continue; }
-    foodlog[k] = [
-      { id: "s" + i + "a", nombre: "Avena con whey", kcal: 620, proteina: 48, carbo: 72, grasa: 14 },
-      { id: "s" + i + "b", nombre: "Pollo con arroz", kcal: 780, proteina: 62, carbo: 88, grasa: 16 },
-      { id: "s" + i + "c", nombre: "Salmón y verduras", kcal: 640, proteina: 46, carbo: 34, grasa: 30 },
-      { id: "s" + i + "d", nombre: "Yogur y frutos secos", kcal: 420, proteina: 30, carbo: 38, grasa: 16 },
+    // Los sábados solo se anota el desayuno: es el patrón real de
+    // infrarregistro (se come fuera y no se apunta) y sin él el panel de
+    // calidad del registro no tendría nada que enseñar en las capturas.
+    const sabado = d.getDay() === 6;
+    foodlog[k] = sabado ? [
+      { id: "s" + i + "a", resumen: "Avena con whey", kcal: 620, proteina: 48, carbo: 72, grasa: 14 },
+    ] : [
+      { id: "s" + i + "a", resumen: "Avena con whey", kcal: 620, proteina: 48, carbo: 72, grasa: 14 },
+      { id: "s" + i + "b", resumen: "Pollo con arroz", kcal: 780, proteina: 62, carbo: 88, grasa: 16 },
+      { id: "s" + i + "c", resumen: "Salmón y verduras", kcal: 640, proteina: 46, carbo: 34, grasa: 30 },
+      { id: "s" + i + "d", resumen: "Yogur y frutos secos", kcal: 420, proteina: 30, carbo: 38, grasa: 16 },
     ];
     waterlog[k] = 8 + (i % 5);
   }

@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W76";
+const APP_VERSION = "v2026.07.29-W77";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1619,6 +1619,142 @@ function averageDailyNutrition(serie) {
     dias: dias.length,
     diasReales: dias.filter(d => !d.estimado).length,
     diasEstimados: dias.filter(d => d.estimado).length,
+  };
+}
+
+/* ===== PLATOS FRECUENTES =====
+   Describir cada comida con texto libre y esperar a que la IA la interprete es
+   el motivo de que se dejen días sin registrar: cuesta trabajo y hay que estar
+   conectado. Pero la comida real se repite —el mismo desayuno, el mismo pollo
+   con arroz— así que lo que ya está registrado es el mejor catálogo posible.
+
+   Se agrupa por nombre normalizado y se promedian los macros de todas las veces
+   que aparece: la misma comida se anotó con cifras algo distintas cada vez, y el
+   promedio de lo que uno mismo comió es mejor estimación que la última vez
+   suelta. */
+function topFrequentMeals(foodlog, opts = {}) {
+  const { limite = 8, dias = 60, hasta } = opts;
+  const fin = hasta || getLocalDateStr(new Date());
+  const desde = (() => { const d = new Date(fin + "T12:00:00"); d.setDate(d.getDate() - (dias - 1)); return getLocalDateStr(d); })();
+
+  const grupos = {};
+  Object.keys(foodlog || {}).forEach(fecha => {
+    if (fecha < desde || fecha > fin) return;
+    (foodlog[fecha] || []).forEach(e => {
+      const nombre = (e?.resumen || e?.nombre || "").trim();
+      if (!nombre) return;
+      const clave = _sinAcentos(nombre);
+      const g = grupos[clave] || (grupos[clave] = { nombre, veces: 0, ultima: "", kcal: 0, p: 0, c: 0, f: 0 });
+      // Se guarda la grafía MÁS RECIENTE, no la primera: si se corrigió el
+      // nombre, lo que el usuario reconoce es la última forma que escribió.
+      if (fecha >= g.ultima) { g.nombre = nombre; g.ultima = fecha; }
+      g.veces++;
+      g.kcal += parseFloat(e.kcal) || 0;
+      g.p += parseFloat(e.proteina) || 0;
+      g.c += parseFloat(e.carbo) || 0;
+      g.f += parseFloat(e.grasa) || 0;
+    });
+  });
+
+  return Object.values(grupos)
+    .filter(g => g.veces >= 2)     // con una sola vez no es "habitual"
+    .map(g => ({
+      nombre: g.nombre, veces: g.veces, ultima: g.ultima,
+      kcal: Math.round(g.kcal / g.veces),
+      proteina: Math.round(g.p / g.veces),
+      carbo: Math.round(g.c / g.veces),
+      grasa: Math.round(g.f / g.veces),
+    }))
+    .sort((a, b) => b.veces - a.veces || (a.ultima < b.ultima ? 1 : -1))
+    .slice(0, limite);
+}
+
+/* ===== ¿FALTA COMIDA POR REGISTRAR? =====
+   Versión aplicada del método de Goldberg: si la ingesta declarada dividida por
+   el metabolismo basal cae por debajo del nivel de actividad plausible, lo que
+   falla es el registro, no el metabolismo.
+
+   Se mira sobre una VENTANA, no sobre un día: un día bajo es normal —una
+   gastroenteritis, un ayuno— y avisar por eso sería ruido. Varios días seguidos
+   por debajo de lo fisiológicamente posible es otra cosa.
+
+   El umbral se compara contra el factor de actividad DEDUCIDO de sus propios
+   entrenos y pasos, que es lo que la literatura pide desde que se sabe que un
+   1.55 fijo para todo el mundo no sirve. */
+const GOLDBERG_MARGEN = 0.80;   // se avisa por debajo del 80% de lo esperado
+
+function detectUnderreporting(opts = {}) {
+  const kcalMedia = parseFloat(opts.kcalMedia) || 0;
+  const bmr = parseFloat(opts.bmr) || 0;
+  const pal = parseFloat(opts.palEsperado) || 0;
+  const diasReales = parseInt(opts.diasReales) || 0;
+  const nada = { sospechoso: false, ratio: null, esperado: null, faltanKcal: 0 };
+  // Con menos de 4 días registrados no hay ventana que analizar
+  if (kcalMedia <= 0 || bmr <= 0 || pal <= 0 || diasReales < 4) return nada;
+
+  const ratio = kcalMedia / bmr;                 // EI:BMR
+  const esperado = pal * GOLDBERG_MARGEN;
+  if (ratio >= esperado) return { ...nada, ratio: Math.round(ratio * 100) / 100, esperado: Math.round(esperado * 100) / 100 };
+
+  return {
+    sospechoso: true,
+    ratio: Math.round(ratio * 100) / 100,
+    esperado: Math.round(esperado * 100) / 100,
+    // Lo que falta para llegar al mínimo plausible. No es "lo que deberías
+    // comer": es lo que probablemente ya comiste y no anotaste.
+    faltanKcal: Math.round(bmr * esperado - kcalMedia),
+    diasReales,
+  };
+}
+
+/* ===== ¿QUÉ DÍAS SE TE ESCAPAN? =====
+   El infrarregistro no es uniforme: vive en los fines de semana, las cenas
+   fuera y el picoteo. Saber que "faltan calorías" no sirve de nada; saber que
+   faltan los sábados sí, porque eso se puede arreglar.
+
+   Compara la media de cada día de la semana con la media general. Se exige un
+   mínimo de repeticiones por día antes de afirmar nada: con dos sábados no hay
+   patrón, hay dos sábados. */
+const DIAS_SEMANA = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+// El plural no es regular en español ("los lunes", pero "los sábados")
+const DIAS_SEMANA_PLURAL = ["domingos", "lunes", "martes", "miércoles", "jueves", "viernes", "sábados"];
+const MIN_REPETICIONES_DIA = 3;
+
+function analyzeLoggingBias(foodlog, opts = {}) {
+  const { semanas = 8, hasta } = opts;
+  const fin = hasta || getLocalDateStr(new Date());
+  const serie = buildDailyNutrition(foodlog, { hasta: fin, dias: semanas * 7, estimar: false });
+  const reales = serie.filter(d => d.registros > 0);
+  if (reales.length < 7) return null;
+
+  const media = reales.reduce((a, d) => a + d.kcal, 0) / reales.length;
+  const porDia = DIAS_SEMANA.map((nombre, i) => {
+    const dias = reales.filter(d => new Date(d.date + "T12:00:00").getDay() === i);
+    if (!dias.length) return { dia: i, nombre, n: 0, media: 0, desvioPct: null, fiable: false };
+    const m = dias.reduce((a, d) => a + d.kcal, 0) / dias.length;
+    return {
+      dia: i, nombre, n: dias.length,
+      media: Math.round(m),
+      desvioPct: Math.round(((m - media) / media) * 1000) / 10,
+      fiable: dias.length >= MIN_REPETICIONES_DIA,
+    };
+  });
+
+  // Días que se salen de forma consistente. Un −15% sobre la media propia ya es
+  // mucho: son 350 kcal en una dieta de 2400.
+  const flojos = porDia.filter(d => d.fiable && d.desvioPct <= -15).sort((a, b) => a.desvioPct - b.desvioPct);
+  const sinRegistro = DIAS_SEMANA.map((nombre, i) => {
+    const total = serie.filter(d => new Date(d.date + "T12:00:00").getDay() === i).length;
+    const con = reales.filter(d => new Date(d.date + "T12:00:00").getDay() === i).length;
+    return { dia: i, nombre, total, con, huecos: total - con };
+  }).filter(d => d.total >= MIN_REPETICIONES_DIA && d.huecos > d.con);
+
+  return {
+    media: Math.round(media),
+    diasAnalizados: reales.length,
+    porDia,
+    flojos,
+    sinRegistro,
   };
 }
 
@@ -10265,6 +10401,9 @@ function Hoy({
     required: ["resumen", "kcal", "proteina", "carbo", "grasa"]
   };
 
+  // Multiplicador de ración para los platos habituales
+  const [multIdx, setMultIdx] = useState(1);
+
   const pushEntry = (o, fb) => { 
     const e = {
       id: uid(),
@@ -11055,6 +11194,56 @@ Analiza la adherencia real a los objetivos del día y da 2-3 sugerencias concret
         <div style={{fontSize:16, fontWeight:800, marginBottom:12, display:"flex", alignItems:"center", gap:8, color:C.ink}}>
           <Sparkles size={18} color="var(--accent-primary)"/>Registrar comida
         </div>
+
+        {/* Platos habituales.
+            Describir cada comida y esperar a la IA es el motivo de que se dejen
+            días sin registrar: cuesta trabajo y hace falta conexión. Pero la
+            comida real se repite, así que lo ya registrado es el mejor
+            catálogo posible — y entra sin llamar a ningún servicio. */}
+        {(() => {
+          const habituales = topFrequentMeals(foodlog, { hasta: selectedDateStr, limite: 8 });
+          if (!habituales.length) return null;
+          const mult = [0.5, 1, 1.5][multIdx] || 1;
+          return (
+            <div style={{marginBottom:12}}>
+              <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6}}>
+                <span style={{fontSize:10.5, fontWeight:700, color:C.muted, textTransform:"uppercase", letterSpacing:".05em"}}>
+                  Lo de siempre
+                </span>
+                <div style={{display:"flex", gap:3}}>
+                  {["½", "1", "1½"].map((etq, i) => (
+                    <button key={etq} onClick={() => setMultIdx(i)}
+                      style={{background: multIdx === i ? "rgba(77,124,15,0.16)" : "transparent",
+                        border:`1px solid ${multIdx === i ? C.lime : C.line}`, borderRadius:6,
+                        padding:"2px 8px", fontSize:10.5, fontWeight:800,
+                        color: multIdx === i ? C.lime : C.muted, cursor:"pointer"}}>
+                      ×{etq}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{display:"flex", gap:6, overflowX:"auto", paddingBottom:4}}>
+                {habituales.map(h => (
+                  <button key={h.nombre}
+                    onClick={() => pushEntry({
+                      resumen: mult === 1 ? h.nombre : `${h.nombre} (×${mult})`,
+                      kcal: Math.round(h.kcal * mult), proteina: Math.round(h.proteina * mult),
+                      carbo: Math.round(h.carbo * mult), grasa: Math.round(h.grasa * mult),
+                    }, h.nombre)}
+                    style={{flex:"0 0 auto", maxWidth:170, textAlign:"left", background:C.panel,
+                      border:`1px solid ${C.line}`, borderRadius:12, padding:"7px 10px", cursor:"pointer",
+                      boxShadow:"0 1px 3px rgba(24,28,19,0.06)"}}>
+                    <div style={{fontSize:11.5, fontWeight:700, color:C.ink, whiteSpace:"nowrap",
+                      overflow:"hidden", textOverflow:"ellipsis"}}>{h.nombre}</div>
+                    <div style={{fontSize:9.5, color:C.muted, marginTop:1}}>
+                      {Math.round(h.kcal * mult)} kcal · P{Math.round(h.proteina * mult)} · {h.veces}×
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
         <textarea
           value={localText}
           onChange={e => setLocalText(e.target.value)}
@@ -21011,6 +21200,79 @@ ${alertas || "ninguna"}`;
         {renderNutritionHistory()}
       </div>
 
+      {/* ===== ¿FALTA COMIDA POR REGISTRAR? =====
+          Todo lo que esta app calcula —TDEE, objetivo, macros del día, planes de
+          la IA— se apoya en la comida registrada. Cuando el registro va corto el
+          error va SIEMPRE en la misma dirección, así que conviene decirlo antes
+          de que se propague, y decir además DÓNDE se escapa: "faltan calorías"
+          no se puede arreglar; "faltan los sábados", sí. */}
+      {(() => {
+        const prom = averageDailyNutrition(buildDailyNutrition(foodlog, { hasta: selectedDateStr, dias: 14 }));
+        const bmr = nutritionTargets?.bmr || 0;
+        const pal = nutritionTargets?.actividadUsada || 0;
+        const infra = prom ? detectUnderreporting({
+          kcalMedia: prom.kcal, bmr, palEsperado: pal, diasReales: prom.diasReales,
+        }) : null;
+        const sesgo = analyzeLoggingBias(foodlog, { hasta: selectedDateStr, semanas: 8 });
+        const hayAlgo = infra?.sospechoso || (sesgo && (sesgo.flojos.length || sesgo.sinRegistro.length));
+        if (!hayAlgo) return null;
+
+        return (
+          <div style={{background:C.panel, border:`1px solid ${alfa(C.amber, 33)}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
+            <div style={{fontSize:12.5, fontWeight:800, marginBottom:3, display:"flex", alignItems:"center", gap:6}}>
+              <Activity size={15} color={C.amber}/> Calidad de tu registro
+            </div>
+
+            {infra?.sospechoso && (
+              <div style={{marginBottom: sesgo ? 10 : 0}}>
+                <div style={{fontSize:11.5, color:C.ink, lineHeight:1.5}}>
+                  Tus últimos {infra.diasReales} días registrados promedian{" "}
+                  <b>{prom.kcal} kcal</b>, que frente a tu metabolismo basal de <b>{bmr}</b> da un
+                  factor de <b style={{color:C.amber}}>{infra.ratio}</b>. Con lo que entrenas y caminas
+                  debería rondar <b>{infra.esperado}</b> como mínimo.
+                </div>
+                <div style={{fontSize:10.5, color:C.muted, lineHeight:1.45, marginTop:4}}>
+                  Eso no significa que comas de menos: significa que faltan por anotar unas{" "}
+                  <b style={{color:C.ink}}>{infra.faltanKcal} kcal al día</b>. Mientras siga así, tu
+                  TDEE y tus objetivos salen bajos, y el plan te pedirá comer menos de lo que necesitas.
+                </div>
+              </div>
+            )}
+
+            {sesgo?.flojos?.length > 0 && (
+              <div style={{fontSize:11, color:C.ink, lineHeight:1.5, marginBottom:6}}>
+                Dónde se escapa: los <b>{sesgo.flojos.map(d => DIAS_SEMANA_PLURAL[d.dia]).join(" y ")}</b> registras{" "}
+                {sesgo.flojos.map(d => `${Math.abs(d.desvioPct)}%`).join(" y ")} menos que tu media
+                ({sesgo.media} kcal). Suele ser comer fuera y picoteo.
+              </div>
+            )}
+
+            {sesgo?.sinRegistro?.length > 0 && (
+              <div style={{fontSize:11, color:C.ink, lineHeight:1.5}}>
+                Días que casi nunca anotas: <b>{sesgo.sinRegistro.map(d => DIAS_SEMANA_PLURAL[d.dia]).join(", ")}</b>.
+                Se rellenan con tu promedio, pero un dato real vale más que una estimación.
+              </div>
+            )}
+
+            {sesgo && (
+              <div style={{display:"flex", gap:3, marginTop:10, alignItems:"flex-end", height:46}}>
+                {sesgo.porDia.map(d => {
+                  const alto = sesgo.media > 0 ? Math.min(1, d.media / (sesgo.media * 1.4)) : 0;
+                  const col = !d.fiable ? C.line : d.desvioPct <= -15 ? C.amber : C.lime;
+                  return (
+                    <div key={d.dia} style={{flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:2}}>
+                      <div style={{width:"100%", height:`${Math.max(3, alto * 32)}px`, background:col, borderRadius:3}}
+                        title={d.n ? `${d.nombre}: ${d.media} kcal en ${d.n} días` : `${d.nombre}: sin datos`}/>
+                      <span style={{fontSize:8, color:C.muted, textTransform:"uppercase"}}>{d.nombre.slice(0, 1)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {weights.length > 0 && (
         <>
           {/* onClick={analyze} a secas le pasaba el EVENTO del clic como lista
@@ -22055,6 +22317,7 @@ if (typeof module !== 'undefined' && module.exports) {
     detectWeightOutlier, calcBodyProjection, fatFractionOfLoss, leanFractionOfGain,
     evaluateRecovery, calcRestingHRBaseline, buildRecompositionSeries, buildMetricChanges, getWeeklyStats,
     buildDailyNutrition, averageDailyNutrition, sumDayNutrition, calcTDEE, analyzeMacroPattern,
+    topFrequentMeals, detectUnderreporting, analyzeLoggingBias, DIAS_SEMANA,
     calcWalkBlock, calcCardioSession, getCardioSummary, PROGRAMAS_CAMINATA, VEL_MARCHA_MAX,
     walkStateAt, trimBlocksTo, AVISO_SEG,
     exerciseProfile, profileBalance, PERFIL_ETIQUETA,
