@@ -108,6 +108,29 @@ const ESCENAS = [
     accion: async (page) => { await page.getByRole("button", { name: "Opciones del ejercicio" }).first().click({ timeout: 5000 }); },
   },
   {
+    // Sustituir un ejercicio que hoy no se puede hacer, conservando el estímulo
+    id: "entreno-17-sustituir",
+    tab: "Entreno",
+    scroll: 1700,
+    accion: async (page) => {
+      await page.getByRole("button", { name: "Opciones del ejercicio" }).first().click({ timeout: 5000 });
+      await page.waitForTimeout(500);
+      await page.getByRole("button", { name: /No puedo hacerlo hoy/ }).click({ timeout: 5000 });
+    },
+  },
+  {
+    id: "entreno-18-sustituir-en-casa",
+    tab: "Entreno",
+    scroll: 1700,
+    accion: async (page) => {
+      await page.getByRole("button", { name: "Opciones del ejercicio" }).first().click({ timeout: 5000 });
+      await page.waitForTimeout(500);
+      await page.getByRole("button", { name: /No puedo hacerlo hoy/ }).click({ timeout: 5000 });
+      await page.waitForTimeout(400);
+      await page.getByRole("button", { name: "Casa sin material" }).click({ timeout: 5000 });
+    },
+  },
+  {
     // Crear un combinado (biserie/triserie) eligiendo ejercicios del día
     id: "entreno-12-crear-combinado",
     tab: "Entreno",

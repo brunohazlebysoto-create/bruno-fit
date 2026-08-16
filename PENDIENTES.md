@@ -1365,3 +1365,61 @@ mismo por kilómetro.
 
 El ACSM no vale para bajadas, así que la pendiente negativa se ignora en vez de
 restar calorías. Hay un test que lo fija.
+
+## "No puedo hacerlo hoy": sustituir sin perder el estímulo (W76)
+
+> *"12 me gusta mucho"* — máquina ocupada, viaje, gimnasio del hotel.
+
+Lo que se hace en esa situación es saltarse el ejercicio, o cambiarlo por "otro
+de pecho". Y ahí se pierde justo lo que el ejercicio aportaba: un press
+inclinado no se sustituye por unas aperturas solo porque los dos sean de pecho.
+Uno carga en todo el recorrido y el otro en estiramiento.
+
+Con el perfil de resistencia de W72 y la porción muscular ya se podía hacer
+bien, y solo faltaba una pieza: **qué material tienes delante**.
+
+### Cómo elige
+
+Cada candidato se puntúa por lo que **conserva** del original:
+
+- **misma porción muscular** (Pectoral medio, Dorsal ancho, Deltoides
+  posterior…), no el grupo entero;
+- **mismo perfil de resistencia** — si el original cargaba en estiramiento, el
+  sustituto también;
+- mismo carácter compuesto o de aislamiento.
+
+Cambiar de perfil no descalifica, pero **se dice**: *"ojo: carga en contracción,
+no en estiramiento"*. Es otro estímulo, y ocultarlo sería el error original con
+otra cara. Los que conservan porción **y** perfil se marcan como
+**mismo estímulo**.
+
+Nunca cruza de grupo muscular: si no hay nada del mismo grupo con ese material,
+se dice que no hay, en vez de ofrecer cualquier cosa.
+
+### El material
+
+`inferEquipo` deduce del nombre si es barra, mancuerna, polea, máquina,
+multipower, banda o peso corporal — con lo específico por delante, porque
+"Sentadilla ciclista Smith" es multipower y no barra, y "Dominadas / Jalón" es
+polea aunque lleve barra.
+
+Cuatro entornos: **gimnasio completo**, **hotel / básico**, **solo mancuernas** y
+**casa sin material**. Este último obligó a añadir un catálogo de alternativas
+—flexiones con pies elevados, sentadilla a una pierna, curl femoral nórdico,
+remo invertido bajo mesa, trabajo con banda— porque el catálogo por defecto no
+tenía nada que ofrecer justo cuando más falta hace.
+
+### Al elegir
+
+El sustituto entra **en el sitio exacto** del original dentro del día. No se toca
+`exlog`: el historial de ambos se conserva, así que volver a poner el original
+mañana recupera sus marcas. Se queda en el día hasta que se quite a mano, con
+"Quitar de este día", que ya existía.
+
+### Un fallo de mi propio andamiaje
+
+La primera versión no abría nada: la condición del menú (`!isEditing &&
+!isMerging`) seguía siendo cierta con el nuevo estado activo, así que la pantalla
+de sustitutos nunca llegaba a evaluarse. Lo vi en el navegador, no en los tests
+—la lógica pura estaba bien— que es exactamente para lo que sirve abrir la app
+de verdad antes de dar algo por hecho.

@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W75";
+const APP_VERSION = "v2026.07.29-W76";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -3398,6 +3398,141 @@ function profileBalance(nombres) {
     faltaEstirado: conPerfil >= 3 && cuenta.estirado === 0,
     faltaContraido: conPerfil >= 4 && cuenta.contraido === 0,
   };
+}
+
+/* ===== SUSTITUIR UN EJERCICIO QUE HOY NO PUEDES HACER =====
+   La máquina ocupada, el gimnasio del hotel, un viaje. Lo que se hace entonces
+   es saltarse el ejercicio, o cambiarlo por "otro de pecho" — y ahí se pierde
+   lo que el ejercicio aportaba. Un press inclinado no se sustituye por unas
+   aperturas solo porque los dos sean de pecho: uno carga en todo el recorrido y
+   el otro en estiramiento.
+
+   Con el perfil de resistencia (W72) y la porción muscular ya se puede elegir
+   el sustituto que CONSERVA EL ESTÍMULO, filtrando además por el material que
+   se tiene delante.                                                            */
+const EQUIPO_EJERCICIO = [
+  // El orden importa: lo específico antes que lo genérico. "Sentadilla en
+  // multipower" es multipower, no barra, y "jalón" es polea aunque lleve barra.
+  [/multipower|smith/, "multipower"],
+  [/polea|cable|jalon|pulldown|pushdown|face pull|cruce/, "polea"],
+  [/maquina|prensa|leg press|leg curl|leg extension|peck ?deck|hack|contractora/, "maquina"],
+  [/extension (de )?cuadriceps|curl femoral/, "maquina"],
+  [/mancuerna|dumbbell|arnold|martillo|concentrado/, "mancuerna"],
+  [/banda|goma|elastic/, "banda"],
+  [/dominada|fondo|flexion|plancha|puente|abdominal|pull ?up|dip|burpee|zancada|estocada/, "corporal"],
+  [/barra|press banca|peso muerto|remo|frances|militar|encogimiento|curl prono/, "barra"],
+];
+
+const ENTORNOS = [
+  { key: "completo",   label: "Gimnasio completo", equipo: ["barra", "mancuerna", "polea", "maquina", "multipower", "corporal", "banda"] },
+  { key: "basico",     label: "Hotel / básico",    equipo: ["mancuerna", "maquina", "corporal", "banda"] },
+  { key: "mancuernas", label: "Solo mancuernas",   equipo: ["mancuerna", "corporal", "banda"] },
+  { key: "casa",       label: "Casa sin material", equipo: ["corporal", "banda"] },
+];
+
+/* Alternativas que el catálogo por defecto no trae y que son justo las que se
+   necesitan cuando no hay gimnasio. Sin esto, "casa sin material" no tendría
+   nada que ofrecer, que es cuando más falta hace. */
+const ALTERNATIVAS_BASE = [
+  { name: "Flexiones de brazos",        musculos: ["Pectoral", "Tríceps", "Deltoide ant."] },
+  { name: "Flexiones con pies elevados", musculos: ["Pectoral", "Deltoide ant."] },
+  { name: "Fondos entre sillas",        musculos: ["Tríceps", "Pectoral"] },
+  { name: "Sentadilla búlgara sin peso", musculos: ["Cuádriceps", "Glúteos"] },
+  { name: "Zancadas caminando",         musculos: ["Cuádriceps", "Glúteos"] },
+  { name: "Sentadilla a una pierna",    musculos: ["Cuádriceps", "Glúteos"] },
+  { name: "Puente de glúteos a una pierna", musculos: ["Glúteos", "Isquios"] },
+  { name: "Curl femoral nórdico",       musculos: ["Isquios"] },
+  { name: "Remo invertido bajo mesa",   musculos: ["Espalda", "Bíceps"] },
+  { name: "Dominadas",                  musculos: ["Espalda", "Bíceps"] },
+  { name: "Plancha con banda",          musculos: ["Deltoides"] },
+  { name: "Vuelos laterales con banda", musculos: ["Deltoides"] },
+  { name: "Face pull con banda",        musculos: ["Deltoides", "Espalda"] },
+  { name: "Curl con banda",             musculos: ["Bíceps"] },
+  { name: "Extensión de tríceps con banda", musculos: ["Tríceps"] },
+  { name: "Elevación de talones a una pierna", musculos: ["Pantorrillas"] },
+];
+
+/** Material que hace falta para un ejercicio, deducido de su nombre. */
+function inferEquipo(nombre, exercises) {
+  const n = _sinAcentos(nombre);
+  for (const [re, eq] of EQUIPO_EJERCICIO) if (re.test(n)) return eq;
+  // Si no se reconoce, se mira lo que guarde el catálogo del usuario
+  const guardado = _sinAcentos(buscarEnCatalogo(nombre, exercises)?.equipo || "");
+  if (/maquina/.test(guardado)) return "maquina";
+  if (/libre/.test(guardado)) return "barra";
+  return "otro";
+}
+
+function buscarEnCatalogo(nombre, exercises) {
+  for (const lista of Object.values(exercises || {})) {
+    const hit = (lista || []).find(e => e?.name === nombre);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * Sustitutos para un ejercicio, ordenados por lo que conservan del original.
+ * opts: { exercises, equipoDisponible, limite }
+ */
+function findSubstitutes(nombre, opts = {}) {
+  const { exercises, limite = 5 } = opts;
+  const disponible = opts.equipoDisponible || ENTORNOS[0].equipo;
+
+  const perfilOrig = exerciseProfile(nombre);
+  const musOrig = musclesOfExercise(nombre, exercises);
+  const porcionOrig = musOrig.length ? muscleDetail(musOrig[0], nombre) : null;
+  const grupoOrig = canonMuscleName(musOrig[0] || "");
+
+  // Candidatos: el catálogo del usuario, el de la app y las alternativas sin
+  // material, sin repetir nombres.
+  const vistos = new Set([nombre]);
+  const candidatos = [];
+  const meter = (nom, musculos) => {
+    if (!nom || vistos.has(nom)) return;
+    vistos.add(nom);
+    candidatos.push({ name: nom, musculos: musculos || musclesOfExercise(nom, exercises) });
+  };
+  Object.values(exercises || {}).forEach(lista => (lista || []).forEach(e => meter(e?.name, e?.musculos)));
+  Object.keys(MUSCLES).forEach(n => meter(n, MUSCLES[n]));
+  ALTERNATIVAS_BASE.forEach(a => meter(a.name, a.musculos));
+
+  const salida = [];
+  candidatos.forEach(c => {
+    const equipo = inferEquipo(c.name, exercises);
+    if (!disponible.includes(equipo)) return;
+
+    const grupo = canonMuscleName(c.musculos?.[0] || "");
+    if (grupoOrig && grupo !== grupoOrig) return;   // otro grupo no sustituye nada
+
+    const porcion = c.musculos?.length ? muscleDetail(c.musculos[0], c.name) : null;
+    const perfil = exerciseProfile(c.name);
+
+    let score = 0;
+    const conserva = [];
+    if (porcionOrig && porcion === porcionOrig) { score += 5; conserva.push(`misma porción (${porcion})`); }
+    else if (grupo === grupoOrig) { score += 2; }
+    if (perfilOrig && perfil && perfil.perfil === perfilOrig.perfil) {
+      score += 4;
+      conserva.push(`también carga ${PERFIL_ETIQUETA[perfil.perfil].txt}`);
+    } else if (perfilOrig && perfil) {
+      // Cambiar de perfil no descalifica, pero se dice: es otro estímulo
+      score -= 1;
+      conserva.push(`ojo: carga ${PERFIL_ETIQUETA[perfil.perfil].txt}, no ${PERFIL_ETIQUETA[perfilOrig.perfil].txt}`);
+    }
+    if (isCompoundExercise(nombre) === isCompoundExercise(c.name)) score += 1;
+
+    salida.push({
+      name: c.name, equipo, perfil: perfil?.perfil || null, porcion,
+      score, conserva,
+      mismoEstimulo: !!(porcionOrig && porcion === porcionOrig && perfilOrig && perfil && perfil.perfil === perfilOrig.perfil),
+      claves: perfil?.claves || [],
+    });
+  });
+
+  return salida
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    .slice(0, limite);
 }
 
 function recommendDayExercises(exlog, exercises, splitKey, opts = {}) {
@@ -13887,6 +14022,24 @@ function Entreno({
   const [dropRows, setDropRows] = useState([{w:"", reps:""}]);
   const [editSetObj, setEditSetObj] = useState(null);
   const [editExObj, setEditExObj] = useState(null);
+  const [entornoSel, setEntornoSel] = useState("completo");
+
+  /* Mete el sustituto en el día, justo donde estaba el original, y quita el
+     original. No se toca `exlog`: el historial de ambos se conserva, así que
+     volver a ponerlo mañana recupera sus marcas. Queda en el día hasta que se
+     quite a mano, que es lo que hace "Quitar de este día". */
+  const sustituirHoy = (original, sustituto) => {
+    const lista = (exercises || {})[sel] || [];
+    const i = lista.findIndex(e => e?.name === original);
+    if (i < 0) return;
+    const yaEsta = lista.some(e => e?.name === sustituto);
+    const nuevo = { name: sustituto, tecnico: "", musculos: musclesOfExercise(sustituto, exercises) };
+    const siguiente = lista
+      .map((e, j) => (j === i ? (yaEsta ? null : nuevo) : e))
+      .filter(Boolean);
+    setExercises({ ...(exercises || {}), [sel]: siguiente });
+    setOpen(sustituto);
+  };
   const [comboFilas, setComboFilas] = useState({});   // nombre del combinado → filas kg/reps/RIR
   const [comboSel, setComboSel] = useState([]);       // ejercicios elegidos al crear uno
   const [rutinaSel, setRutinaSel] = useState(null);   // hoja de selección previa al PDF con IA
@@ -17517,7 +17670,7 @@ tr:last-child td{border-bottom:none}
                   ← Volver a las opciones
                 </button>
               </>
-            ) : !editExObj.isEditing && !editExObj.isMerging ? (
+            ) : !editExObj.isEditing && !editExObj.isMerging && !editExObj.isSubstituting ? (
               <>
                 <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>Opciones de Ejercicio</div>
                 <div style={{fontSize:12, color:C.muted, textAlign:"center", marginBottom:8}}>
@@ -17531,6 +17684,12 @@ tr:last-child td{border-bottom:none}
                   style={{background:"rgba(77,124,15,0.12)", color:C.lime, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${alfa(C.lime, 27)}`, cursor:"pointer"}}
                 >
                   ↔️ Mover a otro día
+                </button>
+                <button
+                  onClick={() => { setEntornoSel("completo"); setEditExObj({...editExObj, isSubstituting: true}); }}
+                  style={{background:"rgba(14,116,144,0.14)", color:C.cyan, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${alfa(C.cyan, 27)}`, cursor:"pointer"}}
+                >
+                  🔄 No puedo hacerlo hoy
                 </button>
                 <button
                   onClick={() => { setMergeTarget(""); setEditExObj({...editExObj, isMerging: true}); }}
@@ -17556,6 +17715,62 @@ tr:last-child td{border-bottom:none}
                   style={{background:"rgba(190,18,60,0.19)", color:C.rose, fontWeight:800, padding:12, borderRadius:12, border:`1px solid ${C.rose}`, cursor:"pointer"}}
                 >
                   🗑️ Quitar series de este día
+                </button>
+              </>
+            ) : editExObj.isSubstituting ? (
+              <>
+                <div style={{fontSize:16, fontWeight:800, color:C.ink, textAlign:"center"}}>No puedo hacerlo hoy</div>
+                <div style={{fontSize:11.5, color:C.muted, textAlign:"center", lineHeight:1.45}}>
+                  Sustitutos de <strong style={{color:C.ink}}>{editExObj.ex.name}</strong> ordenados por lo que
+                  conservan del original, no solo por el grupo muscular.
+                </div>
+                <div style={{display:"flex", gap:5, flexWrap:"wrap"}}>
+                  {ENTORNOS.map(en => (
+                    <button key={en.key} onClick={() => setEntornoSel(en.key)}
+                      style={{flex:"1 1 auto", background: entornoSel === en.key ? "rgba(14,116,144,0.16)" : "transparent",
+                        border:`1px solid ${entornoSel === en.key ? C.cyan : C.line}`, borderRadius:8, padding:"5px 7px",
+                        color: entornoSel === en.key ? C.cyan : C.muted, fontSize:10.5, fontWeight:700, cursor:"pointer"}}>
+                      {en.label}
+                    </button>
+                  ))}
+                </div>
+                {(() => {
+                  const entorno = ENTORNOS.find(e => e.key === entornoSel) || ENTORNOS[0];
+                  const subs = findSubstitutes(editExObj.ex.name, { exercises, equipoDisponible: entorno.equipo, limite: 5 });
+                  if (!subs.length) return (
+                    <div style={{fontSize:11.5, color:C.muted, textAlign:"center", padding:"14px 0"}}>
+                      Sin alternativas para ese material. Prueba con otro entorno.
+                    </div>
+                  );
+                  return (
+                    <div style={{display:"flex", flexDirection:"column", gap:6, maxHeight:"46dvh", overflowY:"auto"}}>
+                      {subs.map(sb => (
+                        <button key={sb.name}
+                          onClick={() => { sustituirHoy(editExObj.ex.name, sb.name); setEditExObj(null); }}
+                          style={{textAlign:"left", background:C.panel2, border:`1px solid ${sb.mismoEstimulo ? C.lime : C.line}`,
+                            borderRadius:10, padding:"8px 10px", cursor:"pointer"}}>
+                          <div style={{display:"flex", justifyContent:"space-between", gap:8, alignItems:"baseline"}}>
+                            <span style={{fontSize:12.5, fontWeight:800, color:C.ink}}>{sb.name}</span>
+                            {sb.mismoEstimulo && (
+                              <span style={{fontSize:8.5, fontWeight:800, color:C.lime, whiteSpace:"nowrap"}}>MISMO ESTÍMULO</span>
+                            )}
+                          </div>
+                          <div style={{fontSize:9.5, color:C.muted, marginTop:2, lineHeight:1.45}}>
+                            {sb.conserva.join(" · ") || "mismo grupo muscular"}
+                          </div>
+                          {sb.claves[0] && (
+                            <div style={{fontSize:9, color:C.muted, marginTop:2, lineHeight:1.4, opacity:0.85}}>
+                              {sb.claves[0]}.
+                            </div>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
+                <button onClick={() => setEditExObj({...editExObj, isSubstituting: false})}
+                  style={{background:"none", border:"none", color:C.muted, fontWeight:700, padding:8, cursor:"pointer"}}>
+                  Volver
                 </button>
               </>
             ) : !editExObj.isEditing && editExObj.isMerging ? (
@@ -21843,6 +22058,7 @@ if (typeof module !== 'undefined' && module.exports) {
     calcWalkBlock, calcCardioSession, getCardioSummary, PROGRAMAS_CAMINATA, VEL_MARCHA_MAX,
     walkStateAt, trimBlocksTo, AVISO_SEG,
     exerciseProfile, profileBalance, PERFIL_ETIQUETA,
+    findSubstitutes, inferEquipo, ENTORNOS, ALTERNATIVAS_BASE,
     getMeasuredLeanMass, calcDayActivityLoad, calcAverageActivityLoad, calcObservedActivityFactor,
     calcDayCarbFactor,
     metFuerzaSegunRIR, kcalDePasos, MET_FUERZA_LIGERO, MET_FUERZA_VIGOROSO,

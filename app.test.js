@@ -1182,6 +1182,67 @@ describe('caminata en cinta con inclinación', () => {
   });
 });
 
+describe('sustituir un ejercicio que hoy no puedes hacer', () => {
+  const { findSubstitutes, inferEquipo, ENTORNOS } = require('./app.js');
+  const equipoDe = (k) => ENTORNOS.find(e => e.key === k).equipo;
+
+  test('deduce el material de cada ejercicio, con lo específico por delante', () => {
+    expect(inferEquipo('Sentadilla ciclista Smith')).toBe('multipower');
+    expect(inferEquipo('Dominadas / Jalón')).toBe('polea');   // jalón manda
+    expect(inferEquipo('Prensa 45°')).toBe('maquina');
+    expect(inferEquipo('Press inclinado mancuerna')).toBe('mancuerna');
+    expect(inferEquipo('Peso muerto')).toBe('barra');
+    expect(inferEquipo('Flexiones de brazos')).toBe('corporal');
+    expect(inferEquipo('Curl con banda')).toBe('banda');
+  });
+
+  test('no propone nada que necesite material que no tienes', () => {
+    const subs = findSubstitutes('Press banca', { equipoDisponible: equipoDe('casa') });
+    expect(subs.length).toBeGreaterThan(0);
+    subs.forEach(s => expect(['corporal', 'banda']).toContain(s.equipo));
+  });
+
+  test('prefiere el que conserva el estímulo, no solo el grupo muscular', () => {
+    // Aperturas cargan en estiramiento; el sustituto ideal también
+    const subs = findSubstitutes('Aperturas', { equipoDisponible: equipoDe('completo') });
+    expect(subs[0].perfil).toBe('estirado');
+    expect(subs[0].conserva.join(' ')).toMatch(/también carga en estiramiento/);
+  });
+
+  test('nunca cruza de grupo muscular', () => {
+    const subs = findSubstitutes('Curl martillo', { equipoDisponible: equipoDe('completo'), limite: 8 });
+    expect(subs.length).toBeGreaterThan(0);
+    subs.forEach(s => expect(s.name.toLowerCase()).toMatch(/curl|dominad|remo|biceps/));
+  });
+
+  test('avisa cuando el sustituto cambia el estímulo en vez de callarlo', () => {
+    const subs = findSubstitutes('Extensión cuádriceps', { equipoDisponible: equipoDe('casa'), limite: 8 });
+    const distinto = subs.find(s => s.conserva.some(c => c.startsWith('ojo:')));
+    expect(distinto).toBeDefined();
+  });
+
+  test('no se propone a sí mismo ni repite candidatos', () => {
+    const subs = findSubstitutes('Sentadilla', { equipoDisponible: equipoDe('completo'), limite: 10 });
+    expect(subs.map(s => s.name)).not.toContain('Sentadilla');
+    expect(new Set(subs.map(s => s.name)).size).toBe(subs.length);
+  });
+
+  test('en casa sin material sigue habiendo alternativa para pierna', () => {
+    // Es el caso en que más falta hace y el catálogo por defecto no lo cubría
+    const subs = findSubstitutes('Prensa 45°', { equipoDisponible: equipoDe('casa') });
+    expect(subs.length).toBeGreaterThan(0);
+    expect(subs.some(s => /sentadilla|zancada/i.test(s.name))).toBe(true);
+  });
+
+  test('marca cuáles conservan porción Y perfil a la vez', () => {
+    const subs = findSubstitutes('Press inclinado mancuerna', { equipoDisponible: equipoDe('completo'), limite: 8 });
+    subs.filter(s => s.mismoEstimulo).forEach(s => {
+      expect(s.conserva.join(' ')).toMatch(/misma porción/);
+      expect(s.conserva.join(' ')).toMatch(/también carga/);
+    });
+  });
+});
+
 describe('respaldo de las constantes', () => {
   const {
     metFuerzaSegunRIR, kcalDePasos, calcWalkBlock, calcDayActivityLoad,
