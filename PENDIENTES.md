@@ -1756,3 +1756,49 @@ que nada chirriara: ahora es una constante única.
 
 Ninguna de las dos aparece en los tests ni rompe nada. Solo se ven leyendo la
 aplicación de principio a fin, que es lo que se pidió.
+
+## Registro, revisado a fondo (W81)
+
+> *"revisa bien registro, todo lo que se puede ver, calcular, revísalo y
+> optimízalo"*
+
+Registro es la pestaña más densa de la app: veinte paneles que fueron creciendo
+por acumulación. Volcado su contenido renderizado y contrastados los números
+entre sí, aparecen contradicciones que cada panel por separado no puede ver.
+
+### La proyección contradecía al panel de objetivos
+
+Tres centímetros separaban estas dos afirmaciones:
+
+- *"Balance diario: **−550 kcal** (−0.5 kg/sem)"*
+- *"Semana 12: **93.7 kg** · 25.2%"* — es decir, **subiendo**.
+
+Dos causas, las dos por usar fuentes distintas para lo mismo:
+
+1. **Distinto objetivo.** El panel de objetivos calcula con el objetivo
+   **sugerido** (2012 kcal). La proyección dibujaba con el **aplicado** (2600),
+   que es el que sigue vigente porque nunca se pulsó "Aplicar". Ninguna de las
+   dos decía cuál usaba.
+2. **Distinto TDEE.** La proyección tomaba el valor crudo de `calcTDEE`, sin el
+   suelo fisiológico ni la comprobación de desvío que aplica
+   `calcNutritionTargets`. Dos paneles proyectando desde metabolismos distintos.
+
+Arreglado lo segundo —ahora comparten TDEE— y explicado lo primero: la
+proyección dice de dónde sale y, cuando el objetivo aplicado no es el calculado,
+lo señala con la diferencia y qué hacer. La gráfica no estaba mal: **estaba
+respondiendo a otra pregunta sin decirlo**.
+
+### "Desde el inicio" significaba dos cosas a la vez
+
+La cabecera dice *"95 kg inicial"* (el peso inicial del perfil) y el panel de
+evolución decía *"−3.5 kg desde el inicio"* refiriéndose al primer punto de la
+**ventana elegida** — 90 días, no el inicio de todo. Dos cifras distintas con el
+mismo nombre en la misma pantalla. Ahora dice "en el período".
+
+### Lo que se revisó y está bien
+
+Duplicaciones que **no** son errores porque responden a preguntas distintas: el
+peso aparece en la cabecera (dónde estoy), en el informe (composición), en
+"cambios desde la medición anterior" (qué cambió) y en estadísticas (variación
+del período). TDEE y BMR aparecen dos veces cada uno, y tras este arreglo ambas
+apariciones son ya el mismo número.

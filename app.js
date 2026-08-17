@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W80";
+const APP_VERSION = "v2026.07.29-W81";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -6526,7 +6526,14 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     setTdeeEstimate(tdee);
     if (tdee && tgt) {
       const latestM = Object.entries(mLog||{}).filter(([_,v])=>v?.weight).sort((a,b)=>b[0] < a[0] ? -1 : (b[0] > a[0] ? 1 : 0))[0]?.[1];
-      if (latestM) setProjections(calcBodyProjection(parseFloat(latestM.weight), parseFloat(latestM.grasaPct)||25, tdee, tgt.kcal, 12));
+      /* El TDEE de la proyección tiene que ser el MISMO que el del panel de
+         objetivos. `calcTDEE` devuelve el valor crudo, sin el suelo fisiológico
+         ni la comprobación de desvío que aplica calcNutritionTargets, así que
+         los dos paneles proyectaban desde metabolismos distintos y podían
+         contradecirse: uno decía "-0.5 kg/semana" y el otro dibujaba una subida.
+         Se prefiere el TDEE ya depurado cuando existe. */
+      const tdeeCoherente = nutritionTargetsRef.current?.tdee || tdee;
+      if (latestM) setProjections(calcBodyProjection(parseFloat(latestM.weight), parseFloat(latestM.grasaPct)||25, tdeeCoherente, tgt.kcal, 12));
     }
     if (trend && Math.abs(trend.kgPerWeek) < 0.1 && trend.dataPoints >= 7) {
       setMacroAdjustSuggestion({ type:"stalled", message:`Tu peso lleva ${trend.dataPoints} registros sin moverse (${trend.kgPerWeek>=0?"+":""}${trend.kgPerWeek} kg/sem). Considera bajar -150 kcal.`, adjustment:-150 });
@@ -6955,6 +6962,10 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     return dayLoad.media > 0 ? calcObservedActivityFactor(bmr, dayLoad.media) : null;
   }, [bodyProfile, activeMetrics, dayLoad.media]);
 
+  // Ref para que runLocalAnalysis lea el objetivo calculado sin depender del
+  // orden de declaración ni volver a calcularlo.
+  const nutritionTargetsRef = useRef(null);
+
   const nutritionTargets = React.useMemo(
     () => calcNutritionTargets(bodyProfile, activeMetrics, {
       tdeeReal: tdeeEstimate,
@@ -7005,6 +7016,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       return recorte;
     });
   }, [loaded, metricslog, nutritionTargets?.deficitDiario]);
+
+  nutritionTargetsRef.current = nutritionTargets;
 
   // Aplicar los objetivos calculados al preset activo. Es una acción explícita
   // del usuario: nunca se sobrescriben sus macros sin que lo pida.
@@ -21289,7 +21302,11 @@ ${alertas || "ninguna"}`;
                           {delta != null && (
                             <div style={{fontSize:9.5, fontWeight:700, color:colDelta}}>
                               {delta > 0 ? "+" : ""}{delta} {s.unidad}
-                              <span style={{fontWeight:500, color:C.muted}}> desde el inicio</span>
+                              {/* "desde el inicio" se leía como el peso inicial
+                                  del perfil (95 kg en la cabecera), y es otra
+                                  cosa: el primer punto de la VENTANA elegida.
+                                  Dos cifras distintas con el mismo nombre. */}
+                              <span style={{fontWeight:500, color:C.muted}}> en el período</span>
                             </div>
                           )}
                           {vsPrevio != null && (
@@ -21686,7 +21703,33 @@ ${alertas || "ninguna"}`;
       {/* La tendencia de peso vive ahora en "Evolución corporal" */}
 
       <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"12px 16px 12px", marginBottom:12}}>
-        <div style={{fontSize:12.5, fontWeight:800, marginBottom:2}}>Proyección Corporal a 12 Semanas (IA)</div>
+        <div style={{fontSize:12.5, fontWeight:800, marginBottom:2}}>Proyección Corporal a 12 Semanas</div>
+        {/* Una proyección sin decir DESDE QUÉ proyecta es un adivino. Dibujaba
+            una subida de peso mientras el panel de objetivos, tres centímetros
+            más arriba, prometía −0.5 kg/semana: proyectaba con el objetivo
+            APLICADO y el otro calculaba con el SUGERIDO. Nunca se dijo cuál. */}
+        {(() => {
+          const aplicado = Math.round(parseFloat(target?.kcal) || 0);
+          const calculado = nutritionTargets?.kcal || 0;
+          const tdeeUsado = nutritionTargets?.tdee || 0;
+          if (!aplicado || !tdeeUsado) return null;
+          const balance = aplicado - tdeeUsado;
+          const desajuste = calculado > 0 && Math.abs(calculado - aplicado) >= 100;
+          return (
+            <div style={{fontSize:10, color:C.muted, lineHeight:1.5, marginBottom:6}}>
+              Proyectado con el objetivo que tienes <b style={{color:C.ink}}>aplicado ({aplicado} kcal)</b>{" "}
+              frente a un TDEE de <b style={{color:C.ink}}>{tdeeUsado}</b>: balance de{" "}
+              <b style={{color: balance < 0 ? C.lime : C.amber}}>{balance > 0 ? "+" : ""}{balance} kcal/día</b>.
+              {desajuste && (
+                <div style={{color:C.amber, marginTop:3}}>
+                  Tu objetivo <b>calculado</b> es {calculado} kcal, no {aplicado}. Con el aplicado el
+                  resultado es este; pulsa "Aplicar estos objetivos" arriba para que las dos cosas
+                  digan lo mismo.
+                </div>
+              )}
+            </div>
+          );
+        })()}
         {renderProjectionChart()}
       </div>
 
