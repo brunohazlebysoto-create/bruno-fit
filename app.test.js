@@ -1508,6 +1508,49 @@ describe('calidad del registro de comida', () => {
   });
 });
 
+describe('el día responde a lo que se entrenó', () => {
+  const { calcWaterGoalGlasses, calcDayActivityLoad, calcDayCarbFactor, calcCarbCycleTargets } = require('./app.js');
+
+  test('la hidratación cuenta los minutos de cinta, no solo los de pesas', () => {
+    const soloPesas = calcWaterGoalGlasses(92, true, 250, 60);
+    const pesasYCinta = calcWaterGoalGlasses(92, true, 250, 60 + 40);
+    expect(pesasYCinta).toBeGreaterThan(soloPesas);
+    // Y un día de solo caminata ya no es un día de descanso
+    const soloCinta = calcWaterGoalGlasses(92, true, 250, 40);
+    const descanso = calcWaterGoalGlasses(92, false, 250, 0);
+    expect(soloCinta).toBeGreaterThan(descanso);
+  });
+
+  test('el día responde al VOLUMEN, no a si se entrenó o no', () => {
+    const d = '2026-08-14';
+    const serie = () => ({ date: d + 'T18:00:00', w: 100, reps: 8, type: 'work', rir: '1' });
+    const corto = calcDayActivityLoad({ dateStr: d, pesoKg: 92, workoutDurations: { [d]: 20 },
+      exlog: { X: Array.from({ length: 6 }, serie) } });
+    const largo = calcDayActivityLoad({ dateStr: d, pesoKg: 92, workoutDurations: { [d]: 90 },
+      exlog: { X: Array.from({ length: 24 }, serie) } });
+    expect(largo.carga).toBeGreaterThan(corto.carga * 2);
+  });
+
+  test('solo se mueven los carbohidratos: proteína y grasa no dependen del día', () => {
+    const base = { kcal: 2400, p: 190, c: 230, f: 70 };
+    const cargas = [900, 300, 750, 250, 820, 400, 680];
+    cargas.forEach(c => {
+      const r = calcCarbCycleTargets(base, { factorDia: calcDayCarbFactor(cargas, c).factor });
+      expect(r.p).toBe(base.p);
+      expect(r.f).toBe(base.f);
+    });
+  });
+
+  test('un día de solo cinta también sube los carbohidratos', () => {
+    const d = '2026-08-14';
+    const conCinta = calcDayActivityLoad({ dateStr: d, pesoKg: 92,
+      cardiolog: { [d]: [{ id: 'c', bloques: [{ min: 50, vel: 5.5, incl: 9 }] }] } });
+    const sinNada = calcDayActivityLoad({ dateStr: d, pesoKg: 92 });
+    expect(conCinta.carga).toBeGreaterThan(sinNada.carga);
+    expect(conCinta.entreno).toBe(false);   // no hubo pesas, y aun así cuenta
+  });
+});
+
 describe('respaldo de las constantes', () => {
   const {
     metFuerzaSegunRIR, kcalDePasos, calcWalkBlock, calcDayActivityLoad,

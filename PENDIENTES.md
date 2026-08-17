@@ -1802,3 +1802,47 @@ peso aparece en la cabecera (dónde estoy), en el informe (composición), en
 "cambios desde la medición anterior" (qué cambió) y en estadísticas (variación
 del período). TDEE y BMR aparecen dos veces cada uno, y tras este arreglo ambas
 apariciones son ya el mismo número.
+
+## Cómo cambia el día según lo que entrenas (W82)
+
+> *"y cómo cambian los requerimientos del día según el ejercicio, igual
+> revísalo"*
+
+Repasada la cadena entera: qué del día se mueve con el entrenamiento, qué no, y
+por qué.
+
+### Lo que responde, y responde bien
+
+**Carbohidratos y calorías.** Salen de `calcDayActivityLoad`, que suma fuerza
+(minutos × MET según el RIR real), cinta (ecuación del ACSM) y pasos, y se
+reparten con `calcDayCarbFactor` frente a la media de sus últimos 14 días. Es
+sensible al **volumen**, no a un sí/no: una sesión de 6 series en 20 minutos y
+una de 24 en 90 no piden lo mismo. Hay test que lo fija.
+
+**Un día de solo cinta también cuenta.** No hace falta tocar una pesa para que el
+día suba de carga: 50 minutos al 9% mueven el objetivo igual.
+
+**Proteína y grasa NO se mueven, a propósito.** El vaivén lo absorben los
+carbohidratos: la proteína protege el músculo y debe ser estable, y la grasa
+tiene un mínimo hormonal que no conviene tocar por un día duro. Hay test que
+comprueba que ninguna de las dos cambie en toda una semana de cargas dispares.
+
+### El agua ignoraba la cinta entera
+
+`calcWaterGoalGlasses` recibía solo los minutos de **pesas** y un booleano sacado
+de si había series registradas. Consecuencia: **una hora de caminata inclinada en
+un día sin pesas contaba como día de descanso y no sumaba una gota** — justo el
+día en que más se suda de la semana. La función de cardio de W70 era invisible
+para la hidratación.
+
+Ahora recibe los minutos **activos** —pesas más cinta— y un día de solo caminata
+deja de ser un día de descanso a estos efectos. Los 500 ml/hora quedan marcados
+como **convenio**: la tasa de sudoración real varía enormemente entre personas y
+con el ambiente, y no hay un número que sirva para todos.
+
+### Limitación conocida
+
+`predictTodayReadiness` calcula su referencia de hidratación asumiendo siempre
+día de entreno. Es una vara de medir constante para el score diario, no un
+objetivo que se muestre, así que se deja como está — pero queda anotado para no
+tropezar con ello creyendo que es el mismo cálculo que el objetivo visible.

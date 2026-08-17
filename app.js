@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W81";
+const APP_VERSION = "v2026.07.29-W82";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -2287,11 +2287,16 @@ function calcNutritionTargets(profile, metrics, opts = {}) {
 // mismos vasos como litros sin que nada chirriara.
 const ML_POR_VASO = 250;
 
+/* Objetivo de hidratación.
+   `durationMin` son los minutos ACTIVOS del día: pesas más cinta. Antes solo
+   llegaban los de pesas, así que una hora de caminata inclinada en un día sin
+   pesas contaba como día de descanso y no sumaba una gota — justo el día en que
+   más se suda de toda la semana.
+   Los 500 ml/hora son CONVENIO: la tasa de sudoración real varía enormemente
+   entre personas y con el ambiente, y no hay un número que valga para todos. */
 function calcWaterGoalGlasses(weight, trainedToday = false, glassMl = ML_POR_VASO, durationMin = 0) {
   const w = parseFloat(weight) || 0;
   if (w <= 0) return 14;
-  // La pérdida por sudor escala con la duración de la sesión (~500 ml/hora).
-  // Si no se registró duración, se asume una sesión estándar de ~60 min.
   const mins = parseInt(durationMin) || 0;
   const sudorMl = trainedToday ? (mins > 0 ? (mins / 60) * 500 : 600) : 0;
   const ml = w * 35 + sudorMl;
@@ -10742,7 +10747,11 @@ function Hoy({
   );
   // Objetivo de hidratación según peso corporal (~35 ml/kg) + extra si hoy
   // hubo entreno. Antes era una constante de 14 vasos para cualquier peso.
-  const waterGoal = calcWaterGoalGlasses(activeMetrics?.weight, !isRestDay, ML_POR_VASO, todayDurationMin);
+  // Minutos activos del día = pesas + cinta. Un día de solo caminata no es un
+  // día de descanso a efectos de hidratación.
+  const minActivos = (todayDurationMin || 0) + (dayLoad?.cardio?.min || 0);
+  const huboActividad = !isRestDay || (dayLoad?.cardio?.min || 0) > 0;
+  const waterGoal = calcWaterGoalGlasses(activeMetrics?.weight, huboActividad, ML_POR_VASO, minActivos);
   const readiness = React.useMemo(
     () => predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, metricslog, activeMetrics),
     [exlog, notes, water, foodlog, selectedDateStr, metricslog, activeMetrics]
