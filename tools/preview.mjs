@@ -107,6 +107,17 @@ function buildSeed() {
       pasos: 6000 + (i % 5) * 1500,
       fuente: "bascula", ayunas: true,
     };
+    // Segmental cada dos semanas, como quien se hace el InBody de vez en
+    // cuando, con una asimetría leve en brazos: es lo que hay que enseñar.
+    if (i % 14 === 0) {
+      Object.assign(metricslog[k], {
+        musculoTronco: 29.8, pesoSinGrasa: Math.round((metricslog[k].weight * 0.755) * 10) / 10,
+        musculoBrazoDer: 3.9, musculoBrazoIzq: 3.62,
+        musculoPiernaDer: 10.2, musculoPiernaIzq: 10.1,
+        grasaBrazoDer: 1.3, grasaBrazoIzq: 1.3,
+        grasaPiernaDer: 3.4, grasaPiernaIzq: 3.4,
+      });
+    }
     if (i % 2 === 1 && i <= 13) {
       cardiolog[k] = [{
         id: "cam" + i,

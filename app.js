@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W77";
+const APP_VERSION = "v2026.07.29-W78";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -3536,6 +3536,197 @@ function profileBalance(nombres) {
   };
 }
 
+/* ===== EXPORTAR A CSV =====
+   Todo el historial vive en el navegador de un móvil. Un borrado de datos del
+   sitio, un cambio de teléfono o que esta app deje de existir se lo llevan por
+   delante. El respaldo JSON ya existía, pero un JSON no se abre en una hoja de
+   cálculo ni se le hace un gráfico: para que los datos sean de verdad del
+   usuario tienen que salir en un formato que cualquiera pueda leer.            */
+function csvEscape(v) {
+  const s = v == null ? "" : String(v);
+  // Coma, comilla o salto de línea obligan a entrecomillar, y las comillas
+  // internas se duplican. Sin esto, un plato llamado 'Pollo, arroz y "salsa"'
+  // rompe la fila entera y desplaza todas las columnas.
+  return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function toCSV(filas, columnas) {
+  const cab = columnas.map(c => csvEscape(c.titulo)).join(",");
+  const cuerpo = (filas || []).map(f => columnas.map(c => csvEscape(c.valor(f))).join(","));
+  // BOM al principio: sin él, Excel abre el archivo en Latin-1 y destroza los
+  // acentos de "Plátano" y "Sentadilla búlgara".
+  return "﻿" + [cab, ...cuerpo].join("\n");
+}
+
+/** Los cuatro registros de la app, cada uno en su CSV. */
+function buildExportCSV(datos = {}) {
+  const { foodlog, exlog, metricslog, cardiolog, exercises } = datos;
+
+  const comidas = [];
+  Object.keys(foodlog || {}).sort().forEach(fecha =>
+    (foodlog[fecha] || []).forEach(e => comidas.push({ fecha, ...e })));
+
+  const series = [];
+  Object.entries(exlog || {}).forEach(([ejercicio, sets]) =>
+    (sets || []).forEach(s => {
+      if (!s?.date) return;
+      series.push({
+        fecha: (s.date || "").slice(0, 10),
+        hora: (s.date || "").slice(11, 16),
+        ejercicio,
+        musculo: canonMuscleName(musclesOfExercise(ejercicio, exercises)[0] || "") || "",
+        ...s,
+      });
+    }));
+  series.sort((a, b) => (a.fecha + a.hora < b.fecha + b.hora ? -1 : 1));
+
+  const mediciones = Object.keys(metricslog || {}).sort()
+    .map(fecha => ({ fecha, ...normalizeBodyEntry(metricslog[fecha]) }));
+
+  const caminatas = [];
+  Object.keys(cardiolog || {}).sort().forEach(fecha =>
+    (cardiolog[fecha] || []).forEach(s => {
+      const r = calcCardioSession(s, parseFloat(datos.pesoKg) || 0);
+      r.bloques.forEach((b, i) => caminatas.push({
+        fecha, sesion: s.id, bloque: i + 1,
+        min: b.min, vel: b.vel, incl: b.incl, km: b.km, desnivel: b.desnivel, kcal: b.kcal,
+      }));
+    }));
+
+  return {
+    "comidas.csv": toCSV(comidas, [
+      { titulo: "fecha", valor: f => f.fecha },
+      { titulo: "alimento", valor: f => f.resumen || f.nombre || "" },
+      { titulo: "kcal", valor: f => Math.round(parseFloat(f.kcal) || 0) },
+      { titulo: "proteina_g", valor: f => Math.round(parseFloat(f.proteina) || 0) },
+      { titulo: "carbo_g", valor: f => Math.round(parseFloat(f.carbo) || 0) },
+      { titulo: "grasa_g", valor: f => Math.round(parseFloat(f.grasa) || 0) },
+    ]),
+    "entrenamiento.csv": toCSV(series, [
+      { titulo: "fecha", valor: s => s.fecha },
+      { titulo: "hora", valor: s => s.hora },
+      { titulo: "ejercicio", valor: s => s.ejercicio },
+      { titulo: "musculo", valor: s => s.musculo },
+      { titulo: "tipo", valor: s => s.type || "work" },
+      { titulo: "peso_kg", valor: s => s.w },
+      { titulo: "reps", valor: s => s.reps },
+      { titulo: "rir", valor: s => (s.rir === "-" ? "" : s.rir) },
+      { titulo: "volumen_kg", valor: s => Math.round((parseFloat(s.w) || 0) * (parseInt(s.reps) || 0)) },
+    ]),
+    "mediciones.csv": toCSV(mediciones, [
+      { titulo: "fecha", valor: m => m.fecha },
+      { titulo: "peso_kg", valor: m => m.weight ?? "" },
+      { titulo: "grasa_pct", valor: m => m.grasaPct ?? "" },
+      { titulo: "musculo_kg", valor: m => m.musculo ?? "" },
+      { titulo: "peso_sin_grasa_kg", valor: m => m.pesoSinGrasa ?? "" },
+      { titulo: "cintura_cm", valor: m => m.cintura ?? "" },
+      { titulo: "visceral", valor: m => m.visceral ?? "" },
+      { titulo: "pasos", valor: m => m.pasos ?? "" },
+      { titulo: "sueno_h", valor: m => m.suenoHoras ?? "" },
+      { titulo: "fc_reposo", valor: m => m.fcReposo ?? "" },
+      { titulo: "ayunas", valor: m => (m.ayunas === undefined ? "" : m.ayunas ? "si" : "no") },
+      { titulo: "fuente", valor: m => m.fuente ?? "" },
+    ]),
+    "caminatas.csv": toCSV(caminatas, [
+      { titulo: "fecha", valor: c => c.fecha },
+      { titulo: "bloque", valor: c => c.bloque },
+      { titulo: "minutos", valor: c => c.min },
+      { titulo: "velocidad_kmh", valor: c => c.vel },
+      { titulo: "inclinacion_pct", valor: c => c.incl },
+      { titulo: "km", valor: c => c.km },
+      { titulo: "desnivel_m", valor: c => c.desnivel },
+      { titulo: "kcal", valor: c => c.kcal },
+    ]),
+  };
+}
+
+/* ===== ANÁLISIS SEGMENTAL =====
+   El informe corporal da músculo y grasa por tronco, brazos y piernas. Todo eso
+   se guardaba y solo se usaba para meter una frase en el prompt de la IA. Es
+   justo la medición que puede señalar un desequilibrio real, y estaba muerta.
+
+   Dos cosas distintas que conviene no mezclar:
+   · ASIMETRÍA — un lado tiene más músculo que el otro. Se mide en % de
+     diferencia sobre el lado mayor, porque 0.4 kg en un brazo y 0.4 kg en una
+     pierna no son el mismo problema.
+   · REPARTO — cuánto del total va a tronco frente a extremidades. Sirve para
+     ver si se está ganando donde se entrena.
+
+   Los umbrales son CONVENIO, no ciencia: la bioimpedancia segmental tiene un
+   error propio de varios puntos porcentuales, así que por debajo del 3% no se
+   afirma nada y entre 3 y 5% se llama "leve". Marcar como asimetría lo que
+   puede ser ruido del aparato sería inventar un problema.                      */
+const ASIM_LEVE = 3, ASIM_CLARA = 5;   // % de diferencia entre lados
+
+const PARES_SEGMENTALES = [
+  { k: "musculoBrazo",  izq: "musculoBrazoIzq",  der: "musculoBrazoDer",  lbl: "Brazos",  tipo: "músculo", u: "kg" },
+  { k: "musculoPierna", izq: "musculoPiernaIzq", der: "musculoPiernaDer", lbl: "Piernas", tipo: "músculo", u: "kg" },
+  { k: "grasaBrazo",    izq: "grasaBrazoIzq",    der: "grasaBrazoDer",    lbl: "Brazos",  tipo: "grasa",   u: "kg" },
+  { k: "grasaPierna",   izq: "grasaPiernaIzq",   der: "grasaPiernaDer",   lbl: "Piernas", tipo: "grasa",   u: "kg" },
+];
+
+/** Asimetrías y reparto segmental de la última medición que los traiga. */
+function analyzeSegmental(metricslog, opts = {}) {
+  const fechas = Object.keys(metricslog || {}).sort().reverse();
+  const tieneSeg = (m) => PARES_SEGMENTALES.some(p =>
+    parseFloat(m?.[p.izq]) > 0 && parseFloat(m?.[p.der]) > 0);
+  const fecha = fechas.find(f => tieneSeg(normalizeBodyEntry(metricslog[f])));
+  if (!fecha) return null;
+  const m = normalizeBodyEntry(metricslog[fecha]);
+
+  const pares = PARES_SEGMENTALES.map(p => {
+    const izq = parseFloat(m[p.izq]), der = parseFloat(m[p.der]);
+    if (!(izq > 0) || !(der > 0)) return null;
+    const mayor = Math.max(izq, der);
+    const difPct = Math.round(((mayor - Math.min(izq, der)) / mayor) * 1000) / 10;
+    const nivel = difPct >= ASIM_CLARA ? "clara" : difPct >= ASIM_LEVE ? "leve" : "simetrico";
+    return {
+      ...p, izq, der, difPct, nivel,
+      dominante: izq === der ? null : (izq > der ? "izquierdo" : "derecho"),
+      // En grasa, que un lado tenga más no es un problema de entrenamiento:
+      // se informa, pero no se recomienda corregirlo con ejercicio.
+      accionable: p.tipo === "músculo" && nivel !== "simetrico",
+    };
+  }).filter(Boolean);
+
+  const tronco = parseFloat(m.musculoTronco) || 0;
+  const extremidades = ["musculoBrazoIzq", "musculoBrazoDer", "musculoPiernaIzq", "musculoPiernaDer"]
+    .reduce((a, k) => a + (parseFloat(m[k]) || 0), 0);
+  const total = tronco + extremidades;
+
+  return {
+    fecha,
+    pares,
+    asimetrias: pares.filter(p => p.accionable).sort((a, b) => b.difPct - a.difPct),
+    reparto: total > 0 ? {
+      tronco, extremidades: Math.round(extremidades * 10) / 10,
+      troncoPct: Math.round((tronco / total) * 1000) / 10,
+    } : null,
+  };
+}
+
+/**
+ * Ejercicios unilaterales registrados que sirven para corregir una asimetría.
+ * Sin esto el aviso se queda en "tienes un brazo más grande": el dato solo vale
+ * si viene con qué hacer al respecto.
+ */
+function unilateralesPara(zona, exercises, exlog) {
+  const RE = /unilateral|a una pierna|una mano|bulgara|bulgar|concentrado|martillo|zancada|estocada|step-?up|mancuerna/i;
+  const grupoDe = { Brazos: ["Bíceps", "Tríceps"], Piernas: ["Cuádriceps", "Isquios", "Glúteos"] }[zona] || [];
+  const vistos = new Set(), salida = [];
+  Object.values(exercises || {}).forEach(lista => (lista || []).forEach(e => {
+    const n = e?.name;
+    // Sin quitar acentos, /bulgara/ no casa con "Sentadilla búlgara" y el
+    // ejercicio unilateral más usado se quedaba fuera precisamente aquí.
+    if (!n || vistos.has(n) || !RE.test(_sinAcentos(n))) return;
+    const grupo = canonMuscleName(musclesOfExercise(n, exercises)[0] || "");
+    if (!grupoDe.includes(grupo)) return;
+    vistos.add(n);
+    salida.push({ name: n, registrado: ((exlog || {})[n] || []).length > 0 });
+  }));
+  return salida.sort((a, b) => (b.registrado ? 1 : 0) - (a.registrado ? 1 : 0)).slice(0, 4);
+}
+
 /* ===== SUSTITUIR UN EJERCICIO QUE HOY NO PUEDES HACER =====
    La máquina ocupada, el gimnasio del hotel, un viaje. Lo que se hace entonces
    es saltarse el ejercicio, o cambiarlo por "otro de pecho" — y ahí se pierde
@@ -5821,6 +6012,30 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     URL.revokeObjectURL(url);
   };
 
+  /* Exportar a CSV. El respaldo JSON ya existía, pero un JSON no se abre en una
+     hoja de cálculo ni se le hace un gráfico: para que los datos sean de verdad
+     del usuario tienen que salir en un formato que cualquiera pueda leer.
+     Se descargan cuatro archivos, uno por registro, en vez de uno mezclado:
+     comidas y series no comparten columnas y meterlas juntas obligaría a
+     limpiarlo antes de poder usarlo. */
+  const exportDataCSV = () => {
+    const archivos = buildExportCSV({
+      foodlog, exlog, metricslog, cardiolog, exercises,
+      pesoKg: parseFloat(activeMetrics?.weight) || 0,
+    });
+    const hoy = getLocalDateStr(new Date());
+    Object.entries(archivos).forEach(([nombre, contenido], i) => {
+      const blob = new Blob([contenido], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `brunofit-${hoy}-${nombre}`;
+      // Algunos navegadores descartan varias descargas seguidas si salen en el
+      // mismo instante; un desfase corto entre archivos lo evita.
+      setTimeout(() => { a.click(); URL.revokeObjectURL(url); }, i * 300);
+    });
+  };
+
   // Mantener ref actualizada con el estado más reciente para el backup nocturno
   nightlyBackupRef.current = { log, notes, exlog, exercises, foodlog, waterlog, suppslog, metricslog, suppsInventory, workoutDurations, cardiolog, meals, splits, bodyComp, shoppingList, presetKey, activeSplitKey, customPresets, customSuggestions, chat, experiments, smartGoals, challenges, weeklyInsight, upcomingEvent, supabase, supabaseUser };
 
@@ -7837,6 +8052,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             foodlog={foodlog}
             waterlog={waterlog}
             exlog={exlog}
+            exercises={exercises}
             projections={projections}
             tdeeEstimate={tdeeEstimate}
             analyzeAndReconfigure={analyzeAndReconfigure}
@@ -7901,6 +8117,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             handleSbLogout={handleSbLogout}
             syncLocalToSupabase={syncLocalToSupabase}
             exportDataJSON={exportDataJSON}
+            exportDataCSV={exportDataCSV}
             importDataJSON={importDataJSON}
             sbAutoSyncStatus={sbAutoSyncStatus}
             changePreset={changePreset}
@@ -12197,7 +12414,7 @@ function Perfil({
   handleSbRegister,
   handleSbLogout,
   syncLocalToSupabase,
-  exportDataJSON,
+  exportDataJSON, exportDataCSV,
   importDataJSON,
   sbAutoSyncStatus,
   changePreset,
@@ -12825,8 +13042,17 @@ function Perfil({
       <div style={{ background: "var(--panel-bg-sec)", border: "1px solid var(--line-color)", borderRadius: "var(--radius-md)", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-ink)", letterSpacing: "0.05em" }}>COPIA DE SEGURIDAD</div>
         <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.4 }}>
-          Exporta todos tus datos a un archivo JSON para guardarlos o pasarlos a otro dispositivo.
+          El JSON sirve para pasar todo a otro dispositivo. El CSV son cuatro archivos
+          —comidas, entrenamiento, mediciones y caminatas— que se abren en cualquier
+          hoja de cálculo, sin depender de esta app.
         </div>
+        <button
+          onClick={exportDataCSV}
+          className="btn-active-scale"
+          style={{ padding: "10px", background: "var(--panel-bg)", border: "1px solid var(--accent-cyan)", color: "var(--accent-cyan)", fontWeight: 800, borderRadius: "var(--radius-md)", fontSize: 11.5, cursor: "pointer" }}
+        >
+          Exportar CSV (4 archivos)
+        </button>
         <div style={{ display: "flex", gap: 8 }}>
           <button
             onClick={exportDataJSON}
@@ -19043,7 +19269,7 @@ Analiza la evolución y da retroalimentación concreta. Formato: párrafos corto
 function Registro({
   notes, setNotes, target, bodyComp, setBodyComp, geminiKey,
   metricslog, setMetricslog, selectedDateStr, setSelectedDateStr, saveWeight, activeMetrics,
-  foodlog, waterlog, exlog,
+  foodlog, waterlog, exlog, exercises,
   projections, tdeeEstimate, analyzeAndReconfigure, experiments, setExperiments,
   dietGuidelines, setDietGuidelines, trainingGuidelines, setTrainingGuidelines, onSaveGuidelines,
   sendCoachMessage, setView, bodyProfile, updateBodyProfile, nutritionTargets, onApplyTargets,
@@ -21200,6 +21426,74 @@ ${alertas || "ninguna"}`;
         {renderNutritionHistory()}
       </div>
 
+      {/* ===== ANÁLISIS SEGMENTAL =====
+          El informe da músculo y grasa por tronco, brazos y piernas, y todo eso
+          se guardaba para acabar en una frase del prompt de la IA. Es justo la
+          medición que puede señalar un desequilibrio real. */}
+      {(() => {
+        const seg = analyzeSegmental(metricslog);
+        if (!seg) return null;
+        const musculares = seg.pares.filter(p => p.tipo === "músculo");
+        if (!musculares.length) return null;
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
+            <div style={{fontSize:12.5, fontWeight:800, marginBottom:3, display:"flex", alignItems:"center", gap:6}}>
+              <Activity size={15} color={C.cyan}/> Equilibrio entre lados
+            </div>
+            <div style={{fontSize:10, color:C.muted, marginBottom:10, lineHeight:1.45}}>
+              Medición del {fdate(seg.fecha + "T12:00:00Z")}. La diferencia va en porcentaje:
+              300 g en un brazo y 300 g en una pierna no son el mismo problema.
+            </div>
+
+            {musculares.map(p => {
+              const col = p.nivel === "clara" ? C.amber : p.nivel === "leve" ? C.cyan : C.lime;
+              const izqPct = (p.izq / (p.izq + p.der)) * 100;
+              return (
+                <div key={p.k} style={{marginBottom:9}}>
+                  <div style={{display:"flex", justifyContent:"space-between", alignItems:"baseline", fontSize:11.5}}>
+                    <span style={{fontWeight:700, color:C.ink}}>{p.lbl}</span>
+                    <span style={{color:C.muted}}>
+                      izq <b style={{color:C.ink}}>{p.izq}</b> · der <b style={{color:C.ink}}>{p.der}</b> {p.u}
+                      <b style={{color:col, marginLeft:6}}>
+                        {p.nivel === "simetrico" ? "simétrico" : `${p.difPct}%`}
+                      </b>
+                    </span>
+                  </div>
+                  {/* Barra a dos lados desde el centro: se ve de un vistazo hacia
+                      dónde carga el desequilibrio, que es lo que importa. */}
+                  <div style={{display:"flex", height:6, borderRadius:4, overflow:"hidden", marginTop:3, background:C.track}}>
+                    <div style={{width:`${izqPct}%`, background:alfa(col, 60)}}/>
+                    <div style={{width:"1px", background:C.ink, opacity:0.35}}/>
+                    <div style={{flex:1, background:col}}/>
+                  </div>
+                </div>
+              );
+            })}
+
+            {seg.asimetrias.length > 0 ? (
+              <div style={{background:C.panel2, border:`1px solid ${alfa(C.amber, 27)}`, borderRadius:10, padding:"8px 10px", marginTop:8}}>
+                {seg.asimetrias.map(a => {
+                  const uni = unilateralesPara(a.lbl, exercises, exlog);
+                  return (
+                    <div key={a.k} style={{fontSize:10.5, color:C.ink, lineHeight:1.5, marginBottom:4}}>
+                      Tu lado <b>{a.dominante}</b> tiene un <b>{a.difPct}%</b> más de músculo en {a.lbl.toLowerCase()}.
+                      {uni.length > 0 && (
+                        <> Corrige con trabajo unilateral empezando siempre por el lado flojo:{" "}
+                          <b>{uni.map(u => u.name).join(", ")}</b>.</>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{fontSize:10.5, color:C.muted, marginTop:4}}>
+                Sin asimetrías fuera del margen de error del aparato.
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* ===== ¿FALTA COMIDA POR REGISTRAR? =====
           Todo lo que esta app calcula —TDEE, objetivo, macros del día, planes de
           la IA— se apoya en la comida registrada. Cuando el registro va corto el
@@ -22322,6 +22616,8 @@ if (typeof module !== 'undefined' && module.exports) {
     walkStateAt, trimBlocksTo, AVISO_SEG,
     exerciseProfile, profileBalance, PERFIL_ETIQUETA,
     findSubstitutes, inferEquipo, ENTORNOS, ALTERNATIVAS_BASE,
+    analyzeSegmental, unilateralesPara, PARES_SEGMENTALES,
+    buildExportCSV, toCSV, csvEscape,
     getMeasuredLeanMass, calcDayActivityLoad, calcAverageActivityLoad, calcObservedActivityFactor,
     calcDayCarbFactor,
     metFuerzaSegunRIR, kcalDePasos, MET_FUERZA_LIGERO, MET_FUERZA_VIGOROSO,

@@ -167,6 +167,8 @@ const ESCENAS = [
     } },
   // Platos habituales: registrar sin describir ni llamar a la IA
   { id: "hoy-04-platos-habituales", tab: "Hoy", scrollHasta: "Registrar comida" },
+  // Equilibrio entre lados: el segmental del informe, que antes solo iba al prompt
+  { id: "registro-12-segmental", tab: "Registro", scrollHasta: "Equilibrio entre lados" },
   // Calidad del registro: dónde se escapan las calorías sin anotar
   { id: "registro-11-calidad-registro", tab: "Registro", scrollHasta: "Calidad de tu registro" },
   { id: "registro-01-peso-y-tendencia", tab: "Registro", scroll: 0 },

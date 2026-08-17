@@ -1243,6 +1243,88 @@ describe('sustituir un ejercicio que hoy no puedes hacer', () => {
   });
 });
 
+describe('análisis segmental y exportación', () => {
+  const { analyzeSegmental, unilateralesPara, buildExportCSV, toCSV, csvEscape } = require('./app.js');
+
+  const conSeg = {
+    '2026-08-01': { weight: 92, musculoBrazoDer: 3.9, musculoBrazoIzq: 3.6,
+      musculoPiernaDer: 10.2, musculoPiernaIzq: 10.1, musculoTronco: 30,
+      grasaBrazoDer: 1.2, grasaBrazoIzq: 1.2 },
+  };
+
+  test('mide la asimetría en porcentaje, no en kilos sueltos', () => {
+    // 0.3 kg en un brazo y 0.3 kg en una pierna no son el mismo problema
+    const r = analyzeSegmental(conSeg);
+    const brazos = r.pares.find(p => p.k === 'musculoBrazo');
+    const piernas = r.pares.find(p => p.k === 'musculoPierna');
+    expect(brazos.difPct).toBeCloseTo(7.7, 1);
+    expect(piernas.difPct).toBeCloseTo(1.0, 1);
+    expect(brazos.nivel).toBe('clara');
+    expect(piernas.nivel).toBe('simetrico');
+    expect(brazos.dominante).toBe('derecho');
+  });
+
+  test('no llama asimetría a lo que cabe en el error del aparato', () => {
+    const r = analyzeSegmental({ '2026-08-01': { weight: 92, musculoBrazoDer: 4.0, musculoBrazoIzq: 3.95 } });
+    expect(r.pares[0].nivel).toBe('simetrico');
+    expect(r.asimetrias).toHaveLength(0);
+  });
+
+  test('la asimetría de grasa se informa pero no se marca como accionable', () => {
+    const r = analyzeSegmental({ '2026-08-01': { weight: 92, grasaBrazoDer: 1.6, grasaBrazoIzq: 1.2 } });
+    expect(r.pares[0].difPct).toBeGreaterThan(5);
+    expect(r.pares[0].accionable).toBe(false);
+    expect(r.asimetrias).toHaveLength(0);
+  });
+
+  test('sin datos segmentales devuelve null en vez de inventarlos', () => {
+    expect(analyzeSegmental({ '2026-08-01': { weight: 92, grasaPct: 24 } })).toBe(null);
+    expect(analyzeSegmental({})).toBe(null);
+  });
+
+  test('propone unilaterales del grupo correcto para corregir', () => {
+    const exercises = { A: [{ name: 'Curl martillo' }, { name: 'Press banca' }],
+                        B: [{ name: 'Sentadilla búlgara' }, { name: 'Sentadilla' }] };
+    const brazos = unilateralesPara('Brazos', exercises, {});
+    expect(brazos.map(e => e.name)).toContain('Curl martillo');
+    expect(brazos.map(e => e.name)).not.toContain('Sentadilla búlgara');
+    const piernas = unilateralesPara('Piernas', exercises, {});
+    expect(piernas.map(e => e.name)).toContain('Sentadilla búlgara');
+  });
+
+  test('el CSV entrecomilla lo que rompería las columnas', () => {
+    // Un plato con coma dentro desplaza toda la fila si no se escapa
+    expect(csvEscape('Pollo, arroz')).toBe('"Pollo, arroz"');
+    expect(csvEscape('con "salsa"')).toBe('"con ""salsa"""');
+    expect(csvEscape('Avena')).toBe('Avena');
+    expect(csvEscape(null)).toBe('');
+  });
+
+  test('el CSV lleva BOM para que Excel no destroce los acentos', () => {
+    const csv = toCSV([{ a: 'Plátano' }], [{ titulo: 'alimento', valor: f => f.a }]);
+    expect(csv.charCodeAt(0)).toBe(0xFEFF);
+    expect(csv).toContain('Plátano');
+  });
+
+  test('exporta los cuatro registros con sus cabeceras', () => {
+    const out = buildExportCSV({
+      foodlog: { '2026-08-01': [{ resumen: 'Avena, con miel', kcal: 600, proteina: 40, carbo: 70, grasa: 12 }] },
+      exlog: { 'Press banca': [{ date: '2026-08-01T18:30:00', w: 90, reps: 6, rir: '1', type: 'work' }] },
+      metricslog: { '2026-08-01': { weight: 92.3, grasaPct: 24.5, cintura: 92, ayunas: true } },
+      cardiolog: { '2026-08-01': [{ id: 'c', bloques: [{ min: 40, vel: 5.2, incl: 9 }] }] },
+      pesoKg: 92.3,
+    });
+    expect(Object.keys(out)).toEqual(['comidas.csv', 'entrenamiento.csv', 'mediciones.csv', 'caminatas.csv']);
+    expect(out['comidas.csv']).toContain('"Avena, con miel"');
+    expect(out['entrenamiento.csv']).toContain('Press banca');
+    expect(out['entrenamiento.csv']).toContain('540');          // volumen 90×6
+    expect(out['mediciones.csv']).toContain('92.3');
+    expect(out['caminatas.csv']).toContain('5.2');
+    // Una fila de cabecera más una de datos en cada uno
+    Object.values(out).forEach(csv => expect(csv.split('\n').length).toBeGreaterThanOrEqual(2));
+  });
+});
+
 describe('calidad del registro de comida', () => {
   const { topFrequentMeals, detectUnderreporting, analyzeLoggingBias } = require('./app.js');
 

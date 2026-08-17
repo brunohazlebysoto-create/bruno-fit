@@ -1602,3 +1602,51 @@ se salen.
 
 El preview siembra ahora sábados con solo el desayuno registrado —el patrón real
 de infrarregistro— porque sin él las capturas no cubrían este panel.
+
+## Equilibrio entre lados y exportación: ideas 3 y 6 (W78)
+
+### 3 · El segmental estaba muerto
+
+El informe corporal da músculo y grasa por tronco, brazos y piernas. Todo eso se
+guardaba… para acabar en una frase del prompt de la IA. Es justo la medición que
+puede señalar un desequilibrio real, y no se veía en ninguna pantalla.
+
+**La diferencia va en porcentaje, no en kilos.** 300 g en un brazo y 300 g en una
+pierna no son el mismo problema: lo primero es un 8%, lo segundo un 3%.
+
+Los umbrales son **convenio, no ciencia**, y así está escrito: la bioimpedancia
+segmental tiene un error propio de varios puntos, así que por debajo del 3% no
+se afirma nada y entre 3 y 5% se llama "leve". Marcar como asimetría lo que puede
+ser ruido del aparato sería inventar un problema.
+
+Dos matices que evitan consejos absurdos:
+
+- La asimetría de **grasa** se informa pero no se marca como accionable: no se
+  corrige con ejercicio.
+- El aviso viene con **qué hacer**: los ejercicios unilaterales del grupo
+  correcto que ya están en su catálogo, con la instrucción de empezar por el lado
+  flojo. Sin eso el dato se queda en "tienes un brazo más grande".
+
+### 6 · Exportar a CSV
+
+El respaldo JSON ya existía, pero un JSON no se abre en una hoja de cálculo ni se
+le hace un gráfico. Para que los datos sean de verdad del usuario tienen que
+salir en un formato que cualquiera pueda leer.
+
+Cuatro archivos, uno por registro —comidas, entrenamiento, mediciones,
+caminatas— en vez de uno mezclado: no comparten columnas y juntarlos obligaría a
+limpiarlo antes de poder usarlo. El de entrenamiento incluye el volumen por
+serie ya calculado.
+
+Dos detalles que deciden si el archivo sirve o no:
+
+- **Escapado**: un plato llamado `Pollo, arroz y "salsa"` rompe la fila entera y
+  desplaza todas las columnas si no se entrecomilla.
+- **BOM al principio**: sin él Excel abre el archivo en Latin-1 y destroza los
+  acentos de "Plátano" y "Sentadilla búlgara".
+
+### Un fallo con acentos, otra vez
+
+`unilateralesPara` buscaba `/bulgara/` contra el nombre sin normalizar, así que
+"Sentadilla búlgara" —el ejercicio unilateral más usado del catálogo— se quedaba
+fuera precisamente de la función que sirve para corregir asimetrías de pierna.
