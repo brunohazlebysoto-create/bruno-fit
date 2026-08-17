@@ -152,6 +152,10 @@ const ESCENAS = [
   // Posicionar por texto en vez de por píxeles: este panel se mueve cada vez
   // que crece algo por encima, y con scroll fijo la captura acabaría en otro sitio
   { id: "entreno-10-volumen-semanal", tab: "Entreno", scrollHasta: "Volumen Semanal" },
+  // Mesociclo: el plan contra el que comparar lo hecho
+  { id: "entreno-19-mesociclo", tab: "Entreno", scrollHasta: "Bloque de entrenamiento" },
+  { id: "entreno-20-mesociclo-activo", tab: "Entreno", scrollHasta: "Bloque de entrenamiento",
+    accion: async (page) => { await page.getByRole("button", { name: "Empezar bloque" }).click({ timeout: 5000 }); } },
   // Caminata en cinta: el registro por bloques de velocidad y pendiente
   { id: "entreno-14-caminata", tab: "Entreno", scrollHasta: "Caminata en cinta" },
   { id: "entreno-15-caminata-programas", tab: "Entreno", scrollHasta: "Caminata en cinta",

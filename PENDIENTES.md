@@ -1650,3 +1650,63 @@ Dos detalles que deciden si el archivo sirve o no:
 `unilateralesPara` buscaba `/bulgara/` contra el nombre sin normalizar, así que
 "Sentadilla búlgara" —el ejercicio unilateral más usado del catálogo— se quedaba
 fuera precisamente de la función que sirve para corregir asimetrías de pierna.
+
+## Mesociclo y cierre del bucle: ideas 10 y 8 (W79)
+
+Las dos hacen lo mismo en dos terrenos distintos: **comparar lo planeado con lo
+ocurrido**. Sin esa comparación, ni el entrenamiento ni la nutrición pueden
+corregirse solos.
+
+### 10 · Un bloque contra el que comparar
+
+Hasta ahora cada sesión se decidía sola, y las alertas no tenían contexto:
+**"estancado" en la quinta semana de un bloque es lo esperado** —significa que
+toca descargar— **y en la primera es un problema**. Sin plan, las dos cosas se
+ven exactamente igual.
+
+Un mesociclo son 4 semanas subiendo volumen escalón a escalón sobre las series
+que ya hace, más una de descarga. La descarga **va en el plan**: no es un premio
+que uno se da cuando ya no puede más, es lo que evita llegar a ese punto.
+
+Cada semana se compara lo hecho con lo previsto por grupo muscular y se dice
+dónde va corto — *"esta semana vas corto en Espalda (1/4), Bíceps (3/4)"*. Sin
+esa comparación el plan sería un adorno.
+
+La progresión (+10% por semana) y la descarga (55% del volumen) son **convenio
+de planificación**, práctica común sin número exacto, y así están documentadas.
+
+### 8 · ¿Acierta la app?
+
+Cada semana la app predice un cambio de peso a partir del balance calórico. **No
+se comprobaba nunca**, así que un error sistemático podía repetirse
+indefinidamente.
+
+Ahora la predicción se guarda **el lunes, antes de conocer el resultado** —
+anotarla después sería escribir la respuesta en el examen ya corregido — y al
+cerrar la semana se rellena con el cambio real del peso suavizado.
+
+Tres frenos para no sobrecorregir:
+
+- **Mínimo 3 semanas cerradas.** Una sola no dice nada: pesa el agua y el
+  glucógeno.
+- **El sesgo solo cuenta si va siempre en el mismo sentido.** Errores que se
+  compensan entre semanas son ruido de báscula, y así se dice, en vez de tocar
+  el TDEE por ruido.
+- **Tope de 300 kcal/día** en la corrección propuesta. No se reescribe un
+  metabolismo de golpe.
+
+Y una advertencia que evita el diagnóstico fácil: si se pierde menos de lo
+predicho, el TDEE puede estar alto… o puede haber comida sin registrar. El panel
+manda a mirar el de calidad del registro antes de tocar nada.
+
+### Dos fallos propios
+
+**El signo.** `error = real − predicho`. Si se perdió MENOS de lo predicho el
+error es positivo, y eso significa que el TDEE verdadero está por DEBAJO del
+calculado. Devolvía el error tal cual, así que el ajuste apuntaba al revés. Lo
+cazó un test, y ahora el campo se llama y se devuelve en la forma en que se usa:
+"súmale esto al TDEE".
+
+**El orden.** El efecto que guarda la predicción leía `nutritionTargets` estando
+declarado por encima de él: `ReferenceError` y pantalla en blanco. Los tests no
+lo vieron —la lógica pura estaba bien— y apareció al abrir el navegador.

@@ -1243,6 +1243,87 @@ describe('sustituir un ejercicio que hoy no puedes hacer', () => {
   });
 });
 
+describe('mesociclo y cierre del bucle de predicción', () => {
+  const {
+    buildMesocycle, mesocycleWeekAt, compareToPlan,
+    predictWeeklyChange, evaluatePredictions, MESO_SEMANAS,
+  } = require('./app.js');
+
+  const base = { Pectoral: 10, Espalda: 12, Cuádriceps: 12 };
+
+  test('el volumen sube escalonado y la última semana descarga', () => {
+    const m = buildMesocycle(base);
+    expect(m.plan).toHaveLength(MESO_SEMANAS);
+    expect(m.plan[0].series.Pectoral).toBe(10);
+    expect(m.plan[3].series.Pectoral).toBeGreaterThan(m.plan[0].series.Pectoral);
+    const ultima = m.plan[MESO_SEMANAS - 1];
+    expect(ultima.tipo).toBe('descarga');
+    expect(ultima.series.Pectoral).toBeLessThan(m.plan[0].series.Pectoral);
+  });
+
+  test('sitúa una fecha en su semana del ciclo y detecta la descarga', () => {
+    expect(mesocycleWeekAt('2026-08-03', '2026-08-03').semana).toBe(1);
+    expect(mesocycleWeekAt('2026-08-03', '2026-08-10').semana).toBe(2);
+    const desc = mesocycleWeekAt('2026-08-03', '2026-08-31');
+    expect(desc.semana).toBe(5);
+    expect(desc.esDescarga).toBe(true);
+    // Al terminar un ciclo empieza el siguiente
+    const seg = mesocycleWeekAt('2026-08-03', '2026-09-07');
+    expect(seg.semana).toBe(1);
+    expect(seg.ciclo).toBe(2);
+  });
+
+  test('no sitúa fechas anteriores al inicio del plan', () => {
+    expect(mesocycleWeekAt('2026-08-03', '2026-07-20')).toBe(null);
+  });
+
+  test('señala los grupos que se quedan cortos frente al plan', () => {
+    const m = buildMesocycle(base);
+    const cmp = compareToPlan(m, { Pectoral: 10, Espalda: 4, Cuádriceps: 12 }, 1);
+    expect(cmp.cortos.map(f => f.grupo)).toEqual(['Espalda']);
+    expect(cmp.filas.find(f => f.grupo === 'Pectoral').estado).toBe('en_plan');
+  });
+
+  test('la predicción semanal sale del balance calórico', () => {
+    // −550 kcal/día × 7 ÷ 7700 = −0.5 kg/semana
+    expect(predictWeeklyChange(-550)).toBeCloseTo(-0.5, 2);
+    expect(predictWeeklyChange(0)).toBe(0);
+  });
+
+  test('con menos de tres semanas no corrige nada', () => {
+    const r = evaluatePredictions([{ predichoKg: -0.5, realKg: -0.1 }, { predichoKg: -0.5, realKg: -0.2 }]);
+    expect(r.suficiente).toBe(false);
+    expect(r.faltan).toBe(1);
+  });
+
+  test('un sesgo consistente corrige el TDEE en la dirección correcta', () => {
+    // Predice −0.5 y ocurre −0.1 tres veces: se gasta MENOS de lo calculado
+    const r = evaluatePredictions([
+      { predichoKg: -0.5, realKg: -0.1 }, { predichoKg: -0.5, realKg: -0.15 }, { predichoKg: -0.5, realKg: -0.1 },
+    ]);
+    expect(r.suficiente).toBe(true);
+    expect(r.sesgoConsistente).toBe(true);
+    expect(r.corregir).toBe(true);
+    expect(r.ajusteTdee).toBeLessThan(0);      // TDEE real por debajo del calculado
+  });
+
+  test('errores que se compensan son ruido de báscula, no un TDEE mal calculado', () => {
+    const r = evaluatePredictions([
+      { predichoKg: -0.5, realKg: -0.9 }, { predichoKg: -0.5, realKg: -0.1 }, { predichoKg: -0.5, realKg: -0.5 },
+    ]);
+    expect(r.sesgoConsistente).toBe(false);
+    expect(r.corregir).toBe(false);
+    expect(r.ajusteTdee).toBe(0);
+  });
+
+  test('la corrección tiene tope: no se reescribe el metabolismo de golpe', () => {
+    const r = evaluatePredictions([
+      { predichoKg: -0.5, realKg: 1.5 }, { predichoKg: -0.5, realKg: 1.6 }, { predichoKg: -0.5, realKg: 1.4 },
+    ]);
+    expect(Math.abs(r.ajusteTdee)).toBeLessThanOrEqual(300);
+  });
+});
+
 describe('análisis segmental y exportación', () => {
   const { analyzeSegmental, unilateralesPara, buildExportCSV, toCSV, csvEscape } = require('./app.js');
 

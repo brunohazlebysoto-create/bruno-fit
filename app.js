@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W78";
+const APP_VERSION = "v2026.07.29-W79";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -3536,6 +3536,128 @@ function profileBalance(nombres) {
   };
 }
 
+/* ===== MESOCICLO: UN PLAN CONTRA EL QUE COMPARAR =====
+   Hasta ahora cada sesión se decidía sola y las alertas no tenían contexto:
+   "estancado" en la quinta semana de un bloque es lo esperado y significa que
+   toca descargar; en la primera es un problema. Sin plan, las dos cosas se ven
+   igual.
+
+   Un mesociclo es un bloque de N semanas de acumulación, con el volumen subiendo
+   escalón a escalón, y una semana final de descarga. La descarga no es una
+   recompensa: es parte del plan, y programarla evita llegar a ella arrastrado.
+
+   Todo aquí es CONVENIO de planificación, no ciencia con número exacto: la
+   progresión escalonada y la descarga al ~55% del volumen son práctica común y
+   así se documentan.                                                            */
+const MESO_SEMANAS = 5;           // 4 de acumulación + 1 de descarga
+const MESO_INCREMENTO = 0.10;     // +10% de series por semana
+const MESO_DESCARGA = 0.55;       // la semana de descarga baja al 55%
+
+/** Plan del mesociclo a partir de la semana base de series por grupo. */
+function buildMesocycle(seriesBasePorGrupo, opts = {}) {
+  const semanas = Math.max(2, Math.min(8, parseInt(opts.semanas) || MESO_SEMANAS));
+  const acumulacion = semanas - 1;
+  const grupos = Object.keys(seriesBasePorGrupo || {});
+  if (!grupos.length) return null;
+
+  const plan = [];
+  for (let w = 1; w <= semanas; w++) {
+    const descarga = w === semanas;
+    const factor = descarga ? MESO_DESCARGA : 1 + MESO_INCREMENTO * (w - 1);
+    plan.push({
+      semana: w,
+      tipo: descarga ? "descarga" : w === acumulacion ? "pico" : "acumulación",
+      factor: Math.round(factor * 100) / 100,
+      series: Object.fromEntries(grupos.map(g =>
+        [g, Math.round((parseFloat(seriesBasePorGrupo[g]) || 0) * factor)])),
+    });
+  }
+  return { semanas, acumulacion, plan, base: seriesBasePorGrupo };
+}
+
+/** En qué semana del mesociclo cae una fecha, contando desde su inicio. */
+function mesocycleWeekAt(inicio, fecha, semanas = MESO_SEMANAS) {
+  if (!inicio || !fecha) return null;
+  const dias = Math.floor((new Date(fecha + "T12:00:00") - new Date(inicio + "T12:00:00")) / 86400000);
+  if (dias < 0) return null;
+  const total = Math.floor(dias / 7);
+  return {
+    semana: (total % semanas) + 1,
+    ciclo: Math.floor(total / semanas) + 1,
+    esDescarga: (total % semanas) + 1 === semanas,
+  };
+}
+
+/**
+ * Lo planeado frente a lo hecho, por grupo muscular, en la semana en curso.
+ * Sin esto el plan es un adorno: lo que le da valor es señalar la diferencia.
+ */
+function compareToPlan(plan, seriesHechas, semana) {
+  if (!plan || !semana) return null;
+  const objetivo = plan.plan.find(p => p.semana === semana);
+  if (!objetivo) return null;
+  const filas = Object.keys(objetivo.series).map(g => {
+    const hechas = Math.round(parseFloat(seriesHechas?.[g]) || 0);
+    const meta = objetivo.series[g];
+    const difPct = meta > 0 ? Math.round(((hechas - meta) / meta) * 100) : 0;
+    return { grupo: g, hechas, meta, difPct, estado: difPct <= -25 ? "corto" : difPct >= 25 ? "pasado" : "en_plan" };
+  }).sort((a, b) => a.difPct - b.difPct);
+  return { semana, tipo: objetivo.tipo, filas, cortos: filas.filter(f => f.estado === "corto") };
+}
+
+/* ===== CERRAR EL BUCLE: LO PREDICHO FRENTE A LO OCURRIDO =====
+   Cada semana la app predice un cambio de peso a partir del balance calórico.
+   Nunca se comprobaba si acertaba, así que un error sistemático podía repetirse
+   indefinidamente. Guardando la predicción y contrastándola con el peso real se
+   puede corregir el TDEE con la evidencia del propio usuario.
+
+   La corrección se aplica DESPUÉS de varias semanas y con freno: una sola
+   semana no dice nada (agua, glucógeno, ciclo de sueño) y sobrecorregir con
+   ruido es peor que no corregir. */
+const PRED_MIN_SEMANAS = 3;
+const PRED_CORRECCION_MAX = 300;   // kcal/día — tope de la corrección propuesta
+
+/** Predicción semanal de cambio de peso a partir del balance calórico. */
+function predictWeeklyChange(deficitDiario) {
+  const d = parseFloat(deficitDiario);
+  if (!isFinite(d)) return null;
+  return Math.round(((d * 7) / KCAL_PER_KG) * 100) / 100;   // kg/semana
+}
+
+/**
+ * Contrasta las predicciones guardadas con el peso real y propone un ajuste.
+ * historial: [{ semana, predichoKg, realKg }]
+ */
+function evaluatePredictions(historial) {
+  const usables = (historial || []).filter(h =>
+    isFinite(parseFloat(h?.predichoKg)) && isFinite(parseFloat(h?.realKg)));
+  if (usables.length < PRED_MIN_SEMANAS) {
+    return { suficiente: false, semanas: usables.length, faltan: PRED_MIN_SEMANAS - usables.length };
+  }
+  const errores = usables.map(h => parseFloat(h.realKg) - parseFloat(h.predichoKg));
+  const media = errores.reduce((a, b) => a + b, 0) / errores.length;
+  // El sesgo solo cuenta si va SIEMPRE en el mismo sentido. Errores que se
+  // compensan son ruido de báscula, no un TDEE mal calculado.
+  const mismoSigno = errores.every(e => e > 0) || errores.every(e => e < 0);
+  const kcalDia = Math.round((media * KCAL_PER_KG) / 7);
+  const corregir = mismoSigno && Math.abs(kcalDia) >= 50;
+  /* El signo, que es donde es fácil equivocarse:
+     error = real − predicho. Si se perdió MENOS de lo predicho el error es
+     POSITIVO, y eso significa que el déficit real fue menor, es decir que el
+     TDEE verdadero está por DEBAJO del calculado. `ajusteTdee` se devuelve ya
+     en la forma en que se usa —"súmale esto al TDEE"— así que lleva el signo
+     cambiado respecto al error. */
+  const ajuste = -kcalDia;
+  return {
+    suficiente: true,
+    semanas: usables.length,
+    errorMedioKg: Math.round(media * 100) / 100,
+    sesgoConsistente: mismoSigno,
+    ajusteTdee: corregir ? Math.max(-PRED_CORRECCION_MAX, Math.min(PRED_CORRECCION_MAX, ajuste)) : 0,
+    corregir,
+  };
+}
+
 /* ===== EXPORTAR A CSV =====
    Todo el historial vive en el navegador de un móvil. Un borrado de datos del
    sitio, un cambio de teléfono o que esta app deje de existir se lo llevan por
@@ -4603,6 +4725,9 @@ export default function App(){
   const [workoutDurations, setWorkoutDurations] = useState({});
   // Caminata en cinta: { "YYYY-MM-DD": [{ id, bloques:[{min,vel,incl}], nota }] }
   const [cardiolog, setCardiolog] = useState({});
+  // Plan de entrenamiento (mesociclo) y el historial de predicciones semanales
+  const [plan, setPlan] = useState(null);        // { inicio, semanas, base }
+  const [predHist, setPredHist] = useState([]);  // [{ semana, predichoKg, realKg }]
   const [exerciseTechNotes, setExerciseTechNotes] = useState({});
 
   // ── 20 AI Features: New States ──
@@ -4975,6 +5100,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       if (!localWorkoutDurations || typeof localWorkoutDurations !== 'object') localWorkoutDurations = {};
       let localCardiolog = await loadKey("cardiolog", {});
       if (!localCardiolog || typeof localCardiolog !== 'object') localCardiolog = {};
+      const localPlan = await loadKey("meso_plan", null);
+      const localPred = await loadKey("pred_hist", []);
       let localExerciseTechNotes = await loadKey("exercise_tech_notes", {});
       if (!localExerciseTechNotes || typeof localExerciseTechNotes !== 'object') localExerciseTechNotes = {};
 
@@ -5134,6 +5261,8 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
       });
       setWorkoutDurations(localWorkoutDurations || {});
       setCardiolog(localCardiolog || {});
+      setPlan(localPlan && localPlan.inicio ? localPlan : null);
+      setPredHist(Array.isArray(localPred) ? localPred : []);
       setExerciseTechNotes(localExerciseTechNotes || {});
       setDietGuidelines(localDietGuidelines || "");
       setTrainingGuidelines(localTrainingGuidelines || "");
@@ -6810,6 +6939,7 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     return { ...hoy, media: ref.media, factor: fac ? fac.factor : null, factorBruto: fac ? fac.bruto : null };
   }, [exlog, cardiolog, workoutDurations, metricslog, selectedDateStr, activeMetrics]);
 
+
   // Objetivos sugeridos a partir del perfil + composición corporal real.
   // Se recalculan solos al cambiar el peso, el % de grasa o el perfil.
   // Factor de actividad deducido de lo que Bruno registra, no del botón que
@@ -6828,6 +6958,48 @@ Devuelve la propuesta en formato JSON con la explicación breve de tus cálculos
     }),
     [bodyProfile, activeMetrics.weight, activeMetrics.grasaPct, tdeeEstimate, dayLoad.media, actividadObservada]
   );
+
+  /* Cierre del bucle: cada semana se guarda lo que la app PREDIJO y, cuando esa
+     semana termina, lo que realmente pasó. Sin este registro, un error
+     sistemático del TDEE se repite indefinidamente y nadie se entera. La clave
+     es guardar la predicción ANTES de conocer el resultado; anotarla después
+     sería escribir la respuesta en el examen ya corregido. */
+  useEffect(() => {
+    if (!loaded) return;
+    const hoy = getLocalDateStr(new Date());
+    const lunes = (() => { const d = new Date(hoy + "T12:00:00"); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return getLocalDateStr(d); })();
+    const emaPorFecha = {};
+    calcWeightEMASeries(metricslog).forEach(pt => { emaPorFecha[pt.date] = pt.ema; });
+    const fechasEma = Object.keys(emaPorFecha).sort();
+    const pesoEn = (f) => {
+      const previas = fechasEma.filter(d => d <= f);
+      return previas.length ? emaPorFecha[previas[previas.length - 1]] : null;
+    };
+
+    setPredHist(prev => {
+      const lista = Array.isArray(prev) ? [...prev] : [];
+      // 1) Cerrar las semanas pendientes con el peso real de su final
+      let cambio = false;
+      lista.forEach(h => {
+        if (h.realKg != null || h.semana >= lunes) return;
+        const fin = (() => { const d = new Date(h.semana + "T12:00:00"); d.setDate(d.getDate() + 7); return getLocalDateStr(d); })();
+        const p0 = pesoEn(h.semana), p1 = pesoEn(fin);
+        if (p0 != null && p1 != null && fin <= hoy) {
+          h.realKg = Math.round((p1 - p0) * 100) / 100;
+          cambio = true;
+        }
+      });
+      // 2) Abrir la semana en curso si aún no está
+      if (!lista.some(h => h.semana === lunes) && nutritionTargets?.deficitDiario != null) {
+        const pred = predictWeeklyChange(nutritionTargets.deficitDiario);
+        if (pred != null) { lista.push({ semana: lunes, predichoKg: pred, realKg: null }); cambio = true; }
+      }
+      if (!cambio) return prev;
+      const recorte = lista.slice(-16);   // no hace falta guardar años
+      saveKey("pred_hist", recorte);
+      return recorte;
+    });
+  }, [loaded, metricslog, nutritionTargets?.deficitDiario]);
 
   // Aplicar los objetivos calculados al preset activo. Es una acción explícita
   // del usuario: nunca se sobrescriben sus macros sin que lo pida.
@@ -8007,6 +8179,8 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             setWorkoutDurations={(wd) => saveState({ workoutDurations: wd })}
             cardiolog={cardiolog}
             setCardiolog={(cl) => saveState({ cardiolog: cl })}
+            plan={plan}
+            onSetPlan={(p) => { setPlan(p); saveKey("meso_plan", p); }}
             exerciseTechNotes={exerciseTechNotes}
             setExerciseTechNotes={(etn) => saveState({ exerciseTechNotes: etn })}
             prAlerts={prAlerts}
@@ -8048,6 +8222,7 @@ ${ai.focoProximaSemana?`<h2>Foco Principal</h2><div class="foco-box">${ai.focoPr
             waistMetrics={waistMetrics}
             actividadObservada={actividadObservada}
             dayLoad={dayLoad}
+            predHist={predHist}
             onApplyTargets={applyNutritionTargets}
             foodlog={foodlog}
             waterlog={waterlog}
@@ -14422,7 +14597,7 @@ th.spark{text-align:center}
 function Entreno({
   exlog, setExlog, exercises, setExercises, geminiKey, handleAnalyzeWorkout, importWorkoutData,
   activeSplitKey, setActiveSplitKey, selectedDateStr, setSelectedDateStr, calMonth, setCalMonth,
-  workoutDurations, setWorkoutDurations, cardiolog, setCardiolog, exerciseTechNotes, setExerciseTechNotes, prAlerts, setPrAlerts, checkNewPR, activeMetrics,
+  workoutDurations, setWorkoutDurations, cardiolog, setCardiolog, plan, onSetPlan, exerciseTechNotes, setExerciseTechNotes, prAlerts, setPrAlerts, checkNewPR, activeMetrics,
   overloadSuggestions, plateauAlerts, muscleImbalances, splits, setSplits, notes, setNotes, chat,
   bodyProfile, caloricPhase
 }){
@@ -17917,6 +18092,86 @@ tr:last-child td{border-bottom:none}
         )}
       </div>
 
+      {/* ===== MESOCICLO =====
+          Sin plan, "estancado" en la quinta semana de un bloque y en la primera
+          se ven igual, y son cosas distintas: en la quinta es lo esperado y
+          significa que toca descargar. */}
+      {(() => {
+        const seriesBase = {};
+        Object.entries(calcMuscleVolumeBalance(exlog, exercises, 28) || {}).forEach(([m, d]) => {
+          if (d.setsPerWeek > 0) seriesBase[m] = Math.round(d.setsPerWeek);
+        });
+        const grupos = Object.keys(seriesBase);
+        if (!grupos.length) return null;
+
+        const meso = buildMesocycle(plan?.base || seriesBase, { semanas: plan?.semanas });
+        const pos = plan?.inicio ? mesocycleWeekAt(plan.inicio, selectedDateStr, meso.semanas) : null;
+        const hechasSemana = {};
+        Object.entries(calcMuscleVolumeBalance(exlog, exercises, 7) || {}).forEach(([m, d]) => {
+          if (d.setsPerWeek > 0) hechasSemana[m] = d.setsPerWeek;
+        });
+        const cmp = pos ? compareToPlan(meso, hechasSemana, pos.semana) : null;
+
+        return (
+          <div style={{background:C.panel, border:`1px solid ${C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
+            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3}}>
+              <div style={{fontSize:12.5, fontWeight:800, display:"flex", alignItems:"center", gap:6}}>
+                <CalendarDays size={15} color={C.lime}/> Bloque de entrenamiento
+              </div>
+              {!plan ? (
+                <button onClick={() => onSetPlan({ inicio: selectedDateStr, semanas: MESO_SEMANAS, base: seriesBase })}
+                  style={{background:C.lime, color:C.onAccent, border:"none", borderRadius:8, padding:"5px 10px",
+                    fontSize:11, fontWeight:800, cursor:"pointer"}}>
+                  Empezar bloque
+                </button>
+              ) : (
+                <button onClick={() => onSetPlan(null)}
+                  style={{background:"transparent", color:C.muted, border:`1px solid ${C.line}`, borderRadius:8,
+                    padding:"5px 10px", fontSize:11, fontWeight:700, cursor:"pointer"}}>
+                  Terminar
+                </button>
+              )}
+            </div>
+
+            {!plan ? (
+              <div style={{fontSize:10.5, color:C.muted, lineHeight:1.5}}>
+                {meso.acumulacion} semanas subiendo volumen y una de descarga, a partir de tus{" "}
+                {grupos.length} grupos actuales. La descarga no es un premio: va en el plan para no
+                llegar a ella arrastrado.
+              </div>
+            ) : (
+              <>
+                <div style={{fontSize:10, color:C.muted, marginBottom:8}}>
+                  Ciclo {pos?.ciclo} · semana {pos?.semana} de {meso.semanas} ·{" "}
+                  <b style={{color: cmp?.tipo === "descarga" ? C.cyan : C.ink}}>{cmp?.tipo}</b>
+                </div>
+                <div style={{display:"flex", gap:4, marginBottom:10}}>
+                  {meso.plan.map(w => (
+                    <div key={w.semana} style={{flex:1, textAlign:"center"}}>
+                      <div style={{height:24, display:"flex", alignItems:"flex-end", justifyContent:"center"}}>
+                        <div style={{width:"70%", height:`${Math.round(w.factor * 18)}px`, borderRadius:3,
+                          background: w.semana === pos?.semana ? C.lime : w.tipo === "descarga" ? alfa(C.cyan, 45) : alfa(C.lime, 30)}}/>
+                      </div>
+                      <div style={{fontSize:8.5, color: w.semana === pos?.semana ? C.lime : C.muted, fontWeight:800}}>
+                        S{w.semana}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {cmp && (
+                  <div style={{fontSize:10.5, color:C.muted, lineHeight:1.5}}>
+                    {cmp.cortos.length
+                      ? <>Esta semana vas corto en <b style={{color:C.amber}}>
+                          {cmp.cortos.map(f => `${f.grupo} (${f.hechas}/${f.meta})`).join(", ")}</b>.</>
+                      : <>Vas en plan en los {cmp.filas.length} grupos.</>}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })()}
+
       {/* La caminata no pertenece a ningún día del split: se hace en días
           alternos y a menudo sin pesas, así que vive fuera del bloque de
           ejercicios y por encima de los botones de IA. */}
@@ -19274,7 +19529,7 @@ function Registro({
   dietGuidelines, setDietGuidelines, trainingGuidelines, setTrainingGuidelines, onSaveGuidelines,
   sendCoachMessage, setView, bodyProfile, updateBodyProfile, nutritionTargets, onApplyTargets,
   strengthLossAlert, refeedAlert, metabolicAdaptation, recompAlert, waistMetrics,
-  actividadObservada, dayLoad
+  actividadObservada, dayLoad, predHist
 }){
   const [type, setType] = useState("peso");
   const [statsPeriod, setStatsPeriod] = useState(7); // 7 or 30 days
@@ -21426,6 +21681,56 @@ ${alertas || "ninguna"}`;
         {renderNutritionHistory()}
       </div>
 
+      {/* ===== ¿ACIERTA LA APP? =====
+          Cada semana se predijo un cambio de peso. Contrastarlo con lo que pasó
+          es lo que convierte la app en algo que aprende en vez de repetir el
+          mismo error indefinidamente. */}
+      {(() => {
+        const ev = evaluatePredictions(predHist);
+        const cerradas = (predHist || []).filter(h => h.realKg != null).slice(-6);
+        if (!cerradas.length) return null;
+        return (
+          <div style={{background:C.panel, border:`1px solid ${ev.corregir ? alfa(C.amber, 33) : C.line}`, borderRadius:16, padding:"14px 16px", marginBottom:12}}>
+            <div style={{fontSize:12.5, fontWeight:800, marginBottom:3, display:"flex", alignItems:"center", gap:6}}>
+              <Activity size={15} color={C.cyan}/> Predicho frente a real
+            </div>
+            <div style={{fontSize:10, color:C.muted, marginBottom:9, lineHeight:1.45}}>
+              Lo que la app dijo que ibas a cambiar cada semana, y lo que cambiaste de verdad.
+            </div>
+
+            {cerradas.map(h => {
+              const err = Math.round((h.realKg - h.predichoKg) * 100) / 100;
+              const col = Math.abs(err) < 0.2 ? C.lime : C.amber;
+              return (
+                <div key={h.semana} style={{display:"flex", justifyContent:"space-between", alignItems:"baseline",
+                  fontSize:11, padding:"3px 0", borderBottom:`1px solid ${C.line}`}}>
+                  <span style={{color:C.muted}}>{fdate(h.semana + "T12:00:00Z")}</span>
+                  <span style={{color:C.muted}}>
+                    predicho <b style={{color:C.ink}}>{h.predichoKg > 0 ? "+" : ""}{h.predichoKg}</b> ·
+                    real <b style={{color:C.ink}}>{h.realKg > 0 ? "+" : ""}{h.realKg}</b> kg
+                    <b style={{color:col, marginLeft:6}}>{err > 0 ? "+" : ""}{err}</b>
+                  </span>
+                </div>
+              );
+            })}
+
+            <div style={{fontSize:10.5, color:C.muted, marginTop:8, lineHeight:1.5}}>
+              {!ev.suficiente
+                ? <>Faltan {ev.faltan} semana{ev.faltan !== 1 ? "s" : ""} cerradas para sacar conclusiones.
+                    Una sola semana no dice nada: pesa el agua y el glucógeno.</>
+                : ev.corregir
+                  ? <>Error medio de <b style={{color:C.amber}}>{ev.errorMedioKg} kg</b> y siempre en el mismo
+                      sentido, así que no es ruido de báscula: tu TDEE real está{" "}
+                      <b style={{color:C.ink}}>{Math.abs(ev.ajusteTdee)} kcal {ev.ajusteTdee < 0 ? "por debajo" : "por encima"}</b>{" "}
+                      del calculado.
+                      {ev.ajusteTdee < 0 && " Ojo: también puede ser comida sin registrar, revisa el panel de abajo antes de tocar nada."}</>
+                  : <>Los errores se compensan entre semanas: eso es ruido de báscula, no un TDEE mal calculado.
+                      No hay nada que corregir.</>}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ===== ANÁLISIS SEGMENTAL =====
           El informe da músculo y grasa por tronco, brazos y piernas, y todo eso
           se guardaba para acabar en una frase del prompt de la IA. Es justo la
@@ -22618,6 +22923,8 @@ if (typeof module !== 'undefined' && module.exports) {
     findSubstitutes, inferEquipo, ENTORNOS, ALTERNATIVAS_BASE,
     analyzeSegmental, unilateralesPara, PARES_SEGMENTALES,
     buildExportCSV, toCSV, csvEscape,
+    buildMesocycle, mesocycleWeekAt, compareToPlan, predictWeeklyChange, evaluatePredictions,
+    MESO_SEMANAS, PRED_MIN_SEMANAS,
     getMeasuredLeanMass, calcDayActivityLoad, calcAverageActivityLoad, calcObservedActivityFactor,
     calcDayCarbFactor,
     metFuerzaSegunRIR, kcalDePasos, MET_FUERZA_LIGERO, MET_FUERZA_VIGOROSO,
