@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W79";
+const APP_VERSION = "v2026.07.29-W80";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -2282,7 +2282,12 @@ function calcNutritionTargets(profile, metrics, opts = {}) {
  * Objetivo de hidratación: ~35 ml por kg + extra si se entrenó ese día.
  * Antes era una constante de 14 vasos para todo el mundo.
  */
-function calcWaterGoalGlasses(weight, trainedToday = false, glassMl = 250, durationMin = 0) {
+// Tamaño de vaso con el que la app cuenta la hidratación. Estaba repetido
+// como literal en cada sitio, y por eso una pantalla podía interpretar los
+// mismos vasos como litros sin que nada chirriara.
+const ML_POR_VASO = 250;
+
+function calcWaterGoalGlasses(weight, trainedToday = false, glassMl = ML_POR_VASO, durationMin = 0) {
   const w = parseFloat(weight) || 0;
   if (w <= 0) return 14;
   // La pérdida por sudor escala con la duración de la sesión (~500 ml/hora).
@@ -10724,7 +10729,7 @@ function Hoy({
   );
   // Objetivo de hidratación según peso corporal (~35 ml/kg) + extra si hoy
   // hubo entreno. Antes era una constante de 14 vasos para cualquier peso.
-  const waterGoal = calcWaterGoalGlasses(activeMetrics?.weight, !isRestDay, 250, todayDurationMin);
+  const waterGoal = calcWaterGoalGlasses(activeMetrics?.weight, !isRestDay, ML_POR_VASO, todayDurationMin);
   const readiness = React.useMemo(
     () => predictTodayReadiness(exlog, notes, water, foodlog, selectedDateStr, metricslog, activeMetrics),
     [exlog, notes, water, foodlog, selectedDateStr, metricslog, activeMetrics]
@@ -12742,7 +12747,12 @@ function Perfil({
           }}>
             <span style={{ fontSize: 10, color: "var(--text-muted)", fontWeight: 700, display: "block", textTransform: "uppercase" }}>Músculo</span>
             <span style={{ fontSize: 18, fontWeight: 800, color: "var(--accent-cyan)", display: "block", marginTop: 2 }}>
-              {bodyComp?.musculo || 64.7} <span style={{ fontSize: 10, fontWeight: 500 }}>kg</span>
+              {/* `bodyComp` guarda los valores con los que arrancó la app y ya
+                  no se actualiza al importar una medición: Perfil decía 64.7 kg
+                  y 26.2% mientras Registro, con el mismo dato delante, decía
+                  64.5 y 24.5. Dos pantallas contradiciéndose sobre el mismo
+                  cuerpo. Manda la medición real; `bodyComp` queda de reserva. */}
+              {activeMetrics?.musculo || bodyComp?.musculo || 64.7} <span style={{ fontSize: 10, fontWeight: 500 }}>kg</span>
             </span>
           </div>
           <div style={{
@@ -12754,7 +12764,7 @@ function Perfil({
           }}>
             <span style={{ fontSize: 10, color: "var(--text-muted)", fontWeight: 700, display: "block", textTransform: "uppercase" }}>Grasa</span>
             <span style={{ fontSize: 18, fontWeight: 800, color: "var(--accent-rose)", display: "block", marginTop: 2 }}>
-              {bodyComp?.grasaPct || 26.2} <span style={{ fontSize: 10, fontWeight: 500 }}>%</span>
+              {activeMetrics?.grasaPct || bodyComp?.grasaPct || 26.2} <span style={{ fontSize: 10, fontWeight: 500 }}>%</span>
             </span>
           </div>
         </div>
@@ -19711,7 +19721,11 @@ function Registro({
         loggedDays++;
       }
     }
-    return loggedDays > 0 ? (totalWater / loggedDays).toFixed(1) : "0.0";
+    // `waterlog` guarda VASOS, no litros. Dividir y rotular "L/día" daba 9.6
+    // litros diarios junto a una meta de 3-4: un número imposible presentado
+    // como dato. Se convierte con el mismo tamaño de vaso que usa el resto.
+    const litros = (totalWater * ML_POR_VASO) / 1000;
+    return loggedDays > 0 ? (litros / loggedDays).toFixed(1) : "0.0";
   }, [selectedDateStr, waterlog, statsPeriod]);
 
   // Training Sessions Statistics

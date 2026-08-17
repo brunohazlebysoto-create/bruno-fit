@@ -1710,3 +1710,49 @@ cazó un test, y ahora el campo se llama y se devuelve en la forma en que se usa
 **El orden.** El efecto que guarda la predicción leía `nutritionTargets` estando
 declarado por encima de él: `ReferenceError` y pantalla en blanco. Los tests no
 lo vieron —la lógica pura estaba bien— y apareció al abrir el navegador.
+
+## Auditoría de pantalla completa (W80)
+
+> *"revisa todas las páginas y pestañas de la aplicación de comienzo a fin y
+> revisa que se diga y presente todo lo que hemos trabajado"*
+
+Recorrido de las cinco pestañas en el navegador, volcando el texto renderizado
+de cada una tras desplazarlas enteras.
+
+### Lo que está donde debe
+
+**Hoy** — platos habituales con multiplicador, anillos con el objetivo del día
+ajustado por carga real y el porqué debajo (*"208 kcal de actividad frente a 411
+de media"*), calorías de 7 días, preparación, hidratación, timing, suplementos.
+
+**Entreno** — bloque de entrenamiento, caminata en cinta con su resumen semanal,
+volumen semanal por músculo, calendario, splits, atajo de ejercicios con
+sugerencia de carga y alertas de estancamiento, gestión y botones de IA.
+
+**Registro** — predicho frente a real, equilibrio entre lados, calidad del
+registro, cambios desde la última medición, evolución corporal, informe de
+composición, perfil con actividad automática, estadísticas, proyección e
+historial nutricional con días estimados.
+
+**Perfil** — copia de seguridad con JSON y CSV.
+
+Sin errores de JavaScript en ninguna pestaña.
+
+### Dos incoherencias que solo se ven mirando la app entera
+
+**El Perfil se contradecía con el Registro.** La cabecera mostraba *músculo 64.7
+kg · grasa 26.2%* mientras el Registro, con la misma medición delante, decía
+*64.5 y 24.5*. La causa: `bodyComp` guarda los valores con los que arrancó la
+app y ya no se actualiza al importar una medición, pero la cabecera seguía
+leyéndolo. Dos pantallas afirmando cosas distintas del mismo cuerpo. Ahora manda
+la medición real y `bodyComp` queda solo de reserva.
+
+**9.6 litros de agua al día.** `waterlog` guarda VASOS; el promedio los dividía
+entre los días y los rotulaba "L/día", justo encima de una meta de "3-4 litros".
+Un número imposible presentado como dato, y llevaba ahí desde antes de esta
+sesión. El tamaño de vaso estaba además repetido como literal `250` en varios
+sitios, que es exactamente por lo que una pantalla podía confundir unidades sin
+que nada chirriara: ahora es una constante única.
+
+Ninguna de las dos aparece en los tests ni rompe nada. Solo se ven leyendo la
+aplicación de principio a fin, que es lo que se pidió.
