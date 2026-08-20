@@ -844,11 +844,17 @@ describe('deload sensible a la composición corporal', () => {
     // peso: no quedaba margen para comprobar que sube, y el resultado dependía
     // del día de la semana en que se ejecutaran las pruebas. Este historial
     // lleva una descarga explícita hace 3 semanas, así que parte de 'none'.
+    // La descarga se ancla al LUNES de una semana concreta. Colocarla como
+    // "hace 21-27 días" la partía entre dos semanas ISO según el día en que se
+    // ejecutaran las pruebas, y el fallo reaparecía días después.
     const conDeload = (() => {
       const out = { 'Press banca': [] };
+      const lunes = new Date();
+      lunes.setDate(lunes.getDate() - ((lunes.getDay() + 6) % 7));
       for (let i = 0; i < 70; i++) {
-        const d = new Date(); d.setDate(d.getDate() - i);
-        const series = (i >= 21 && i <= 27) ? 1 : 4;   // semana de descarga
+        const d = new Date(lunes); d.setDate(d.getDate() - i);
+        const semanasAtras = Math.floor(i / 7);
+        const series = semanasAtras === 3 ? 1 : 4;   // la cuarta semana, descarga
         for (let s = 0; s < series; s++) {
           out['Press banca'].push({ date: d.toISOString(), w: 80, reps: 8, type: 'work' });
         }
@@ -1403,6 +1409,67 @@ describe('análisis segmental y exportación', () => {
     expect(out['caminatas.csv']).toContain('5.2');
     // Una fila de cabecera más una de datos en cada uno
     Object.values(out).forEach(csv => expect(csv.split('\n').length).toBeGreaterThanOrEqual(2));
+  });
+});
+
+describe('la estimación de comida tiene que ser posible', () => {
+  const { validateFoodEntry, foodHistoryHint } = require('./app.js');
+
+  test('las calorías que no cuadran con sus macros se recalculan desde ellos', () => {
+    // 45×4 + 80×4 + 30×9 = 770, no 600. Los macros son tres datos frente a uno.
+    const r = validateFoodEntry({ resumen: 'Plato', kcal: 600, proteina: 45, carbo: 80, grasa: 30 });
+    expect(r.entry.kcal).toBe(770);
+    expect(r.corregido).toBe(true);
+    expect(r.avisos[0]).toMatch(/no cuadra/);
+  });
+
+  test('no toca lo que ya es coherente', () => {
+    // 48×4 + 72×4 + 14×9 = 606, dentro del margen de 620
+    const r = validateFoodEntry({ resumen: 'Avena', kcal: 620, proteina: 48, carbo: 72, grasa: 14 });
+    expect(r.entry.kcal).toBe(620);
+    expect(r.corregido).toBe(false);
+  });
+
+  test('rellena las calorías que faltan en vez de guardar un cero', () => {
+    const r = validateFoodEntry({ resumen: 'X', proteina: 30, carbo: 40, grasa: 10 });
+    expect(r.entry.kcal).toBe(30 * 4 + 40 * 4 + 10 * 9);
+  });
+
+  test('recorta lo físicamente imposible', () => {
+    const r = validateFoodEntry({ resumen: 'X', kcal: 99999, proteina: 9000, carbo: 10, grasa: 5 });
+    expect(r.entry.proteina).toBeLessThanOrEqual(500);
+    expect(r.entry.kcal).toBeLessThanOrEqual(4000);
+    expect(r.avisos.join(' ')).toMatch(/imposible/);
+  });
+
+  test('calorías sin desglose se conservan, pero se dice que están incompletas', () => {
+    const r = validateFoodEntry({ resumen: 'Copa de vino', kcal: 120 });
+    expect(r.entry.kcal).toBe(120);
+    expect(r.avisos.join(' ')).toMatch(/Sin desglose/);
+  });
+
+  test('una entrada vacía se marca como tal en vez de colarse como comida', () => {
+    expect(validateFoodEntry({ resumen: 'nada' }).vacio).toBe(true);
+    expect(validateFoodEntry(null).vacio).toBe(true);
+  });
+
+  test('los negativos no restan calorías del día', () => {
+    const r = validateFoodEntry({ resumen: 'X', kcal: -500, proteina: -10, carbo: 40, grasa: 5 });
+    expect(r.entry.kcal).toBeGreaterThan(0);
+    expect(r.entry.proteina).toBe(0);
+  });
+
+  test('la referencia pasa a la IA los platos que el usuario ya registra', () => {
+    const log = {};
+    for (let i = 1; i <= 6; i++) {
+      log[`2026-08-0${i}`] = [{ resumen: 'Pollo con arroz', kcal: 780, proteina: 62, carbo: 88, grasa: 16 }];
+    }
+    const hint = foodHistoryHint(log, { hasta: '2026-08-06' });
+    expect(hint).toMatch(/Pollo con arroz/);
+    expect(hint).toMatch(/780 kcal/);
+    expect(hint).toMatch(/USA ESOS VALORES/);
+    // Sin historial no se inventa una sección vacía en el prompt
+    expect(foodHistoryHint({})).toBe('');
   });
 });
 

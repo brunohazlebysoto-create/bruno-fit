@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W82";
+const APP_VERSION = "v2026.07.29-W83";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -771,7 +771,12 @@ async function callGemini(messages, systemInstruction, responseSchema = null, op
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${nativeModel}:generateContent?key=${apiKey}`;
         
         const generationConfig = {
-          temperature: 0.2,
+          /* Estimar los macros de un plato no es una tarea creativa: el mismo
+             texto debe dar el mismo número siempre. Con 0.2 fijo, registrar dos
+             veces "pollo con arroz" devolvía cifras distintas, y esa variación
+             se acumulaba en el historial como si fueran comidas diferentes.
+             Quien necesite variedad (ideas de menú) puede subirla. */
+          temperature: options.temperature != null ? options.temperature : 0.2,
           // 8192 se quedaba corto para el plan de rutina y la respuesta llegaba
           // cortada a media lista de ejercicios. Y en texto libre, 2048 se los
           // come el propio razonamiento del modelo antes de escribir nada:
@@ -1667,6 +1672,82 @@ function topFrequentMeals(foodlog, opts = {}) {
     }))
     .sort((a, b) => b.veces - a.veces || (a.ultima < b.ultima ? 1 : -1))
     .slice(0, limite);
+}
+
+/* ===== ¿ES POSIBLE LO QUE DEVUELVE LA IA? =====
+   Los macros llegaban tal cual del modelo y se guardaban sin comprobar nada. Un
+   plato con 600 kcal pero 45 g de proteína, 80 g de carbohidrato y 30 g de
+   grasa no cuadra: esos macros son 770 kcal. Y esa diferencia no es cosmética,
+   porque el objetivo del día, el TDEE medido y los planes se calculan encima.
+
+   La comprobación es física, no estadística: los factores de Atwater
+   (4 kcal/g de proteína y de carbohidrato, 9 kcal/g de grasa) son una identidad,
+   no una opinión. Cuando las calorías declaradas no coinciden con sus propios
+   macros, se recalculan desde los macros: son tres números frente a uno, y el
+   desglose es lo que de verdad se usa después.                                 */
+const KCAL_P = 4, KCAL_C = 4, KCAL_G = 9;
+const DESVIO_KCAL_MAX = 0.15;   // 15% de tolerancia antes de recalcular
+// Topes de cordura para un solo registro de comida. No son un juicio sobre lo
+// que se debe comer: son el límite de lo que un plato puede físicamente tener.
+const MAX_KCAL_PLATO = 4000, MAX_GRAMOS_MACRO = 500;
+
+function validateFoodEntry(raw) {
+  const num = (v) => { const n = parseFloat(v); return isFinite(n) && n > 0 ? n : 0; };
+  const avisos = [];
+  let p = Math.min(num(raw?.proteina), MAX_GRAMOS_MACRO);
+  let c = Math.min(num(raw?.carbo), MAX_GRAMOS_MACRO);
+  let g = Math.min(num(raw?.grasa), MAX_GRAMOS_MACRO);
+  let kcal = Math.min(num(raw?.kcal), MAX_KCAL_PLATO);
+
+  [["proteina", raw?.proteina, p], ["carbo", raw?.carbo, c], ["grasa", raw?.grasa, g]]
+    .forEach(([k, orig, val]) => {
+      if (num(orig) > val) avisos.push(`${k}: ${Math.round(num(orig))} g es imposible, recortado a ${val}`);
+    });
+
+  const kcalMacros = Math.round(p * KCAL_P + c * KCAL_C + g * KCAL_G);
+
+  if (kcalMacros > 0) {
+    const desvio = kcal > 0 ? Math.abs(kcal - kcalMacros) / kcalMacros : 1;
+    if (desvio > DESVIO_KCAL_MAX) {
+      avisos.push(kcal > 0
+        ? `kcal: ${Math.round(kcal)} no cuadra con sus macros (${kcalMacros}), corregido`
+        : `kcal: faltaban, calculadas desde los macros (${kcalMacros})`);
+      kcal = kcalMacros;
+    }
+  } else if (kcal > 0) {
+    // Calorías sin ningún macro: no hay nada que recalcular y tampoco se puede
+    // repartir a ciegas. Se conserva el dato y se dice que está incompleto.
+    avisos.push("Sin desglose de macros: solo se guardan las calorías");
+  }
+
+  return {
+    entry: {
+      ...raw,
+      kcal: Math.round(kcal),
+      proteina: Math.round(p),
+      carbo: Math.round(c),
+      grasa: Math.round(g),
+    },
+    avisos,
+    corregido: avisos.length > 0,
+    vacio: kcal <= 0 && kcalMacros <= 0,
+  };
+}
+
+/* Referencia con lo que el propio usuario ya registró.
+   El mismo plato se re-estimaba desde cero cada vez, así que "pollo con arroz"
+   salía con cifras algo distintas en cada registro. Pasarle sus propios valores
+   como referencia hace que lo repetido se mantenga estable, que es justo lo que
+   permite comparar semanas entre sí. */
+function foodHistoryHint(foodlog, opts = {}) {
+  const habituales = topFrequentMeals(foodlog, { limite: opts.limite || 10, hasta: opts.hasta });
+  if (!habituales.length) return "";
+  const lineas = habituales.map(h =>
+    `- ${h.nombre}: ${h.kcal} kcal, P${h.proteina} C${h.carbo} G${h.grasa} (registrado ${h.veces} veces)`);
+  return "\nPLATOS QUE ESTE USUARIO YA REGISTRA HABITUALMENTE, con los valores que él mismo usa:\n"
+    + lineas.join("\n")
+    + "\nSi lo que describe coincide con alguno de ellos, USA ESOS VALORES en vez de estimar de nuevo: "
+    + "mantener constante lo repetido es más útil que afinar cada vez.\n";
 }
 
 /* ===== ¿FALTA COMIDA POR REGISTRAR? =====
@@ -9683,7 +9764,7 @@ function AddFood({
       return;
     }
     try {
-      const out = await callGemini([{ role: "user", content: val }], FOOD_SYS, FOOD_SCHEMA);
+      const out = await callGemini([{ role: "user", content: val }], FOOD_SYS + foodHistoryHint(foodlog), FOOD_SCHEMA, { temperature: 0 });
       const parsed = cleanAndParseJSON(out);
       if (parsed && parsed.items) {
         setAiParsedResults(prev => [...prev, ...parsed.items]);
@@ -9714,7 +9795,7 @@ function AddFood({
             { type: "text", text: "Analiza esta comida y estima los macros de cada plato desglosado en un listado de items." }
           ]
         }
-      ], FOOD_SYS, FOOD_SCHEMA);
+      ], FOOD_SYS + foodHistoryHint(foodlog), FOOD_SCHEMA, { temperature: 0 });
       const parsed = cleanAndParseJSON(out);
       if (parsed && parsed.items) {
         setAiParsedResults(prev => [...prev, ...parsed.items]);
@@ -10823,18 +10904,19 @@ function Hoy({
   // Multiplicador de ración para los platos habituales
   const [multIdx, setMultIdx] = useState(1);
 
-  const pushEntry = (o, fb) => { 
-    const e = {
-      id: uid(),
+  const pushEntry = (o, fb) => {
+    /* Único punto por el que entra la comida al registro, venga de texto, foto
+       o de un plato habitual. Aquí se comprueba que lo devuelto sea físicamente
+       posible: si las calorías no cuadran con sus propios macros se recalculan
+       desde ellos, porque el desglose son tres datos frente a uno y es lo que
+       de verdad se usa después en el objetivo y en el TDEE. */
+    const { entry, avisos } = validateFoodEntry({
       resumen: o.resumen || fb,
-      kcal: +o.kcal || 0,
-      proteina: +o.proteina || 0,
-      carbo: +o.carbo || 0,
-      grasa: +o.grasa || 0,
-      t: Date.now()
-    }; 
-    const next = [e, ...log]; 
-    setLog(next); 
+      kcal: o.kcal, proteina: o.proteina, carbo: o.carbo, grasa: o.grasa,
+    });
+    const e = { id: uid(), ...entry, t: Date.now(), ...(avisos.length ? { avisos } : {}) };
+    setLog([e, ...log]);
+    if (avisos.length) setErr("Ajustado: " + avisos[0]);
   };
 
   const addFood = async() => { 
@@ -10843,7 +10925,12 @@ function Hoy({
     setErr(""); 
     const d = text.trim();
     try{ 
-      const out = await callGemini([{role:"user", content:d}], FOOD_SYS, FOOD_SCHEMA); 
+      const out = await callGemini(
+        [{role:"user", content:d}],
+        FOOD_SYS + foodHistoryHint(foodlog, { hasta: selectedDateStr }),
+        FOOD_SCHEMA,
+        { temperature: 0 }
+      );
       pushEntry(cleanAndParseJSON(out), d); 
       setText(""); 
     } catch(e){ 
@@ -10868,7 +10955,7 @@ function Hoy({
             { type: "text", text: "Analiza esta comida y estima los macros nutricionales." }
           ]
         }
-      ], FOOD_SYS, FOOD_SCHEMA);
+      ], FOOD_SYS + foodHistoryHint(foodlog), FOOD_SCHEMA, { temperature: 0 });
       pushEntry(cleanAndParseJSON(out), "Comida (Foto)"); 
     } catch(err){ 
       setErr("Error leyendo la foto. Asegura buena iluminación o digita el texto."); 
@@ -22983,6 +23070,7 @@ if (typeof module !== 'undefined' && module.exports) {
     evaluateRecovery, calcRestingHRBaseline, buildRecompositionSeries, buildMetricChanges, getWeeklyStats,
     buildDailyNutrition, averageDailyNutrition, sumDayNutrition, calcTDEE, analyzeMacroPattern,
     topFrequentMeals, detectUnderreporting, analyzeLoggingBias, DIAS_SEMANA,
+    validateFoodEntry, foodHistoryHint,
     calcWalkBlock, calcCardioSession, getCardioSummary, PROGRAMAS_CAMINATA, VEL_MARCHA_MAX,
     walkStateAt, trimBlocksTo, AVISO_SEG,
     exerciseProfile, profileBalance, PERFIL_ETIQUETA,

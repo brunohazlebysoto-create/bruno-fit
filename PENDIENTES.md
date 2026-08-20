@@ -1846,3 +1846,60 @@ con el ambiente, y no hay un número que sirva para todos.
 día de entreno. Es una vara de medir constante para el score diario, no un
 objetivo que se muestre, así que se deja como está — pero queda anotado para no
 tropezar con ello creyendo que es el mismo cálculo que el objetivo visible.
+
+## Por qué la estimación de comida daba respuestas variadas (W83)
+
+> *"la información nutricional cuando te cargue los alimentos, das respuestas
+> variadas o no tan reales"*
+
+Tres causas, todas reales y todas en la misma ruta.
+
+### 1 · La temperatura estaba en 0.2 para todo
+
+Estimar los macros de un plato **no es una tarea creativa**: el mismo texto tiene
+que dar el mismo número siempre. Con temperatura 0.2, registrar dos veces "pollo
+con arroz" devolvía cifras algo distintas, y esa variación se acumulaba en el
+historial como si fueran comidas diferentes — envenenando después el promedio,
+el TDEE medido y los objetivos.
+
+Ahora las llamadas de comida van a **temperatura 0**. El parámetro es
+configurable por llamada, así que lo que sí necesita variedad (ideas de menú)
+puede seguir teniéndola.
+
+### 2 · Nadie comprobaba que lo devuelto fuera posible
+
+Los macros llegaban del modelo y se guardaban tal cual. Un plato con **600 kcal
+pero 45 g de proteína, 80 de carbohidrato y 30 de grasa no cuadra**: esos macros
+son 770 kcal.
+
+La comprobación es física, no estadística: los factores de Atwater son una
+identidad. Cuando las calorías declaradas no coinciden con sus propios macros,
+**se recalculan desde los macros** — son tres números frente a uno, y el desglose
+es lo que de verdad se usa después. También se recortan los valores imposibles y
+se rellenan las calorías que falten.
+
+Va en `pushEntry`, que es el **único punto** por el que entra la comida al
+registro venga de texto, de foto o de un plato habitual. Cuando corrige algo, lo
+dice en vez de arreglarlo en silencio.
+
+### 3 · Cada registro se estimaba desde cero
+
+El mismo plato repetido 37 veces se re-estimaba entero cada vez. Ahora el prompt
+lleva **los platos que el propio usuario ya registra**, con sus valores, y la
+instrucción de usarlos si coinciden: mantener constante lo repetido es más útil
+que afinar cada vez.
+
+### De paso: dos prompts distintos con el mismo nombre
+
+`FOOD_SYS` existe **dos veces** en el archivo, con reglas diferentes: uno pide un
+desglose por ingredientes con peso y precisión, el otro un único total, y ninguno
+menciona bases de datos en el primer caso. Según la pantalla desde la que se
+registre, el mismo plato se estima con criterios distintos. Queda anotado: la
+unificación es un cambio mayor que merece su propia pasada.
+
+### Una prueba que volvía a fallar por la fecha
+
+El caso de deload anclaba su semana de descarga a "hace 21-27 días", que según el
+día de la semana se parte entre dos semanas ISO. Ahora se ancla al **lunes**, así
+que la descarga cae siempre dentro de una sola semana y la prueba deja de
+depender del día en que se ejecute.
