@@ -118,6 +118,16 @@ function buildSeed() {
         grasaPiernaDer: 3.4, grasaPiernaIzq: 3.4,
       });
     }
+    // La sesión de hoy lleva chaleco y pulsaciones del reloj: es el caso que
+    // cruza los dos métodos de estimación y sin él no se ve en las capturas.
+    if (i === 0) {
+      cardiolog[k] = [{
+        id: "camHoy",
+        lastreKg: 10,
+        bloques: [{ min: 5, vel: 4.5, incl: 2 }, { min: 40, vel: 5.2, incl: 9 }, { min: 5, vel: 4, incl: 0 }],
+        fc: { media: 132, max: 158, inicio: 112, fin: 141 },
+      }];
+    }
     if (i % 2 === 1 && i <= 13) {
       cardiolog[k] = [{
         id: "cam" + i,

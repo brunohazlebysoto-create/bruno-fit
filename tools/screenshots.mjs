@@ -158,6 +158,9 @@ const ESCENAS = [
     accion: async (page) => { await page.getByRole("button", { name: "Empezar bloque" }).click({ timeout: 5000 }); } },
   // Caminata en cinta: el registro por bloques de velocidad y pendiente
   { id: "entreno-14-caminata", tab: "Entreno", scrollHasta: "Caminata en cinta" },
+  // Chaleco lastrado y cruce con las pulsaciones del reloj
+  { id: "entreno-21-caminata-lastre-fc", tab: "Entreno", scrollHasta: "Caminata en cinta",
+    scrollDespues: 120 },
   { id: "entreno-15-caminata-programas", tab: "Entreno", scrollHasta: "Caminata en cinta",
     accion: async (page) => { await page.getByRole("button", { name: "+ Registrar" }).first().click({ timeout: 5000 }); },
     scrollDespues: 200 },

@@ -1,4 +1,4 @@
-const APP_VERSION = "v2026.07.29-W83";
+const APP_VERSION = "v2026.07.29-W84";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -1360,11 +1360,21 @@ function linearRegression(ys, xsArg) {
 const VEL_MARCHA_MAX = 6.4;  // km/h — por encima ya no es marcha
 
 /** Coste de un bloque de caminata: {min, vel (km/h), incl (%)}. */
-function calcWalkBlock(bloque, pesoKg) {
+function calcWalkBlock(bloque, pesoKg, lastreKg = 0) {
   const min = Math.max(0, parseFloat(bloque?.min) || 0);
   const vel = Math.max(0, parseFloat(bloque?.vel) || 0);
   const incl = Math.max(0, parseFloat(bloque?.incl) || 0);
-  const peso = parseFloat(pesoKg) || 0;
+  /* El chaleco lastrado se suma al peso corporal. La ecuación del ACSM da el
+     coste en ml de O2 por kg de masa MOVIDA, así que 10 kg de chaleco cuestan
+     igual que 10 kg propios: hay que desplazarlos horizontalmente y subirlos
+     por la cuesta.
+     Es una aproximación honesta y no una identidad: la investigación sobre
+     porte de carga (Pandolf) muestra que un peso externo cuesta algo MÁS que la
+     misma masa corporal, sobre todo con cargas grandes o mal repartidas. Con un
+     chaleco ajustado al tronco y cargas moderadas la diferencia es pequeña, así
+     que esto tiende a quedarse corto, nunca a inflar el gasto. */
+  const lastre = Math.max(0, parseFloat(lastreKg) || 0);
+  const peso = (parseFloat(pesoKg) || 0) + lastre;
   const S = (vel * 1000) / 60;            // m/min
   const G = incl / 100;
   const vo2 = 0.1 * S + 1.8 * S * G + 3.5;
@@ -1383,9 +1393,10 @@ function calcWalkBlock(bloque, pesoKg) {
 
 /** Suma de una sesión con varios bloques (intervalos de velocidad/pendiente). */
 function calcCardioSession(sesion, pesoKg) {
-  const bloques = (sesion?.bloques || []).map(b => calcWalkBlock(b, pesoKg));
+  const lastre = Math.max(0, parseFloat(sesion?.lastreKg) || 0);
+  const bloques = (sesion?.bloques || []).map(b => calcWalkBlock(b, pesoKg, lastre));
   const min = bloques.reduce((a, b) => a + b.min, 0);
-  if (!min) return { min: 0, kcal: 0, km: 0, desnivel: 0, mets: 0, inclMedia: 0, velMedia: 0, bloques, fueraDeRango: false };
+  if (!min) return { min: 0, kcal: 0, km: 0, desnivel: 0, mets: 0, inclMedia: 0, velMedia: 0, bloques, lastre, fueraDeRango: false };
   // Medias PONDERADAS POR TIEMPO: un pico de 15% durante un minuto no vale lo
   // mismo que veinte minutos al 8%, y la media simple de los bloques lo diría.
   const pond = (k) => Math.round((bloques.reduce((a, b) => a + b[k] * b.min, 0) / min) * 10) / 10;
@@ -1398,7 +1409,141 @@ function calcCardioSession(sesion, pesoKg) {
     inclMedia: pond("incl"),
     velMedia: pond("vel"),
     bloques,
+    lastre,
+    // Trabajo vertical añadido por el chaleco: los kg de más multiplicados por
+    // los metros subidos. Es lo que hace que la misma caminata cueste más.
+    trabajoLastre: lastre > 0 ? Math.round(lastre * bloques.reduce((a, b) => a + b.desnivel, 0)) : 0,
     fueraDeRango: bloques.some(b => b.fueraDeRango),
+  };
+}
+
+/* ===== CALORÍAS A PARTIR DE LAS PULSACIONES =====
+   Un segundo método, independiente del primero. La ecuación del ACSM estima el
+   coste desde lo que se HIZO (velocidad, pendiente, peso); las pulsaciones lo
+   estiman desde lo que el cuerpo RESPONDIÓ. Que dos métodos independientes
+   coincidan es una comprobación de verdad; que no coincidan dice algo.
+
+   Ecuación de Keytel et al. (2005), la referencia habitual para estimar gasto
+   desde la frecuencia cardíaca de ejercicio:
+     Hombres: kJ/min = -55.0969 + 0.6309·FC + 0.1988·peso + 0.2017·edad
+     Mujeres: kJ/min = -20.4022 + 0.4472·FC - 0.1263·peso + 0.0740·edad
+   y 1 kcal = 4.184 kJ.
+
+   Límites que hay que respetar para no dar números falsos:
+   · Se calibró con ejercicio continuo entre ~90 y 150 lpm. Por debajo de 90 la
+     relación FC-consumo se rompe (la FC de reposo no significa gasto cero) y
+     por encima la ecuación deja de ser lineal.
+   · Con lastre no cambia nada: la FC ya recoge el esfuerzo extra. Por eso NO se
+     suma el chaleco al peso aquí — hacerlo sería contarlo dos veces.           */
+const FC_KEYTEL_MIN = 90, FC_KEYTEL_MAX = 150;
+
+function calcHRCalories(opts = {}) {
+  const fc = parseFloat(opts.fcMedia) || 0;
+  const min = parseFloat(opts.minutos) || 0;
+  const peso = parseFloat(opts.pesoKg) || 0;
+  const edad = parseFloat(opts.edad) || 0;
+  const mujer = opts.sexo === "mujer";
+  if (!(fc > 0) || !(min > 0) || !(peso > 0) || !(edad > 0)) return null;
+
+  const kJmin = mujer
+    ? -20.4022 + 0.4472 * fc - 0.1263 * peso + 0.0740 * edad
+    : -55.0969 + 0.6309 * fc + 0.1988 * peso + 0.2017 * edad;
+  const kcalMin = kJmin / 4.184;
+  if (!(kcalMin > 0)) return { kcal: 0, kcalMin: 0, fueraDeRango: true, motivo: "FC demasiado baja para esta ecuación" };
+
+  return {
+    kcal: Math.round(kcalMin * min),
+    kcalMin: Math.round(kcalMin * 10) / 10,
+    fueraDeRango: fc < FC_KEYTEL_MIN || fc > FC_KEYTEL_MAX,
+    motivo: fc < FC_KEYTEL_MIN ? `${fc} lpm queda por debajo del rango en que la ecuación fue validada`
+          : fc > FC_KEYTEL_MAX ? `${fc} lpm queda por encima del rango en que la ecuación fue validada`
+          : null,
+  };
+}
+
+/* Zonas de esfuerzo sobre la FC máxima estimada.
+   La fórmula 220 − edad es la más conocida y también la más criticada: su error
+   individual ronda ±10-12 lpm. Se usa por falta de una prueba real, y se dice.  */
+const ZONAS_FC = [
+  { z: 1, lbl: "Muy suave", min: 0.50, max: 0.60 },
+  { z: 2, lbl: "Suave (quema grasa)", min: 0.60, max: 0.70 },
+  { z: 3, lbl: "Moderada", min: 0.70, max: 0.80 },
+  { z: 4, lbl: "Intensa", min: 0.80, max: 0.90 },
+  { z: 5, lbl: "Máxima", min: 0.90, max: 1.10 },
+];
+
+function zonaDeFC(fc, edad) {
+  const f = parseFloat(fc) || 0, e = parseFloat(edad) || 0;
+  if (!(f > 0) || !(e > 0)) return null;
+  const fcMax = 220 - e;
+  // La zona se decide con el porcentaje YA REDONDEADO, que es el que se enseña.
+  // Con el valor crudo, 130 lpm sobre 186 da 69.89% y caía en zona 2 mientras
+  // la pantalla mostraba "70%": el usuario leía un número y se le decía otra
+  // cosa. La frontera es convencional de todos modos; la coherencia no.
+  const pct = Math.round((f / fcMax) * 100);
+  const z = ZONAS_FC.find(x => pct >= x.min * 100 && pct < x.max * 100) || ZONAS_FC[ZONAS_FC.length - 1];
+  return { ...z, fcMax: Math.round(fcMax), pct };
+}
+
+/**
+ * Cruza la caminata registrada con las pulsaciones del reloj.
+ * Devuelve las dos estimaciones, su discrepancia y lo que esa discrepancia
+ * significa — que es la parte útil: un número solo no se puede juzgar.
+ */
+function analyzeWalkWithHR(sesion, opts = {}) {
+  const pesoKg = parseFloat(opts.pesoKg) || 0;
+  const mec = calcCardioSession(sesion, pesoKg);
+  if (!mec.min) return null;
+
+  const fc = sesion?.fc || {};
+  const hr = calcHRCalories({
+    fcMedia: fc.media, minutos: mec.min, pesoKg, edad: opts.edad, sexo: opts.sexo,
+  });
+  const zona = zonaDeFC(fc.media, opts.edad);
+  const zonaMax = zonaDeFC(fc.max, opts.edad);
+
+  const observaciones = [];
+
+  // 1) ¿Coinciden los dos métodos?
+  let acuerdo = null;
+  if (hr && hr.kcal > 0 && mec.kcal > 0) {
+    const dif = hr.kcal - mec.kcal;
+    const difPct = Math.round((dif / mec.kcal) * 100);
+    acuerdo = { difKcal: dif, difPct, concuerdan: Math.abs(difPct) <= 20 };
+    if (!acuerdo.concuerdan) {
+      observaciones.push(difPct > 0
+        ? `Tu corazón trabajó más de lo que explica la cinta (${difPct}% por encima): calor, deshidratación, fatiga previa o un chaleco que pesa más de lo apuntado.`
+        : `Tu corazón trabajó menos de lo que explica la cinta (${Math.abs(difPct)}% por debajo): suele significar que te apoyaste en las barras, lo que baja el coste real sin que la cinta se entere.`);
+    }
+  }
+
+  // 2) ¿La intensidad fue la que buscaba la sesión?
+  if (zona) {
+    if (zona.z <= 2 && mec.inclMedia >= 8) {
+      observaciones.push(`Pendiente alta (${mec.inclMedia}%) con pulsaciones de zona ${zona.z}: o estás muy en forma para esta carga, o te agarraste a las barras.`);
+    } else if (zona.z >= 4) {
+      observaciones.push(`Zona ${zona.z} de media en una caminata: es más intensidad de la que pide una sesión de base, y compite con la recuperación de piernas.`);
+    }
+  }
+
+  // 3) Deriva cardíaca: subir de pulsaciones sin subir de ritmo
+  if (fc.inicio > 0 && fc.fin > 0) {
+    const deriva = Math.round(((fc.fin - fc.inicio) / fc.inicio) * 100);
+    if (deriva >= 10) {
+      observaciones.push(`Tus pulsaciones subieron un ${deriva}% de principio a fin sin cambiar el ritmo: deriva cardíaca, típica de calor o de hidratación insuficiente.`);
+    }
+  }
+
+  return {
+    mecanico: mec,
+    fc: { ...fc, zona, zonaMax },
+    porPulsaciones: hr,
+    acuerdo,
+    // El valor que conviene usar: si los dos métodos concuerdan, su promedio;
+    // si no, el mecánico, que depende de datos medidos y no de una ecuación
+    // poblacional aplicada a un solo número.
+    kcalRecomendado: acuerdo?.concuerdan ? Math.round((mec.kcal + hr.kcal) / 2) : mec.kcal,
+    observaciones,
   };
 }
 
@@ -9097,14 +9242,17 @@ function SesionGuiada({ bloques, pesoKg, onGuardar, onCerrar }) {
   );
 }
 
-function CardioCinta({ cardiolog, setCardiolog, selectedDateStr, pesoKg }) {
+function CardioCinta({ cardiolog, setCardiolog, selectedDateStr, pesoKg, bodyProfile }) {
   const sesionesHoy = (cardiolog || {})[selectedDateStr] || [];
   const [abierto, setAbierto] = useState(false);
   const [bloques, setBloques] = useState([{ min: 5, vel: 4.5, incl: 2 }, { min: 30, vel: 5.2, incl: 9 }]);
   const [nota, setNota] = useState("");
   const [guiando, setGuiando] = useState(null);   // bloques de la sesión en curso
+  const [lastre, setLastre] = useState(0);        // chaleco lastrado, en kg
+  const [fcBusy, setFcBusy] = useState("");       // id de la sesión leyendo el reloj
+  const [analisis, setAnalisis] = useState({});   // { [idSesion]: texto }
 
-  const previa = calcCardioSession({ bloques }, pesoKg);
+  const previa = calcCardioSession({ bloques, lastreKg: lastre }, pesoKg);
   const semana = getCardioSummary(cardiolog, pesoKg, selectedDateStr, 7);
 
   const setBloque = (i, campo, valor) =>
@@ -9113,7 +9261,7 @@ function CardioCinta({ cardiolog, setCardiolog, selectedDateStr, pesoKg }) {
   const guardar = () => {
     const limpios = bloques.filter(b => (parseFloat(b.min) || 0) > 0 && (parseFloat(b.vel) || 0) > 0);
     if (!limpios.length) return;
-    const sesion = { id: "c" + Date.now(), bloques: limpios, nota: nota.trim() };
+    const sesion = { id: "c" + Date.now(), bloques: limpios, nota: nota.trim(), lastreKg: lastre || 0 };
     setCardiolog({ ...(cardiolog || {}), [selectedDateStr]: [...sesionesHoy, sesion] });
     setNota("");
     setAbierto(false);
@@ -9122,10 +9270,93 @@ function CardioCinta({ cardiolog, setCardiolog, selectedDateStr, pesoKg }) {
   // Al terminar la sesión guiada se guarda lo REALMENTE hecho: si se corta a la
   // mitad, queda registrada la mitad, no el plan entero.
   const guardarGuiada = (hechos) => {
-    const sesion = { id: "c" + Date.now(), bloques: hechos, nota: "Sesión guiada", guiada: true };
+    const sesion = { id: "c" + Date.now(), bloques: hechos, nota: "Sesión guiada", guiada: true, lastreKg: lastre || 0 };
     setCardiolog({ ...(cardiolog || {}), [selectedDateStr]: [...sesionesHoy, sesion] });
     setGuiando(null);
     setAbierto(false);
+  };
+
+  /* Lectura de la captura del reloj.
+     El reloj mide lo que el cuerpo hizo; la cinta, lo que se le pidió. Son dos
+     fuentes independientes, y cruzarlas es lo que permite juzgar si el número
+     de calorías es creíble — algo que ninguna de las dos puede hacer sola. */
+  const FC_SCHEMA = {
+    type: "OBJECT",
+    properties: {
+      media: { type: "INTEGER" }, max: { type: "INTEGER" }, min: { type: "INTEGER" },
+      inicio: { type: "INTEGER" }, fin: { type: "INTEGER" },
+      minutos: { type: "INTEGER" }, kcalReloj: { type: "INTEGER" },
+    },
+    required: ["media"],
+  };
+  const FC_SYS = "Lees capturas de pantalla de relojes y apps deportivas (Garmin, Apple Watch, Samsung, Polar, Strava). "
+    + "Extrae SOLO los valores de frecuencia cardíaca y duración que aparezcan EN LA IMAGEN, en pulsaciones por minuto. "
+    + "media = FC media de la sesión; max y min = los extremos; inicio y fin = la FC al principio y al final si la gráfica lo permite estimar; "
+    + "minutos = duración de la actividad; kcalReloj = las calorías que muestre el reloj. "
+    + "Si un dato NO aparece, omítelo: no lo inventes ni lo deduzcas de los otros. Devuelve solo JSON.";
+
+  const leerReloj = async (idSesion, file) => {
+    if (!file) return;
+    setFcBusy(idSesion);
+    try {
+      const b64 = await fileToBase64(file);
+      const media = pickImageMedia(file);
+      const out = await callGemini([{
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: media, data: b64 } },
+          { type: "text", text: "Extrae la frecuencia cardíaca y la duración de esta captura." },
+        ],
+      }], FC_SYS, FC_SCHEMA, { temperature: 0 });
+      const fc = cleanAndParseJSON(out);
+      if (fc && parseInt(fc.media) > 0) {
+        const next = { ...(cardiolog || {}) };
+        next[selectedDateStr] = (next[selectedDateStr] || []).map(s =>
+          s.id === idSesion ? { ...s, fc } : s);
+        setCardiolog(next);
+      }
+    } catch (e) { /* el análisis mecánico sigue estando: no se pierde la sesión */ }
+    setFcBusy("");
+  };
+
+  const analizarSesion = async (sesion) => {
+    setFcBusy(sesion.id);
+    try {
+      const a = analyzeWalkWithHR(sesion, {
+        pesoKg, edad: bodyProfile?.edad, sexo: bodyProfile?.sexo,
+      });
+      const bloques = a.mecanico.bloques
+        .map((b, i) => `${i + 1}. ${b.min} min a ${b.vel} km/h con ${b.incl}% → ${b.kcal} kcal`).join("\n");
+      const fcTxt = a.porPulsaciones
+        ? `FC media ${sesion.fc.media} lpm (zona ${a.fc.zona?.z}, ${a.fc.zona?.pct}% de la máxima estimada ${a.fc.zona?.fcMax})`
+          + (sesion.fc.max ? `, máxima ${sesion.fc.max}` : "")
+          + `. Estimación por pulsaciones (Keytel): ${a.porPulsaciones.kcal} kcal`
+          + (a.porPulsaciones.fueraDeRango ? ` — ojo: ${a.porPulsaciones.motivo}` : "")
+        : "Sin datos de pulsaciones.";
+      const msg = `[ANÁLISIS DE CAMINATA — ${selectedDateStr}]
+
+Bloques realizados:
+${bloques}
+
+Totales: ${a.mecanico.min} min · ${a.mecanico.km} km · ${a.mecanico.desnivel} m de desnivel`
+        + (a.mecanico.lastre > 0 ? ` · chaleco de ${a.mecanico.lastre} kg` : "")
+        + `\nEstimación mecánica (ecuación de marcha del ACSM, con el peso movido): ${a.mecanico.kcal} kcal
+${fcTxt}
+${a.acuerdo ? `Diferencia entre ambos métodos: ${a.acuerdo.difPct}%.` : ""}
+${a.observaciones.length ? "Señales detectadas:\n- " + a.observaciones.join("\n- ") : ""}
+
+Analiza esta caminata en menos de 200 palabras y con esta estructura:
+**Qué pasó** — lee los dos métodos juntos y di qué cifra de calorías es la creíble y por qué. No promedies sin más: explica la discrepancia si la hay.
+**Intensidad** — ¿fue la sesión que tocaba? Cruza la pendiente de cada bloque con la respuesta cardíaca.
+**Qué ajustar** — un cambio concreto para la próxima: pendiente, velocidad, lastre o duración. Un solo cambio, con número.
+No repitas los datos que ya te he dado.`;
+      const out = await callGemini([{ role: "user", content: msg }],
+        `Eres el entrenador de Bruno. ${getProfileStr(pesoKg, null, null, null, bodyProfile)} Directo y concreto, sin encabezados markdown con #.`);
+      setAnalisis(prev => ({ ...prev, [sesion.id]: out }));
+    } catch (e) {
+      setAnalisis(prev => ({ ...prev, [sesion.id]: aiErr(e) }));
+    }
+    setFcBusy("");
   };
 
   const borrar = (id) => {
@@ -9182,6 +9413,7 @@ function CardioCinta({ cardiolog, setCardiolog, selectedDateStr, pesoKg }) {
             <div style={{fontSize:10, color:C.muted, marginTop:2}}>
               Media {r.velMedia} km/h al {r.inclMedia}% · {r.mets} MET
               {r.bloques.length > 1 && ` · ${r.bloques.length} bloques`}
+              {r.lastre > 0 && <> · <b style={{color:C.ink}}>chaleco {r.lastre} kg</b></>}
             </div>
             <div style={{display:"flex", flexWrap:"wrap", gap:4, marginTop:5}}>
               {r.bloques.map((b, i) => (
@@ -9191,6 +9423,61 @@ function CardioCinta({ cardiolog, setCardiolog, selectedDateStr, pesoKg }) {
                 </span>
               ))}
             </div>
+            {/* Pulsaciones del reloj y cruce de los dos métodos. Un número de
+                calorías solo no se puede juzgar; dos que vienen de fuentes
+                independientes sí, y su desacuerdo es información. */}
+            {(() => {
+              const a = analyzeWalkWithHR(s, { pesoKg, edad: bodyProfile?.edad, sexo: bodyProfile?.sexo });
+              if (!a) return null;
+              const ocupado = fcBusy === s.id;
+              return (
+                <div style={{marginTop:6, borderTop:`1px solid ${C.line}`, paddingTop:6}}>
+                  {a.porPulsaciones ? (
+                    <>
+                      <div style={{fontSize:10.5, color:C.ink, lineHeight:1.5}}>
+                        <b>{s.fc.media} lpm</b> de media
+                        {a.fc.zona && <> · zona {a.fc.zona.z} ({a.fc.zona.lbl}), {a.fc.zona.pct}% de {a.fc.zona.fcMax}</>}
+                        {s.fc.max > 0 && <> · pico {s.fc.max}</>}
+                      </div>
+                      <div style={{display:"flex", gap:8, marginTop:4, flexWrap:"wrap", fontSize:10}}>
+                        <span style={{color:C.muted}}>Por la cinta: <b style={{color:C.ink}}>{a.mecanico.kcal}</b> kcal</span>
+                        <span style={{color:C.muted}}>Por pulsaciones: <b style={{color:C.ink}}>{a.porPulsaciones.kcal}</b> kcal</span>
+                        {a.acuerdo && (
+                          <span style={{color: a.acuerdo.concuerdan ? C.lime : C.amber, fontWeight:800}}>
+                            {a.acuerdo.concuerdan ? "concuerdan" : `difieren ${Math.abs(a.acuerdo.difPct)}%`}
+                          </span>
+                        )}
+                      </div>
+                      {a.porPulsaciones.fueraDeRango && (
+                        <div style={{fontSize:9.5, color:C.amber, marginTop:3, lineHeight:1.4}}>
+                          {a.porPulsaciones.motivo}: esa cifra es orientativa.
+                        </div>
+                      )}
+                      {a.observaciones.map((o, i) => (
+                        <div key={i} style={{fontSize:9.5, color:C.muted, marginTop:3, lineHeight:1.45}}>{o}</div>
+                      ))}
+                      <button onClick={() => analizarSesion(s)} disabled={ocupado}
+                        style={{marginTop:6, width:"100%", padding:"7px", borderRadius:9, border:`1px solid ${C.line}`,
+                          background:"transparent", color:C.cyan, fontSize:11, fontWeight:800, cursor:"pointer"}}>
+                        {ocupado ? "Analizando…" : "Analizar esta caminata con IA"}
+                      </button>
+                      {analisis[s.id] && (
+                        <div style={{marginTop:6, background:C.bg, border:`1px solid ${C.line}`, borderRadius:9, padding:"8px 10px"}}>
+                          <MarkdownText text={analisis[s.id]} size={10.5}/>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <label style={{display:"block", textAlign:"center", padding:"7px", borderRadius:9,
+                      border:`1px dashed ${C.line}`, color:C.muted, fontSize:10.5, fontWeight:700, cursor:"pointer"}}>
+                      {ocupado ? "Leyendo la captura…" : "📷 Añadir pulsaciones del reloj"}
+                      <input type="file" accept="image/*" style={{display:"none"}}
+                        onChange={e => leerReloj(s.id, e.target.files && e.target.files[0])}/>
+                    </label>
+                  )}
+                </div>
+              );
+            })()}
             {s.nota && <div style={{fontSize:10.5, color:C.muted, marginTop:4, fontStyle:"italic"}}>{s.nota}</div>}
             {r.fueraDeRango && (
               <div style={{fontSize:9.5, color:C.amber, marginTop:4}}>
@@ -9233,6 +9520,30 @@ function CardioCinta({ cardiolog, setCardiolog, selectedDateStr, pesoKg }) {
             })}
           </div>
 
+          <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6}}>
+            <span style={{fontSize:10.5, color:C.muted, fontWeight:700, textTransform:"uppercase", letterSpacing:".05em"}}>
+              Chaleco lastrado
+            </span>
+            <div style={{display:"flex", gap:3}}>
+              {[0, 5, 10, 15, 20].map(kg => (
+                <button key={kg} onClick={() => setLastre(kg)}
+                  style={{background: lastre === kg ? "rgba(77,124,15,0.16)" : "transparent",
+                    border:`1px solid ${lastre === kg ? C.lime : C.line}`, borderRadius:6,
+                    padding:"2px 7px", fontSize:10.5, fontWeight:800,
+                    color: lastre === kg ? C.lime : C.muted, cursor:"pointer"}}>
+                  {kg === 0 ? "sin" : `${kg}`}
+                </button>
+              ))}
+            </div>
+          </div>
+          {lastre > 0 && (
+            <div style={{fontSize:9.5, color:C.muted, lineHeight:1.45, marginBottom:8}}>
+              Los {lastre} kg se suman al peso que mueves: cuestan lo mismo que {lastre} kg propios,
+              porque hay que desplazarlos y subirlos por la cuesta igual. Es una aproximación que
+              tiende a quedarse corta, nunca a inflar el gasto.
+            </div>
+          )}
+
           <div style={{fontSize:10.5, color:C.muted, fontWeight:700, textTransform:"uppercase", letterSpacing:".05em", marginBottom:5}}>
             Bloques
           </div>
@@ -9247,7 +9558,7 @@ function CardioCinta({ cardiolog, setCardiolog, selectedDateStr, pesoKg }) {
               {num(b.vel, v => setBloque(i, "vel", v), 52)}
               {num(b.incl, v => setBloque(i, "incl", v))}
               <span style={{fontSize:10, color:C.muted, flex:1}}>
-                {calcWalkBlock(b, pesoKg).kcal} kcal
+                {calcWalkBlock(b, pesoKg, lastre).kcal} kcal
               </span>
               {bloques.length > 1 && (
                 <button onClick={() => setBloques(bs => bs.filter((_, j) => j !== i))}
@@ -9271,7 +9582,9 @@ function CardioCinta({ cardiolog, setCardiolog, selectedDateStr, pesoKg }) {
             </div>
             <div style={{fontSize:9.5, color:C.muted, marginTop:2}}>
               Media {previa.velMedia} km/h al {previa.inclMedia}% · {previa.mets} MET.
-              {pesoKg > 0 ? ` Calculado con ${pesoKg} kg.` : " Registra tu peso para estimar las kcal."}
+              {pesoKg > 0
+                ? ` Calculado con ${pesoKg}${lastre > 0 ? ` + ${lastre}` : ""} kg.`
+                : " Registra tu peso para estimar las kcal."}
             </div>
           </div>
 
@@ -18299,6 +18612,7 @@ tr:last-child td{border-bottom:none}
         setCardiolog={setCardiolog}
         selectedDateStr={selectedDateStr}
         pesoKg={parseFloat(activeMetrics?.weight) || 0}
+        bodyProfile={bodyProfile}
       />
 
       {/* Botón de Análisis del Entrenamiento */}
@@ -23072,6 +23386,7 @@ if (typeof module !== 'undefined' && module.exports) {
     topFrequentMeals, detectUnderreporting, analyzeLoggingBias, DIAS_SEMANA,
     validateFoodEntry, foodHistoryHint,
     calcWalkBlock, calcCardioSession, getCardioSummary, PROGRAMAS_CAMINATA, VEL_MARCHA_MAX,
+    calcHRCalories, zonaDeFC, analyzeWalkWithHR, ZONAS_FC,
     walkStateAt, trimBlocksTo, AVISO_SEG,
     exerciseProfile, profileBalance, PERFIL_ETIQUETA,
     findSubstitutes, inferEquipo, ENTORNOS, ALTERNATIVAS_BASE,

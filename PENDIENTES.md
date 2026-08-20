@@ -1903,3 +1903,66 @@ El caso de deload anclaba su semana de descarga a "hace 21-27 días", que según
 día de la semana se parte entre dos semanas ISO. Ahora se ancla al **lunes**, así
 que la descarga cae siempre dentro de una sola semana y la prueba deja de
 depender del día en que se ejecute.
+
+## Chaleco lastrado y cruce con las pulsaciones (W84)
+
+> *"agrega la opción de llevar un chaleco pesado 10 kg… además un pantallazo de
+> mi frecuencia cardíaca del reloj y analizar todo con IA cruzando los datos"*
+
+### El chaleco
+
+La ecuación del ACSM da el coste en ml de O2 **por kg de masa movida**, así que
+10 kg de chaleco cuestan lo mismo que 10 kg propios: hay que desplazarlos
+horizontalmente y subirlos por la cuesta. Se suman al peso y ya está.
+
+Lo que **no** cambia: distancia, desnivel y METs son propiedades del movimiento,
+no del peso. Hay test que lo fija, porque es justo donde sería fácil equivocarse.
+
+Y una honestidad necesaria: tratar un peso externo como masa corporal es una
+**aproximación**. La investigación sobre porte de carga (Pandolf) muestra que
+cuesta algo *más*, sobre todo con cargas grandes o mal repartidas. Con un chaleco
+ajustado al tronco la diferencia es pequeña, así que esto tiende a quedarse
+corto, nunca a inflar el gasto — y se dice en pantalla.
+
+Selector de 0/5/10/15/20 kg, guardado por sesión.
+
+### Las pulsaciones del reloj
+
+Captura de pantalla → la IA extrae media, máxima, inicio, fin, duración y las
+calorías que muestre el reloj. La instrucción es explícita: **lo que no aparezca
+en la imagen se omite, no se deduce**.
+
+### Por qué cruzar los dos métodos vale la pena
+
+Son **independientes**: el ACSM estima desde lo que se *hizo* (velocidad,
+pendiente, peso); las pulsaciones, desde cómo *respondió* el cuerpo. Un número
+de calorías solo no se puede juzgar; dos que vienen de fuentes distintas sí, y su
+desacuerdo es información.
+
+La segunda estimación usa la ecuación de **Keytel et al. (2005)**, con sus
+límites declarados: se calibró entre ~90 y 150 lpm, y fuera de ahí se marca como
+orientativa en vez de darla por buena.
+
+**El chaleco NO entra en el cálculo por pulsaciones.** La frecuencia cardíaca ya
+recoge el esfuerzo extra; sumarlo también ahí sería contarlo dos veces. Hay test.
+
+Lo que el cruce detecta:
+
+- **Discrepancia entre métodos.** Si el corazón trabajó más de lo que explica la
+  cinta: calor, deshidratación o fatiga previa. Si trabajó menos: casi siempre
+  es haberse **agarrado a las barras**, que baja el coste real sin que la cinta
+  se entere.
+- **Pendiente alta con pulsaciones bajas** — la misma señal, por otra vía.
+- **Deriva cardíaca**: subir de pulsaciones de principio a fin sin cambiar el
+  ritmo.
+
+El valor que se propone usar es el promedio de ambos **solo si concuerdan**; si
+no, el mecánico, que se apoya en datos medidos y no en una ecuación poblacional
+aplicada a un único número.
+
+### Un detalle que confundía
+
+`zonaDeFC` mostraba "70%" y clasificaba en zona 2, porque el valor crudo era
+69.89% y la frontera está en 70. Ahora la zona se decide con el porcentaje **ya
+redondeado**, el mismo que se enseña: la frontera es convencional, la coherencia
+entre lo que se ve y lo que se dice no lo es.

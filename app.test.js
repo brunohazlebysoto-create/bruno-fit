@@ -1884,6 +1884,98 @@ describe('perfil de resistencia de los ejercicios', () => {
   });
 });
 
+describe('chaleco lastrado y pulsaciones', () => {
+  const { calcWalkBlock, calcCardioSession, calcHRCalories, zonaDeFC, analyzeWalkWithHR } = require('./app.js');
+
+  test('el chaleco se suma al peso movido: misma caminata, más coste', () => {
+    const sin = calcWalkBlock({ min: 40, vel: 5.2, incl: 9 }, 92);
+    const con = calcWalkBlock({ min: 40, vel: 5.2, incl: 9 }, 92, 10);
+    expect(con.kcal).toBeGreaterThan(sin.kcal);
+    // 10 kg sobre 92 son un 10.9% más de masa: el coste sube en esa proporción
+    expect(con.kcal / sin.kcal).toBeCloseTo(102 / 92, 2);
+    // Lo que no cambia: distancia, desnivel y METs son del movimiento, no del peso
+    expect(con.km).toBe(sin.km);
+    expect(con.desnivel).toBe(sin.desnivel);
+    expect(con.mets).toBe(sin.mets);
+  });
+
+  test('la sesión lee el lastre y expone el trabajo vertical añadido', () => {
+    const ses = { bloques: [{ min: 60, vel: 5, incl: 10 }], lastreKg: 10 };
+    const r = calcCardioSession(ses, 92);
+    expect(r.lastre).toBe(10);
+    expect(r.trabajoLastre).toBe(10 * r.desnivel);   // 10 kg × 500 m
+  });
+
+  test('un lastre negativo o basura no altera el cálculo', () => {
+    const base = calcCardioSession({ bloques: [{ min: 30, vel: 5, incl: 5 }] }, 92).kcal;
+    [-5, "abc", null].forEach(l => {
+      expect(calcCardioSession({ bloques: [{ min: 30, vel: 5, incl: 5 }], lastreKg: l }, 92).kcal).toBe(base);
+    });
+  });
+
+  test('Keytel estima calorías desde las pulsaciones', () => {
+    // Hombre 34a, 92 kg, 120 lpm: kJ/min = -55.0969 + 0.6309*120 + 0.1988*92 + 0.2017*34
+    const esperado = (-55.0969 + 0.6309 * 120 + 0.1988 * 92 + 0.2017 * 34) / 4.184;
+    const r = calcHRCalories({ fcMedia: 120, minutos: 40, pesoKg: 92, edad: 34, sexo: "hombre" });
+    expect(r.kcalMin).toBeCloseTo(esperado, 1);
+    expect(r.kcal).toBe(Math.round(esperado * 40));
+    expect(r.fueraDeRango).toBe(false);
+  });
+
+  test('avisa cuando la FC queda fuera del rango en que se validó', () => {
+    expect(calcHRCalories({ fcMedia: 75, minutos: 30, pesoKg: 92, edad: 34 }).fueraDeRango).toBe(true);
+    expect(calcHRCalories({ fcMedia: 175, minutos: 30, pesoKg: 92, edad: 34 }).fueraDeRango).toBe(true);
+  });
+
+  test('sin datos suficientes no inventa una estimación', () => {
+    expect(calcHRCalories({ fcMedia: 120, minutos: 40, pesoKg: 92 })).toBe(null);   // falta edad
+    expect(calcHRCalories({ minutos: 40, pesoKg: 92, edad: 34 })).toBe(null);
+  });
+
+  test('el lastre NO entra en el cálculo por pulsaciones: sería contarlo dos veces', () => {
+    // La FC ya recoge el esfuerzo extra del chaleco
+    const a = calcHRCalories({ fcMedia: 130, minutos: 40, pesoKg: 92, edad: 34 });
+    const b = calcHRCalories({ fcMedia: 130, minutos: 40, pesoKg: 92, edad: 34, lastreKg: 10 });
+    expect(a.kcal).toBe(b.kcal);
+  });
+
+  test('sitúa la FC en su zona sobre la máxima estimada', () => {
+    const z = zonaDeFC(130, 34);       // FCmax 186 → 70%
+    expect(z.fcMax).toBe(186);
+    expect(z.pct).toBe(70);
+    expect(z.z).toBe(3);
+  });
+
+  test('cruza los dos métodos y señala cuando no concuerdan', () => {
+    const ses = { bloques: [{ min: 40, vel: 5.2, incl: 9 }], fc: { media: 148, max: 165 } };
+    const r = analyzeWalkWithHR(ses, { pesoKg: 92, edad: 34, sexo: "hombre" });
+    expect(r.mecanico.kcal).toBeGreaterThan(0);
+    expect(r.porPulsaciones.kcal).toBeGreaterThan(0);
+    expect(r.acuerdo).not.toBe(null);
+    expect(typeof r.acuerdo.difPct).toBe("number");
+    expect(r.kcalRecomendado).toBeGreaterThan(0);
+  });
+
+  test('detecta pendiente alta con pulsaciones bajas: señal de agarrarse a las barras', () => {
+    const ses = { bloques: [{ min: 40, vel: 5, incl: 12 }], fc: { media: 100 } };
+    const r = analyzeWalkWithHR(ses, { pesoKg: 92, edad: 34, sexo: "hombre" });
+    expect(r.observaciones.join(" ")).toMatch(/barras/);
+  });
+
+  test('detecta la deriva cardíaca de principio a fin', () => {
+    const ses = { bloques: [{ min: 50, vel: 5.5, incl: 6 }], fc: { media: 130, inicio: 118, fin: 140 } };
+    const r = analyzeWalkWithHR(ses, { pesoKg: 92, edad: 34, sexo: "hombre" });
+    expect(r.observaciones.join(" ")).toMatch(/deriva cardíaca/);
+  });
+
+  test('sin pulsaciones sigue devolviendo el análisis mecánico', () => {
+    const r = analyzeWalkWithHR({ bloques: [{ min: 30, vel: 5, incl: 6 }] }, { pesoKg: 92, edad: 34 });
+    expect(r.mecanico.kcal).toBeGreaterThan(0);
+    expect(r.porPulsaciones).toBe(null);
+    expect(r.kcalRecomendado).toBe(r.mecanico.kcal);
+  });
+});
+
 describe('sesión guiada de caminata', () => {
   const { walkStateAt, trimBlocksTo, AVISO_SEG, PROGRAMAS_CAMINATA } = require('./app.js');
 
